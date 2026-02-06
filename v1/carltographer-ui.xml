@@ -1,0 +1,85 @@
+<Defaults>
+  <Text fontSize="36" />
+  <InputField class="DecimalInput" fontSize="36" minWidth="100" textAlignment="MiddleCenter" characterLimit="4" characterValidation="Decimal" onEndEdit="updatedTextInput" />
+  <InputField class="IntInput" fontSize="36" minWidth="50" textAlignment="MiddleCenter" characterLimit="2" characterValidation="Integer" onEndEdit="updatedTextInput" />
+  <Button class="PopulationButton" fontSize="24" minHeight="60" textAlignment="MiddleLeft" interactable="false" text="" onClick="clickedPopulationButton" />
+  <Button class="IndividualButton" fontSize="36" minHeight="60" textAlignment="MiddleLeft" interactable="false" text="" onClick="clickedIndividualButton" />
+</Defaults>
+<Panel width="2000" height="1500" rotation="0 0 180" position="0 0 -22">
+  <VerticalLayout>
+    <Text fontSize="64" minHeight="100" preferredHeight="100">Carltographer</Text>
+    <HorizontalLayout  minHeight="70" preferredHeight="70">
+      <Text fontSize="48" minWidth="300" preferredWidth="300">Current Map:</Text>
+      <InputField id="currentMapInput" minWidth="1200" preferredWidth="7000" onEndEdit="updatedTextInput"></InputField>
+      <Button id="spawnButton" fontSize="48" minWidth="300" preferredWidth="300" onClick="spawnMapFromTextInput" interactable="false">Spawn</Button>
+    </HorizontalLayout>
+    <HorizontalLayout minHeight="70" preferredHeight="70">
+      <Button id="genFromScratchButton" fontSize="48" preferredWidth="300" onClick="spawnFreshMap" interactable="true">Generate from Scratch</Button>
+      <Button id="continuePopButton" fontSize="48" preferredWidth="300" onclick="continuePopulation" interactable="false">Continue Population</Button>
+      <Button id="refineButton" fontSize="48" preferredWidth="300" onClick="refineMap" interactable="false">Refine loaded map</Button>
+    </HorizontalLayout>
+    <HorizontalLayout minHeight="1600" preferredHeight="7000">
+      <VerticalLayout id="MapConfig" minWidth="1200" preferredWidth="1400">
+        <Text fontSize="48" minHeight="70" preferredHeight="70" flexibleHeight="0">Map Config:</Text>
+        <HorizontalLayout minHeight="60" preferredHeight="60" flexibleHeight="0">
+          <Toggle id="isRotationallySymmetric" onValueChanged="updatedToggle">Rotationally Symmetric?</Toggle>
+        </HorizontalLayout>
+        <HorizontalLayout  minHeight="60" preferredHeight="60" flexibleHeight="0">
+          <Text>Edge gap:</Text>
+          <InputField class="DecimalInput" id="minEdgeGap" />
+          
+          <Text>Edge move gap:</Text>
+          <InputField class="DecimalInput" id="minEdgeMoveGap" />
+          
+          <Text>Terrain gap:</Text>
+          <InputField class="DecimalInput" id="minTerrainGap" />
+          
+          <Text>Terrain move gap:</Text>
+          <InputField class="DecimalInput" id="minTerrainMoveGap" />
+        </HorizontalLayout>
+        <HorizontalLayout  minHeight="60" preferredHeight="60" flexibleHeight="0">
+          <Text fontSize="36">Desired # Ruins: [</Text>
+          <InputField class="IntInput" id="minRuins" />
+          <Text fontSize="36">..</Text>
+          <InputField class="IntInput" id="maxRuins" />
+          <Text fontSize="36">]</Text>
+          
+          <Text fontSize="36">Desired # Containers: [</Text>
+          <InputField class="IntInput" id="minContainers" />
+          <Text fontSize="36">..</Text>
+          <InputField class="IntInput" id="maxContainers" />
+          <Text fontSize="36">]</Text>
+        </HorizontalLayout>
+        <Text preferredHeight="7000"> </Text>
+      </VerticalLayout>
+      <VerticalLayout id="PopulationSelection" minWidth="300" preferredWidth="300">
+        <Text fontSize="48" minHeight="70" preferredHeight="70" flexibleHeight="0">Populations:</Text>
+        <Button class="PopulationButton" id="populationButton1" />
+        <Button class="PopulationButton" id="populationButton2" />
+        <Button class="PopulationButton" id="populationButton3" />
+        <Button class="PopulationButton" id="populationButton4" />
+        <Button class="PopulationButton" id="populationButton5" />
+        <Button class="PopulationButton" id="populationButton6" />
+        <Button class="PopulationButton" id="populationButton7" />
+        <Button class="PopulationButton" id="populationButton8" />
+        <Button class="PopulationButton" id="populationButton9" />
+        <Button class="PopulationButton" id="populationButton10" />
+        <Text preferredHeight="7000"> </Text>
+      </VerticalLayout>
+      <VerticalLayout id="IndividualSelection" minWidth="300" preferredWidth="300">
+        <Text fontSize="48" minHeight="70" preferredHeight="70">Individuals:</Text>
+        <Button class="IndividualButton" id="individualButton1" />
+        <Button class="IndividualButton" id="individualButton2" />
+        <Button class="IndividualButton" id="individualButton3" />
+        <Button class="IndividualButton" id="individualButton4" />
+        <Button class="IndividualButton" id="individualButton5" />
+        <Button class="IndividualButton" id="individualButton6" />
+        <Button class="IndividualButton" id="individualButton7" />
+        <Button class="IndividualButton" id="individualButton8" />
+        <Button class="IndividualButton" id="individualButton9" />
+        <Button class="IndividualButton" id="individualButton10" />
+        <Text preferredHeight="7000"> </Text>
+      </VerticalLayout>
+    </HorizontalLayout>
+  </VerticalLayout>
+</Panel>

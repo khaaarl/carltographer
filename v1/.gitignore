@@ -1,0 +1,4 @@
+*.bat
+*luacov*
+luaunit*
+*profile*
