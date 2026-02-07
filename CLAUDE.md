@@ -39,42 +39,50 @@ JSON specifications are the interchange format: a **terrain catalog** describes 
 
 ## Development Environment
 
+**IMPORTANT: All Python commands should run from `v2/` as the root directory, not from the repo root.**
+
 Python virtual environment: `v2/.env/` (Python 3.12).
 
-Activate: `source v2/.env/bin/activate`
+Setup:
+```bash
+cd v2
+source .env/bin/activate
+```
 
-Intended toolchain (not all configured yet):
-- **pytest** for tests: `python -m pytest v2/`
-- **black** for formatting: `python -m black v2/`
-- **ruff** for linting: `ruff check v2/`
-- **isort** for import sorting: `python -m isort v2/`
+Toolchain (always run from v2/):
+- **Run UI**: `./scripts/run-ui.sh` (works from any directory)
+- **Build Rust engine**: `./scripts/build-rust-engine.sh` (works from any directory)
+- **pytest** for tests: `python -m pytest engine/`
+- **ruff format**: `ruff format .` (auto-fixes)
+- **isort** for import sorting: `isort .` (auto-fixes)
 
 ## Formatting and Linting (AUTONOMOUS, NO PERMISSION NEEDED)
 
-**CRITICAL: After modifying ANY Python files in v2/, immediately and automatically run the formatters WITHOUT asking:**
+**CRITICAL: After modifying ANY Python files, immediately and automatically run formatters WITHOUT asking.**
 
+From v2/ directory:
 ```bash
-cd v2
 isort .
 ruff format .
 ```
 
-**Do NOT ask for permission.** Do this automatically after every file edit/write operation. This ensures code stays clean and avoids formatting issues downstream.
+**Do NOT ask for permission.** This must happen automatically after every Python file edit/write. Ensures code stays clean and pre-commit checks pass on first try.
 
 ## Committing Code
 
-Before committing, run the full validation pipeline (also without asking for permission):
+Before committing, run the full validation pipeline (from repo root):
 
 ```bash
-# Step 1: Auto-format code (isort + ruff format) - already done above
+# Step 1: Auto-format code (isort + ruff format) - from v2/
 cd v2
 isort .
 ruff format .
 
-# Step 2: Run full pre-commit hooks to verify everything
+# Step 2: Run full pre-commit hooks (from repo root)
+cd ..
 pre-commit run --all-files
 
-# Step 3: If all hooks pass, then git add and commit
+# Step 3: If all hooks pass, commit
 git add .
 git commit -m "Your commit message"
 ```
@@ -91,7 +99,9 @@ The repository is configured with:
 - **type checker**: Type annotation validation
 - **pytest**: Unit tests
 
-**Summary**: isort + ruff format should be run automatically and silently after every file change. Do NOT ask permission. This keeps the codebase clean and makes the pre-commit checks nearly always pass on the first try.
+**CRITICAL: Always ask user permission before committing. Do not commit autonomously.**
+
+When ready to commit, inform the user of the changes and ask approval. The validation pipeline (formatting + pre-commit checks) should run automatically, but the actual `git commit` requires explicit user permission.
 
 ## Key Constraints
 

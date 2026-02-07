@@ -1,6 +1,8 @@
-isort
+-r requirements.txt
+isort[toml]
 ruff
 ty
 pytest
 coverage
 pre-commit
+maturin

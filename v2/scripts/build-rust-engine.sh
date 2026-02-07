@@ -119,6 +119,10 @@ build_rust_engine() {
 
     cd "${V2_DIR}/engine_rs"
 
+    # Activate venv so maturin knows where to install
+    export VIRTUAL_ENV="${V2_DIR}/.env"
+    export PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
     # Attempt normal maturin develop
     local maturin_output
     if maturin_output=$("$VENV_PYTHON" -m maturin develop 2>&1); then
@@ -155,10 +159,17 @@ run_comparison_tests() {
 
     cd "${V2_DIR}"
 
+    # Run compare.py which runs all scenarios and writes manifest on success
     if [[ -z "$QUIET" ]]; then
-        "$VENV_PYTHON" -m pytest engine_cmp/ -v
+        if ! "$VENV_PYTHON" -m engine_cmp.compare --verbose; then
+            log_error "Comparison tests failed"
+            return 1
+        fi
     else
-        "$VENV_PYTHON" -m pytest engine_cmp/ -q
+        if ! "$VENV_PYTHON" -m engine_cmp.compare; then
+            log_error "Comparison tests failed"
+            return 1
+        fi
     fi
 
     log_info "All comparison tests passed"

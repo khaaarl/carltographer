@@ -17,7 +17,7 @@ from ..engine import generate_json
 from ..engine_cmp.hash_manifest import verify_engine_unchanged
 
 try:
-    from .. import engine_rs as _engine_rs
+    import engine_rs as _engine_rs
 
     _HAS_RUST_ENGINE = True
 except ImportError:

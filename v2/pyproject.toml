@@ -5,10 +5,13 @@ requires-python = ">=3.12"
 
 [tool.ruff]
 line-length = 79
+exclude = [".env", ".git", "__pycache__", "*.egg-info"]
 
 [tool.isort]
 line_length = 79
 profile = "black"
+skip = [".env"]
+known_first_party = ["v2"]
 
 [tool.pytest.ini_options]
 testpaths = ["engine", "frontend"]
