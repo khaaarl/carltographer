@@ -185,11 +185,11 @@ class ControlPanel(ttk.Frame):
         self.seed_var = tk.StringVar(value="")
         self.num_steps_var = tk.IntVar(value=1)
         self.symmetric_var = tk.BooleanVar(value=False)
-        self.min_gap_var = tk.DoubleVar(value=2.0)
-        self.min_edge_gap_var = tk.DoubleVar(value=1.0)
+        self.min_gap_var = tk.StringVar(value="")
+        self.min_edge_gap_var = tk.StringVar(value="")
         self.use_rust_var = tk.BooleanVar(value=False)
-        self.min_crates_var = tk.IntVar(value=0)
-        self.max_crates_var = tk.IntVar(value=999)
+        self.min_crates_var = tk.StringVar(value="")
+        self.max_crates_var = tk.StringVar(value="")
 
         self._build()
 
@@ -279,37 +279,59 @@ class ControlPanel(ttk.Frame):
         """Return current params as a dict matching engine_params schema.
 
         Seed is None if the field is blank or not a valid integer.
+        Optional fields (min/max crates, gaps) are only included if set.
         """
         try:
             seed_str = self.seed_var.get().strip()
             seed = int(seed_str) if seed_str else None
         except ValueError:
             seed = None
+
         try:
-            # Build feature count preferences
+            # Parse optional integer fields
+            def parse_int(s):
+                s = s.strip()
+                return int(s) if s else None
+
+            # Parse optional float fields
+            def parse_float(s):
+                s = s.strip()
+                return float(s) if s else None
+
+            min_crates = parse_int(self.min_crates_var.get())
+            max_crates = parse_int(self.max_crates_var.get())
+            min_gap = parse_float(self.min_gap_var.get())
+            min_edge_gap = parse_float(self.min_edge_gap_var.get())
+
+            # Build feature count preferences only if values are set
             feature_count_prefs = []
-            min_crates = self.min_crates_var.get()
-            max_crates = self.max_crates_var.get()
-            if min_crates > 0 or max_crates < 999:
+            if min_crates is not None or max_crates is not None:
                 feature_count_prefs.append(
                     {
                         "feature_type": "obstacle",
-                        "min": min_crates,
+                        "min": min_crates if min_crates is not None else 0,
                         "max": max_crates,
                     }
                 )
 
-            return {
+            # Build params dict
+            params = {
                 "seed": seed,
                 "table_width_inches": self.table_width_var.get(),
                 "table_depth_inches": self.table_depth_var.get(),
                 "rotationally_symmetric": self.symmetric_var.get(),
-                "min_feature_gap_inches": self.min_gap_var.get(),
-                "min_edge_gap_inches": self.min_edge_gap_var.get(),
                 "num_steps": self.num_steps_var.get(),
                 "catalog": SAMPLE_CATALOG,
                 "feature_count_preferences": feature_count_prefs,
             }
+
+            # Only include gap parameters if they're set
+            if min_gap is not None:
+                params["min_feature_gap_inches"] = min_gap
+            if min_edge_gap is not None:
+                params["min_edge_gap_inches"] = min_edge_gap
+
+            return params
         except (tk.TclError, ValueError):
             return None
 
