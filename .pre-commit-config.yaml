@@ -17,14 +17,14 @@ repos:
     hooks:
       - id: ty
         name: ty check
-        entry: ty check v2/
+        entry: v2/.env/bin/ty check v2/
         language: system
         pass_filenames: false
         files: ^v2/.*\.py$
 
       - id: pytest
         name: pytest
-        entry: bash -c 'cd v2 && python -m pytest --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
+        entry: bash -c 'cd v2 && .env/bin/python -m pytest --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
         language: system
         pass_filenames: false
         files: ^v2/.*\.py$
