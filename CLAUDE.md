@@ -124,21 +124,20 @@ The repository is configured with:
    - `generate.rs`: Update the main loop and action handlers
    - Keep implementation as close to Python version as possible for maintainability
 
-4. **Run comparison tests**: After implementing in Rust, MUST verify parity:
+4. **Run comparison tests**: After implementing in Rust, MUST verify parity using the build script:
    ```bash
-   # Build Rust engine
+   # Automated: builds engine, runs tests, validates manifest
+   v2/scripts/build-rust-engine.sh
+
+   # Or manually:
    cd v2/engine_rs && maturin develop
-
-   # Run all comparison tests
-   python -m engine_cmp.compare --verbose
-
-   # Run pytest version for CI/CD
    python -m pytest engine_cmp/ -v
    ```
    - All tests must pass (12 scenarios currently, more if you added new ones)
    - Look for "12 passed, 0 failed" in output
    - If any test fails, inspect the diff output to find where engines diverge
    - Common issues: floating-point order, randomness, quantization rounding
+   - The build script can be run from any directory: `/path/to/v2/scripts/build-rust-engine.sh`
 
 5. **Update unit tests**: Ensure new Rust tests are added to cover the new feature:
    - Add to `v2/engine_rs/src/collision.rs` tests if collision-related
@@ -151,3 +150,25 @@ The repository is configured with:
    - Comparison: `python -m engine_cmp.compare` (12+ tests, all passing)
 
 **Do NOT commit Rust engine changes without confirming parity.** The comparison tool is your verification that the engines are in sync.
+
+## Build and Verification Script
+
+**After any changes to Rust engine code or verification code, ALWAYS run:**
+
+```bash
+v2/scripts/build-rust-engine.sh
+```
+
+**What this script does:**
+1. Validates Python venv and Rust toolchain are available
+2. Compiles Rust engine with `maturin develop`
+3. Runs all 12 engine parity comparison tests
+4. Verifies hash manifest was written to `.engine_parity_manifest.json`
+5. Exits with code 0 (success) or 1 (failure)
+
+**Usage:**
+- **Default (verbose)**: `v2/scripts/build-rust-engine.sh` - shows all build output and test results
+- **Quiet mode**: `v2/scripts/build-rust-engine.sh --quiet` - minimal output, good for CI/CD
+- **From any directory**: Script automatically locates the repo, works from `/tmp`, home dir, anywhere
+
+**See `v2/scripts/README.md` for troubleshooting and detailed documentation.**
