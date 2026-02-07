@@ -49,6 +49,27 @@ Intended toolchain (not all configured yet):
 - **ruff** for linting: `ruff check v2/`
 - **isort** for import sorting: `python -m isort v2/`
 
+## Committing Code
+
+**ALWAYS run pre-commit hooks BEFORE attempting to commit.** This catches formatting, linting, and type errors early and saves time:
+
+```bash
+# Run all pre-commit hooks on staged changes
+pre-commit run --all-files
+
+# Or on just the files you changed
+pre-commit run
+```
+
+The repository is configured with:
+- **isort**: Import organization
+- **ruff format**: Code formatting
+- **ruff (legacy)**: Linting (E/F/W rules)
+- **type checker**: Type annotation validation
+- **pytest**: Unit tests
+
+If any hook fails, it will modify files or report issues. Review the changes, stage them, and run the hooks again until all pass. Only then proceed with `git commit`.
+
 ## Key Constraints
 
 - **Determinism**: The engine must produce identical results given the same seed. No hash-order dependence, no set iteration, no stdlib PRNG (use a portable PRNG like PCG/xoshiro implemented from scratch). This enables cross-language verification between Python and Rust implementations.
