@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/pycqa/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        files: ^v2/
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff-format
+        files: ^v2/
+      - id: ruff
+        files: ^v2/
+
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty check
+        entry: ty check v2/
+        language: system
+        pass_filenames: false
+        files: ^v2/.*\.py$
+
+      - id: pytest
+        name: pytest
+        entry: bash -c 'python -m pytest v2/ --no-header -q --override-ini="testpaths=" -o "norecursedirs=.env"; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
+        language: system
+        pass_filenames: false
+        files: ^v2/.*\.py$
+        always_run: true

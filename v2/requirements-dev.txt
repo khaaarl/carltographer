@@ -1,0 +1,6 @@
+isort
+ruff
+ty
+pytest
+coverage
+pre-commit

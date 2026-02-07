@@ -1,0 +1,14 @@
+[project]
+name = "carltographer"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 79
+
+[tool.isort]
+line_length = 79
+profile = "black"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
