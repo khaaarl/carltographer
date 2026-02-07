@@ -4,6 +4,7 @@ Displays a 2D top-down view of a Warhammer 40k terrain layout
 with a control panel for engine parameters.
 """
 
+import json
 import math
 import random
 import tkinter as tk
@@ -11,7 +12,15 @@ from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from v2.engine import generate_json
+from engine import generate_json
+
+try:
+    import engine_rs as _engine_rs
+
+    _HAS_RUST_ENGINE = True
+except ImportError:
+    _engine_rs = None  # type: ignore
+    _HAS_RUST_ENGINE = False
 
 # -- Visual constants --
 
@@ -177,6 +186,7 @@ class ControlPanel(ttk.Frame):
         self.symmetric_var = tk.BooleanVar(value=False)
         self.min_gap_var = tk.DoubleVar(value=2.0)
         self.min_edge_gap_var = tk.DoubleVar(value=1.0)
+        self.use_rust_var = tk.BooleanVar(value=False)
 
         self._build()
 
@@ -207,6 +217,13 @@ class ControlPanel(ttk.Frame):
         ttk.Checkbutton(
             self, text="Rotationally symmetric", variable=self.symmetric_var
         ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+        cb = ttk.Checkbutton(
+            self, text="Use Rust engine", variable=self.use_rust_var
+        )
+        cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        if not _HAS_RUST_ENGINE:
+            cb.configure(state="disabled")
         row += 1
 
         # Spacing
@@ -374,7 +391,11 @@ class App:
         if params["seed"] is None:
             params["seed"] = random.randint(0, 2**32 - 1)
         params["initial_layout"] = self.layout
-        result = generate_json(params)
+        if self.controls.use_rust_var.get() and _HAS_RUST_ENGINE:
+            result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
+            result = json.loads(result_json)
+        else:
+            result = generate_json(params)
         self.layout = result["layout"]
         self._render()
 
