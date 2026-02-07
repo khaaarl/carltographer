@@ -20,6 +20,7 @@
       "Bash(git status:*)",
       "Bash(grep:*)",
       "Bash(ls *)",
+      "Bash(mkdir:*)",
       "Bash(pip *)",
       "Bash(py --version *)",
       "Bash(python -m black:*)",
