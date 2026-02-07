@@ -174,11 +174,10 @@ class BattlefieldRenderer:
 class ControlPanel(ttk.Frame):
     """Sidebar with engine parameter controls."""
 
-    def __init__(self, parent, on_table_changed, on_generate, on_load_layout):
+    def __init__(self, parent, on_table_changed, on_generate):
         super().__init__(parent, padding=10)
         self.on_table_changed = on_table_changed
         self.on_generate = on_generate
-        self.on_load_layout = on_load_layout
 
         # -- tk variables --
         self.table_width_var = tk.DoubleVar(value=60.0)
@@ -189,10 +188,6 @@ class ControlPanel(ttk.Frame):
         self.min_gap_var = tk.DoubleVar(value=2.0)
         self.min_edge_gap_var = tk.DoubleVar(value=1.0)
         self.use_rust_var = tk.BooleanVar(value=False)
-
-        # History tracking
-        self.layout_history = []  # list of (timestamp, layout_dict) tuples
-        self.history_listbox = None
 
         self._build()
 
@@ -251,30 +246,6 @@ class ControlPanel(ttk.Frame):
         ttk.Button(self, text="Generate", command=self.on_generate).grid(
             row=row, column=0, columnspan=2, pady=10, sticky="ew"
         )
-        row += 1
-
-        # History section
-        row = self._sep(row)
-        ttk.Label(self, text="Recent Layouts", font=("", 11, "bold")).grid(
-            row=row, column=0, columnspan=2, pady=(8, 4), sticky="w"
-        )
-        row += 1
-
-        # Listbox with scrollbar for history
-        scrollbar = ttk.Scrollbar(self)
-        scrollbar.grid(row=row, column=1, sticky="ns", pady=(0, 10))
-
-        self.history_listbox = tk.Listbox(
-            self,
-            height=6,
-            yscrollcommand=scrollbar.set,
-            font=("", 9),
-        )
-        self.history_listbox.grid(
-            row=row, column=0, columnspan=1, sticky="ew", pady=(0, 10)
-        )
-        self.history_listbox.bind("<<ListboxSelect>>", self._on_history_select)
-        scrollbar.config(command=self.history_listbox.yview)
 
     def _section(self, row, title):
         ttk.Label(self, text=title, font=("", 11, "bold")).grid(
@@ -328,13 +299,50 @@ class ControlPanel(ttk.Frame):
         except (tk.TclError, ValueError):
             return None
 
+
+# ---------------------------------------------------------------------------
+# History panel
+# ---------------------------------------------------------------------------
+
+
+class HistoryPanel(ttk.Frame):
+    """Panel displaying recent layout history."""
+
+    def __init__(self, parent, on_load_layout):
+        super().__init__(parent, padding=10)
+        self.on_load_layout = on_load_layout
+        self.layout_history = []  # list of (timestamp, layout_dict) tuples
+        self.history_listbox = None
+        self._build()
+
+    def _build(self):
+        ttk.Label(self, text="Recent Layouts", font=("", 11, "bold")).pack(
+            anchor="w", pady=(0, 8)
+        )
+
+        # Listbox with scrollbar for history
+        list_frame = ttk.Frame(self)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.history_listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            font=("", 9),
+        )
+        self.history_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.history_listbox.bind("<<ListboxSelect>>", self._on_history_select)
+        scrollbar.config(command=self.history_listbox.yview)
+
     def add_to_history(self, layout):
         """Add a layout to the history with current timestamp."""
         timestamp = int(time.time())
         self.layout_history.append((timestamp, layout))
 
-        # Add to listbox display (limit to 20 recent)
-        if len(self.layout_history) > 20:
+        # Add to listbox display (limit to 50 recent)
+        if len(self.layout_history) > 50:
             self.layout_history.pop(0)
             self.history_listbox.delete(0)
 
@@ -378,25 +386,35 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Carltographer")
-        self.root.geometry("1100x750")
+        self.root.geometry("1400x750")
+        self.root.resizable(True, True)
         self.root.configure(bg=CANVAS_BG)
 
         style = ttk.Style()
         style.theme_use("clam")
 
-        # Canvas on the left, controls on the right.
+        # Canvas on the left, controls and history on the right.
         self.canvas = tk.Canvas(self.root, bg=CANVAS_BG, highlightthickness=0)
         self.canvas.pack(
             side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5
         )
 
+        # Right panel for controls and history
+        self.right_panel = ttk.Frame(self.root)
+        self.right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, pady=5, padx=(0, 5))
+
         self.controls = ControlPanel(
-            self.root,
+            self.right_panel,
             on_table_changed=self._render,
             on_generate=self._on_generate,
+        )
+        self.controls.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+
+        self.history = HistoryPanel(
+            self.right_panel,
             on_load_layout=self._load_layout,
         )
-        self.controls.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 5), pady=5)
+        self.history.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         self._photo = None  # prevent GC
         self.layout = {
@@ -458,7 +476,7 @@ class App:
         else:
             result = generate_json(params)
         self.layout = result["layout"]
-        self.controls.add_to_history(self.layout)
+        self.history.add_to_history(self.layout)
         self._render()
 
     def run(self):
