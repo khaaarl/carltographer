@@ -87,31 +87,66 @@ fn weighted_choice(
     Some(weights.len() - 1)
 }
 
-fn compute_action_weights(
-    current_count: u32,
-    min_count: u32,
-    max_count: Option<u32>,
-    has_catalog: bool,
-    has_features: bool,
-) -> (f64, f64, f64) {
-    // Returns (add_weight, move_weight, delete_weight).
-    let mut add_weight = if has_catalog { 1.0 } else { 0.0 };
-    let move_weight = if has_features { 1.0 } else { 0.0 };
-    let mut delete_weight = if has_features { 1.0 } else { 0.0 };
-
-    if current_count < min_count {
-        let shortage = min_count - current_count;
-        add_weight *= 1.0 + shortage as f64 * 2.0;
-        delete_weight *= 0.1;
-    } else if let Some(max) = max_count {
-        if current_count > max {
-            let excess = current_count - max;
-            delete_weight *= 1.0 + excess as f64 * 2.0;
-            add_weight *= 0.1;
+fn compute_template_weights(
+    catalog_features: &[&TerrainFeature],
+    feature_counts: &HashMap<String, u32>,
+    preferences: &[crate::types::FeatureCountPreference],
+) -> Vec<f64> {
+    // Compute weights for selecting which catalog feature to add.
+    // Boosts weight for types below their min, reduces for types at/above max.
+    let pref_by_type: HashMap<&str, &crate::types::FeatureCountPreference> =
+        preferences.iter().map(|p| (p.feature_type.as_str(), p)).collect();
+    let mut weights = Vec::with_capacity(catalog_features.len());
+    for cf in catalog_features {
+        let mut w = 1.0;
+        if let Some(pref) = pref_by_type.get(cf.feature_type.as_str()) {
+            let current = feature_counts
+                .get(&cf.feature_type)
+                .copied()
+                .unwrap_or(0);
+            if current < pref.min {
+                w = 1.0 + (pref.min - current) as f64 * 2.0;
+            } else if let Some(max) = pref.max {
+                if current >= max {
+                    w = 0.1;
+                }
+            }
         }
+        weights.push(w);
     }
+    weights
+}
 
-    (add_weight, move_weight, delete_weight)
+fn compute_delete_weights(
+    features: &[PlacedFeature],
+    feature_counts: &HashMap<String, u32>,
+    preferences: &[crate::types::FeatureCountPreference],
+) -> Vec<f64> {
+    // Compute weights for selecting which feature to delete.
+    // Boosts weight for types above their max, reduces for types at/below min.
+    let pref_by_type: HashMap<&str, &crate::types::FeatureCountPreference> =
+        preferences.iter().map(|p| (p.feature_type.as_str(), p)).collect();
+    let mut weights = Vec::with_capacity(features.len());
+    for pf in features {
+        let mut w = 1.0;
+        if let Some(pref) = pref_by_type.get(pf.feature.feature_type.as_str()) {
+            let current = feature_counts
+                .get(&pf.feature.feature_type)
+                .copied()
+                .unwrap_or(0);
+            if let Some(max) = pref.max {
+                if current > max {
+                    w = 1.0 + (current - max) as f64 * 2.0;
+                } else if current <= pref.min {
+                    w = 0.1;
+                }
+            } else if current <= pref.min {
+                w = 0.1;
+            }
+        }
+        weights.push(w);
+    }
+    weights
 }
 
 pub fn generate(params: &EngineParams) -> EngineResult {
@@ -141,34 +176,30 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         let has_features = !placed_features.is_empty();
         let feature_counts = count_features_by_type(&placed_features);
 
-        // Default weights
-        let mut add_weight = if has_catalog { 1.0 } else { 0.0 };
-        let move_weight = if has_features { 1.0 } else { 0.0 };
-        let mut delete_weight = if has_features { 1.0 } else { 0.0 };
+        // Compute action weights with multiplicative biasing across all prefs
+        let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
+        let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
+        let mut delete_weight: f64 = if has_features { 1.0 } else { 0.0 };
 
-        // Apply biasing for feature types with preferences
-        if let Some(ref prefs) = params.feature_count_preferences {
-            for pref in prefs {
-                let ft = &pref.feature_type;
-                let current = feature_counts.get(ft).copied().unwrap_or(0);
-
-                // For obstacle type, apply biasing to all add/delete actions
-                // (assumes catalog primarily contains obstacles)
-                if ft == "obstacle" && has_catalog {
-                    let (aw, _mw, dw) = compute_action_weights(
-                        current,
-                        pref.min,
-                        pref.max,
-                        has_catalog,
-                        has_features,
-                    );
-                    add_weight = aw;
-                    delete_weight = dw;
+        let prefs = params.feature_count_preferences.as_deref().unwrap_or(&[]);
+        for pref in prefs {
+            let current = feature_counts
+                .get(&pref.feature_type)
+                .copied()
+                .unwrap_or(0);
+            if current < pref.min {
+                let shortage = pref.min - current;
+                add_weight *= 1.0 + shortage as f64 * 2.0;
+                delete_weight *= 0.1;
+            } else if let Some(max) = pref.max {
+                if current > max {
+                    let excess = current - max;
+                    delete_weight *= 1.0 + excess as f64 * 2.0;
+                    add_weight *= 0.1;
                 }
             }
         }
 
-        // Weighted random selection
         let weights = vec![add_weight, move_weight, delete_weight];
         let action = match weighted_choice(&mut rng, &weights) {
             Some(idx) => idx as u32,
@@ -177,11 +208,16 @@ pub fn generate(params: &EngineParams) -> EngineResult {
 
         match action {
             0 => {
-                let ti = rng.next_int(
-                    0,
-                    catalog_features.len() as u32 - 1,
-                ) as usize;
-                let template = catalog_features[ti];
+                let template_weights = compute_template_weights(
+                    &catalog_features,
+                    &feature_counts,
+                    prefs,
+                );
+                let tidx = match weighted_choice(&mut rng, &template_weights) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let template = catalog_features[tidx];
                 let new_feat = instantiate_feature(template, nid);
                 let x = quantize_position(
                     rng.next_float()
@@ -254,10 +290,15 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                 }
             }
             2 => {
-                let idx = rng.next_int(
-                    0,
-                    placed_features.len() as u32 - 1,
-                ) as usize;
+                let delete_weights = compute_delete_weights(
+                    &placed_features,
+                    &feature_counts,
+                    prefs,
+                );
+                let idx = match weighted_choice(&mut rng, &delete_weights) {
+                    Some(i) => i,
+                    None => continue,
+                };
                 placed_features.remove(idx);
             }
             _ => unreachable!(),

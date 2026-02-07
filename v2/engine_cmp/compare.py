@@ -172,6 +172,75 @@ def make_test_catalog() -> TerrainCatalog:
     )
 
 
+def make_multi_type_catalog() -> TerrainCatalog:
+    """Test catalog with both crates (obstacle) and ruins (obscuring)."""
+    return TerrainCatalog(
+        objects=[
+            CatalogObject(
+                item=TerrainObject(
+                    id="crate_5x2.5",
+                    shapes=[
+                        Shape(
+                            width=5.0,
+                            depth=2.5,
+                            height=2.0,
+                            offset=None,
+                        )
+                    ],
+                    name="Crate",
+                    tags=[],
+                ),
+                quantity=None,
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="ruins_12x6",
+                    shapes=[
+                        Shape(
+                            width=12.0,
+                            depth=6.0,
+                            height=0.0,
+                            offset=None,
+                        )
+                    ],
+                    name="Ruins",
+                    tags=[],
+                ),
+                quantity=None,
+            ),
+        ],
+        features=[
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="crate",
+                    feature_type="obstacle",
+                    components=[
+                        FeatureComponent(
+                            object_id="crate_5x2.5",
+                            transform=None,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="ruins",
+                    feature_type="obscuring",
+                    components=[
+                        FeatureComponent(
+                            object_id="ruins_12x6",
+                            transform=None,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+        ],
+        name="Multi-type Test Catalog",
+    )
+
+
 def make_test_params(
     seed: int = 42,
     num_steps: int = 100,
@@ -180,13 +249,14 @@ def make_test_params(
     min_feature_gap_inches: Optional[float] = None,
     min_edge_gap_inches: Optional[float] = None,
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None,
+    catalog: Optional[TerrainCatalog] = None,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
         seed=seed,
         table_width=table_width,
         table_depth=table_depth,
-        catalog=make_test_catalog(),
+        catalog=catalog if catalog is not None else make_test_catalog(),
         num_steps=num_steps,
         initial_layout=None,
         feature_count_preferences=feature_count_preferences or [],
@@ -207,6 +277,7 @@ class TestScenario:
     min_feature_gap_inches: Optional[float] = None
     min_edge_gap_inches: Optional[float] = None
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None
+    catalog: Optional[TerrainCatalog] = None
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -218,6 +289,7 @@ class TestScenario:
             min_feature_gap_inches=self.min_feature_gap_inches,
             min_edge_gap_inches=self.min_edge_gap_inches,
             feature_count_preferences=self.feature_count_preferences,
+            catalog=self.catalog,
         )
 
 
@@ -279,6 +351,43 @@ TEST_SCENARIOS = [
                 min=3,
                 max=10,
             )
+        ],
+    ),
+    TestScenario(
+        "multi_type_no_prefs",
+        seed=42,
+        num_steps=50,
+        catalog=make_multi_type_catalog(),
+    ),
+    TestScenario(
+        "multi_type_with_prefs",
+        seed=42,
+        num_steps=100,
+        catalog=make_multi_type_catalog(),
+        feature_count_preferences=[
+            FeatureCountPreference(
+                feature_type="obstacle",
+                min=2,
+                max=5,
+            ),
+            FeatureCountPreference(
+                feature_type="obscuring",
+                min=1,
+                max=3,
+            ),
+        ],
+    ),
+    TestScenario(
+        "multi_type_one_pref",
+        seed=99,
+        num_steps=100,
+        catalog=make_multi_type_catalog(),
+        feature_count_preferences=[
+            FeatureCountPreference(
+                feature_type="obscuring",
+                min=2,
+                max=4,
+            ),
         ],
     ),
 ]
