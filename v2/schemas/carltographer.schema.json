@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "carltographer.schema.json",
+  "title": "Carltographer Terrain Specification",
+  "description": "Schema for Warhammer 40k terrain generation. Defines terrain geometry, structures, features, layouts, and catalogs.",
+
+  "$defs": {
+
+    "transform": {
+      "type": "object",
+      "description": "Position and Y-axis rotation relative to a parent origin. Coordinates in inches, origin at center of parent. Y is vertical (height above table surface).",
+      "properties": {
+        "x_inches": { "type": "number", "default": 0 },
+        "y_inches": { "type": "number", "default": 0, "description": "Height above table surface. Usually 0 for terrain sitting on the table." },
+        "z_inches": { "type": "number", "default": 0 },
+        "rotation_deg": { "type": "number", "default": 0, "description": "Y-axis rotation in degrees. Pieces sit flat on the table." }
+      },
+      "additionalProperties": false
+    },
+
+    "geometric_shape": {
+      "type": "object",
+      "description": "A collision/footprint volume attached to a terrain structure. Currently only rectangular prisms; future versions may add other shape types.",
+      "properties": {
+        "shape_type": {
+          "type": "string",
+          "enum": ["rectangular_prism"],
+          "description": "The kind of shape. Only rectangular_prism for now."
+        },
+        "width_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the X axis." },
+        "depth_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the Z axis." },
+        "height_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the Y axis (vertical)." },
+        "offset": {
+          "$ref": "#/$defs/transform",
+          "description": "Position of this shape relative to its parent structure's origin. Defaults to centered at origin if omitted."
+        },
+        "opacity_height_inches": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "default": null,
+          "description": "Height up to which this volume blocks line of sight, independent of its physical height. null means fully transparent (e.g. an acrylic base or open floor). 0 is also fully transparent. A value less than physical height means LoS is blocked only up to that height (e.g. a short wall in a tall ruin). A value equal to or greater than physical height means fully opaque (e.g. a solid container or intact wall)."
+        }
+      },
+      "required": ["shape_type", "width_inches", "depth_inches", "height_inches"],
+      "additionalProperties": false
+    },
+
+    "terrain_structure": {
+      "type": "object",
+      "description": "A physical terrain piece: a building, crate, wall panel, acrylic base, etc. Has one or more geometric shapes defining its collision footprint.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this structure type."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name."
+        },
+        "shapes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/geometric_shape" },
+          "minItems": 1,
+          "description": "Collision volumes for this structure, positioned relative to the structure's origin."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Freeform tags for categorization and filtering (e.g. 'container', 'ruin_wall', 'ruin_floor', 'modular')."
+        }
+      },
+      "required": ["id", "shapes"],
+      "additionalProperties": false
+    },
+
+    "feature_component": {
+      "type": "object",
+      "description": "A structure placed within a terrain feature, with a position/rotation relative to the feature's origin.",
+      "properties": {
+        "structure_id": {
+          "type": "string",
+          "description": "References a terrain_structure by its id."
+        },
+        "transform": {
+          "$ref": "#/$defs/transform",
+          "description": "Position and rotation of this structure within the feature. Defaults to identity (centered, no rotation) if omitted."
+        }
+      },
+      "required": ["structure_id"],
+      "additionalProperties": false
+    },
+
+    "terrain_feature": {
+      "type": "object",
+      "description": "A Warhammer 40k terrain feature: a rules-level concept like a Ruin, Obstacle, Woods, or Crater. Composed of one or more structures.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this specific feature instance."
+        },
+        "feature_type": {
+          "type": "string",
+          "description": "40k terrain type keyword (e.g. 'ruin', 'obstacle', 'crater', 'woods', 'hill')."
+        },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/feature_component" },
+          "minItems": 1,
+          "description": "The structures that make up this feature, each with a relative transform."
+        }
+      },
+      "required": ["id", "feature_type", "components"],
+      "additionalProperties": false
+    },
+
+    "placed_feature": {
+      "type": "object",
+      "description": "A terrain feature placed on a table at a specific position.",
+      "properties": {
+        "feature": {
+          "$ref": "#/$defs/terrain_feature"
+        },
+        "transform": {
+          "$ref": "#/$defs/transform",
+          "description": "Position and rotation on the table. Coordinates relative to table center."
+        }
+      },
+      "required": ["feature", "transform"],
+      "additionalProperties": false
+    },
+
+    "point_2d": {
+      "type": "object",
+      "description": "A point on the table surface. Coordinates in inches, relative to table center.",
+      "properties": {
+        "x_inches": { "type": "number" },
+        "z_inches": { "type": "number" }
+      },
+      "required": ["x_inches", "z_inches"],
+      "additionalProperties": false
+    },
+
+    "objective_marker": {
+      "type": "object",
+      "description": "An objective marker placed on the table.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier for this objective (e.g. 'A', 'B', '1', '2')."
+        },
+        "position": {
+          "$ref": "#/$defs/point_2d"
+        }
+      },
+      "required": ["id", "position"],
+      "additionalProperties": false
+    },
+
+    "deployment_zone": {
+      "type": "object",
+      "description": "A deployment zone defined as a polygon on the table surface.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier for this zone (e.g. 'attacker', 'defender', 'player_1', 'player_2')."
+        },
+        "vertices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/point_2d" },
+          "minItems": 3,
+          "description": "Vertices of the polygon in order (clockwise or counterclockwise). The polygon is implicitly closed (last vertex connects back to first)."
+        }
+      },
+      "required": ["id", "vertices"],
+      "additionalProperties": false
+    },
+
+    "mission": {
+      "type": "object",
+      "description": "Mission information: objective marker locations and deployment zones. Can stand alone or be embedded in a terrain_layout.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Mission name (e.g. 'Sweeping Engagement', 'Search and Destroy')."
+        },
+        "objectives": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/objective_marker" }
+        },
+        "deployment_zones": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/deployment_zone" }
+        }
+      },
+      "required": ["objectives", "deployment_zones"],
+      "additionalProperties": false
+    },
+
+    "terrain_layout": {
+      "type": "object",
+      "description": "A complete terrain setup for a table: table dimensions, placed features, and optionally mission information.",
+      "properties": {
+        "table_width_inches": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Table extent along the X axis."
+        },
+        "table_depth_inches": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Table extent along the Z axis."
+        },
+        "placed_features": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/placed_feature" }
+        },
+        "mission": {
+          "$ref": "#/$defs/mission",
+          "description": "Optional mission information. If omitted, the layout describes terrain only."
+        }
+      },
+      "required": ["table_width_inches", "table_depth_inches", "placed_features"],
+      "additionalProperties": false
+    },
+
+    "catalog_entry": {
+      "type": "object",
+      "description": "A structure in someone's collection, with a quantity.",
+      "properties": {
+        "structure": {
+          "$ref": "#/$defs/terrain_structure"
+        },
+        "quantity": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Number of this structure owned. null means unlimited (e.g. virtual/TTS context)."
+        }
+      },
+      "required": ["structure"],
+      "additionalProperties": false
+    },
+
+    "terrain_catalog": {
+      "type": "object",
+      "description": "A collection of terrain structures owned by someone.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name for this collection (e.g. 'My 40k terrain', 'TTS full set')."
+        },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalog_entry" }
+        }
+      },
+      "required": ["entries"],
+      "additionalProperties": false
+    },
+
+    "feature_count_preference": {
+      "type": "object",
+      "description": "Desired count range for a particular feature type.",
+      "properties": {
+        "feature_type": {
+          "type": "string",
+          "description": "The feature_type this preference applies to (e.g. 'ruin', 'obstacle')."
+        },
+        "min": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Desired minimum count. The engine penalizes layouts below this."
+        },
+        "max": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Desired maximum count. null means no upper preference. The engine penalizes layouts above this."
+        }
+      },
+      "required": ["feature_type"],
+      "additionalProperties": false
+    },
+
+    "engine_params": {
+      "type": "object",
+      "description": "Parameters for the terrain generation engine. This spec is expected to evolve significantly over development.",
+      "properties": {
+        "seed": {
+          "type": "integer",
+          "description": "PRNG seed for deterministic generation. Same seed must produce identical output across Python and Rust implementations."
+        },
+        "table_width_inches": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Table extent along the X axis."
+        },
+        "table_depth_inches": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Table extent along the Z axis."
+        },
+        "rotationally_symmetric": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, the engine mirrors terrain with 180-degree rotational symmetry around the table center. Ensures neither player has a terrain advantage."
+        },
+        "catalog": {
+          "$ref": "#/$defs/terrain_catalog",
+          "description": "The terrain structures available for the engine to use."
+        },
+        "initial_layout": {
+          "$ref": "#/$defs/terrain_layout",
+          "description": "Optional starting layout for the engine to iterate on. If omitted, the engine starts from scratch."
+        },
+        "mission": {
+          "$ref": "#/$defs/mission",
+          "description": "Optional mission info. Future engine versions may use this for scoring (e.g. penalizing terrain that blocks objectives or sits in deployment zones)."
+        },
+        "feature_count_preferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/feature_count_preference" },
+          "description": "Desired count ranges per feature type. Feature types not listed here have no count preference."
+        },
+        "min_feature_gap_inches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum gap between terrain features, wide enough for large models/units to maneuver through."
+        },
+        "min_edge_gap_inches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum gap between terrain features and the table edges, ensuring units can maneuver along the perimeter."
+        }
+      },
+      "required": ["seed", "table_width_inches", "table_depth_inches", "catalog"],
+      "additionalProperties": false
+    }
+  }
+}
