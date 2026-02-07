@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "carltographer.schema.json",
   "title": "Carltographer Terrain Specification",
-  "description": "Schema for Warhammer 40k terrain generation. Defines terrain geometry, structures, features, layouts, and catalogs.",
+  "description": "Schema for Warhammer 40k terrain generation. Defines terrain geometry, objects, features, layouts, and catalogs.",
 
   "$defs": {
 
@@ -20,7 +20,7 @@
 
     "geometric_shape": {
       "type": "object",
-      "description": "A collision/footprint volume attached to a terrain structure. Currently only rectangular prisms; future versions may add other shape types.",
+      "description": "A collision/footprint volume attached to a terrain object. Currently only rectangular prisms; future versions may add other shape types.",
       "properties": {
         "shape_type": {
           "type": "string",
@@ -32,7 +32,7 @@
         "height_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the Y axis (vertical)." },
         "offset": {
           "$ref": "#/$defs/transform",
-          "description": "Position of this shape relative to its parent structure's origin. Defaults to centered at origin if omitted."
+          "description": "Position of this shape relative to its parent object's origin. Defaults to centered at origin if omitted."
         },
         "opacity_height_inches": {
           "type": ["number", "null"],
@@ -45,13 +45,13 @@
       "additionalProperties": false
     },
 
-    "terrain_structure": {
+    "terrain_object": {
       "type": "object",
       "description": "A physical terrain piece: a building, crate, wall panel, acrylic base, etc. Has one or more geometric shapes defining its collision footprint.",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique identifier for this structure type."
+          "description": "Unique identifier for this object type."
         },
         "name": {
           "type": "string",
@@ -61,7 +61,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/geometric_shape" },
           "minItems": 1,
-          "description": "Collision volumes for this structure, positioned relative to the structure's origin."
+          "description": "Collision volumes for this object, positioned relative to the object's origin."
         },
         "tags": {
           "type": "array",
@@ -75,24 +75,24 @@
 
     "feature_component": {
       "type": "object",
-      "description": "A structure placed within a terrain feature, with a position/rotation relative to the feature's origin.",
+      "description": "A terrain object placed within a terrain feature, with a position/rotation relative to the feature's origin.",
       "properties": {
-        "structure_id": {
+        "object_id": {
           "type": "string",
-          "description": "References a terrain_structure by its id."
+          "description": "References a terrain_object by its id."
         },
         "transform": {
           "$ref": "#/$defs/transform",
-          "description": "Position and rotation of this structure within the feature. Defaults to identity (centered, no rotation) if omitted."
+          "description": "Position and rotation of this object within the feature. Defaults to identity (centered, no rotation) if omitted."
         }
       },
-      "required": ["structure_id"],
+      "required": ["object_id"],
       "additionalProperties": false
     },
 
     "terrain_feature": {
       "type": "object",
-      "description": "A Warhammer 40k terrain feature: a rules-level concept like a Ruin, Obstacle, Woods, or Crater. Composed of one or more structures.",
+      "description": "A Warhammer 40k terrain feature: a rules-level concept like a Ruin, Obstacle, Woods, or Crater. Composed of one or more terrain objects.",
       "properties": {
         "id": {
           "type": "string",
@@ -106,7 +106,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/feature_component" },
           "minItems": 1,
-          "description": "The structures that make up this feature, each with a relative transform."
+          "description": "The terrain objects that make up this feature, each with a relative transform."
         }
       },
       "required": ["id", "feature_type", "components"],
@@ -223,37 +223,55 @@
       "additionalProperties": false
     },
 
-    "catalog_entry": {
+    "catalog_object": {
       "type": "object",
-      "description": "A structure in someone's collection, with a quantity.",
+      "description": "A terrain object in a catalog, with a quantity.",
       "properties": {
-        "structure": {
-          "$ref": "#/$defs/terrain_structure"
-        },
+        "item": { "$ref": "#/$defs/terrain_object" },
         "quantity": {
           "type": ["integer", "null"],
           "minimum": 0,
-          "description": "Number of this structure owned. null means unlimited (e.g. virtual/TTS context)."
+          "description": "Number owned. null means unlimited (e.g. virtual/TTS context)."
         }
       },
-      "required": ["structure"],
+      "required": ["item"],
+      "additionalProperties": false
+    },
+
+    "catalog_feature": {
+      "type": "object",
+      "description": "A pre-built terrain feature in a catalog, with a quantity.",
+      "properties": {
+        "item": { "$ref": "#/$defs/terrain_feature" },
+        "quantity": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Number available. null means unlimited."
+        }
+      },
+      "required": ["item"],
       "additionalProperties": false
     },
 
     "terrain_catalog": {
       "type": "object",
-      "description": "A collection of terrain structures owned by someone.",
+      "description": "A collection of terrain objects and/or pre-built terrain features owned by someone. Either list can be empty, but providing pre-built features allows use of specific configurations (e.g. standard WTC ruins).",
       "properties": {
         "name": {
           "type": "string",
-          "description": "Name for this collection (e.g. 'My 40k terrain', 'TTS full set')."
+          "description": "Name for this collection (e.g. 'My 40k terrain', 'WTC standard set')."
         },
-        "entries": {
+        "objects": {
           "type": "array",
-          "items": { "$ref": "#/$defs/catalog_entry" }
+          "items": { "$ref": "#/$defs/catalog_object" },
+          "description": "Individual terrain objects available for the engine to assemble into features."
+        },
+        "features": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/catalog_feature" },
+          "description": "Pre-built terrain features available (e.g. specific ruin configurations from a tournament standard)."
         }
       },
-      "required": ["entries"],
       "additionalProperties": false
     },
 
@@ -305,7 +323,7 @@
         },
         "catalog": {
           "$ref": "#/$defs/terrain_catalog",
-          "description": "The terrain structures available for the engine to use."
+          "description": "The terrain objects and features available for the engine to use."
         },
         "initial_layout": {
           "$ref": "#/$defs/terrain_layout",
@@ -329,9 +347,36 @@
           "type": "number",
           "minimum": 0,
           "description": "Minimum gap between terrain features and the table edges, ensuring units can maneuver along the perimeter."
+        },
+        "num_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of generation steps (GA iterations) to run."
         }
       },
       "required": ["seed", "table_width_inches", "table_depth_inches", "catalog"],
+      "additionalProperties": false
+    },
+
+    "engine_result": {
+      "type": "object",
+      "description": "Output from the terrain generation engine. Contains the best layout found, with room for future additions (statistics, diagnostics, population snapshots, etc.).",
+      "properties": {
+        "layout": {
+          "$ref": "#/$defs/terrain_layout",
+          "description": "The best terrain layout produced by the engine."
+        },
+        "score": {
+          "type": "number",
+          "description": "Fitness score of the returned layout."
+        },
+        "steps_completed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of generation steps actually completed."
+        }
+      },
+      "required": ["layout"],
       "additionalProperties": false
     }
   }
