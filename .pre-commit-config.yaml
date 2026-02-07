@@ -24,7 +24,7 @@ repos:
 
       - id: pytest
         name: pytest
-        entry: bash -c 'python -m pytest v2/ --no-header -q --override-ini="testpaths=" -o "norecursedirs=.env"; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
+        entry: bash -c 'cd v2 && python -m pytest --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
         language: system
         pass_filenames: false
         files: ^v2/.*\.py$
