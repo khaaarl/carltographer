@@ -220,10 +220,11 @@ class BattlefieldRenderer:
 class ControlPanel(ttk.Frame):
     """Sidebar with engine parameter controls."""
 
-    def __init__(self, parent, on_table_changed, on_generate):
+    def __init__(self, parent, on_table_changed, on_generate, on_clear):
         super().__init__(parent, padding=10)
         self.on_table_changed = on_table_changed
         self.on_generate = on_generate
+        self.on_clear = on_clear
 
         # -- tk variables --
         self.table_width_var = tk.DoubleVar(value=60.0)
@@ -283,10 +284,14 @@ class ControlPanel(ttk.Frame):
         row = self._field(row, "Min ruins:", self.min_ruins_var)
         row = self._field(row, "Max ruins:", self.max_ruins_var)
 
-        # Generate button
+        # Buttons
         row = self._sep(row)
         ttk.Button(self, text="Generate", command=self.on_generate).grid(
-            row=row, column=0, columnspan=2, pady=10, sticky="ew"
+            row=row, column=0, columnspan=2, pady=(10, 2), sticky="ew"
+        )
+        row += 1
+        ttk.Button(self, text="Clear Layout", command=self.on_clear).grid(
+            row=row, column=0, columnspan=2, pady=(2, 10), sticky="ew"
         )
 
     def _section(self, row, title):
@@ -495,6 +500,7 @@ class App:
             self.right_panel,
             on_table_changed=self._render,
             on_generate=self._on_generate,
+            on_clear=self._on_clear,
         )
         self.controls.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
@@ -572,6 +578,14 @@ class App:
     def _load_layout(self, layout):
         """Load a layout from history and display it."""
         self.layout = layout
+        self._render()
+
+    def _on_clear(self):
+        self.layout = {
+            "table_width_inches": self.controls.table_width_var.get(),
+            "table_depth_inches": self.controls.table_depth_var.get(),
+            "placed_features": [],
+        }
         self._render()
 
     def _on_generate(self):
