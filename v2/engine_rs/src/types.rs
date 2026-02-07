@@ -102,6 +102,15 @@ pub struct TerrainCatalog {
 // -- Engine I/O ----------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureCountPreference {
+    pub feature_type: String,
+    #[serde(default)]
+    pub min: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineParams {
     pub seed: u64,
     pub table_width_inches: f64,
@@ -111,6 +120,12 @@ pub struct EngineParams {
     pub num_steps: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_layout: Option<TerrainLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_count_preferences: Option<Vec<FeatureCountPreference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_feature_gap_inches: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_edge_gap_inches: Option<f64>,
 }
 
 impl EngineParams {
