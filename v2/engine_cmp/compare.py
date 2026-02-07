@@ -25,6 +25,8 @@ from engine.types import (
     TerrainObject,
 )
 
+from .hash_manifest import compute_engine_hashes, write_manifest
+
 
 def quantize_position(value: float) -> float:
     """Quantize position to nearest 0.1 inch (matches engine)."""
@@ -493,6 +495,16 @@ def main():
             failed += 1
 
     print(f"\n{passed} passed, {failed} failed")
+
+    # If all tests passed and we ran the full suite, write certification manifest
+    if failed == 0 and not args.scenario:
+        hashes = compute_engine_hashes()
+        write_manifest(hashes)
+        print(
+            "\n✓ All tests passed! Engine parity manifest written to "
+            ".engine_parity_manifest.json"
+        )
+
     return 0 if failed == 0 else 1
 
 

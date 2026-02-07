@@ -14,6 +14,7 @@ from tkinter import ttk
 from PIL import Image, ImageDraw, ImageTk
 
 from ..engine import generate_json
+from ..engine_cmp.hash_manifest import verify_engine_unchanged
 
 try:
     from .. import engine_rs as _engine_rs
@@ -22,6 +23,23 @@ try:
 except ImportError:
     _engine_rs = None  # type: ignore
     _HAS_RUST_ENGINE = False
+
+
+def _should_use_rust_engine() -> bool:
+    """Determine which engine to use based on manifest verification.
+
+    Returns True if:
+    - Rust engine is available (built with maturin)
+    - AND Python engine source matches the certified hashes
+
+    Returns False if:
+    - Rust engine is not available, OR
+    - Python engine source has changed since last certification
+    """
+    if not _HAS_RUST_ENGINE:
+        return False
+    return verify_engine_unchanged()
+
 
 # -- Visual constants --
 
@@ -187,7 +205,6 @@ class ControlPanel(ttk.Frame):
         self.symmetric_var = tk.BooleanVar(value=False)
         self.min_gap_var = tk.StringVar(value="")
         self.min_edge_gap_var = tk.StringVar(value="")
-        self.use_rust_var = tk.BooleanVar(value=False)
         self.min_crates_var = tk.StringVar(value="")
         self.max_crates_var = tk.StringVar(value="")
 
@@ -220,13 +237,6 @@ class ControlPanel(ttk.Frame):
         ttk.Checkbutton(
             self, text="Rotationally symmetric", variable=self.symmetric_var
         ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
-        row += 1
-        cb = ttk.Checkbutton(
-            self, text="Use Rust engine", variable=self.use_rust_var
-        )
-        cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
-        if not _HAS_RUST_ENGINE:
-            cb.configure(state="disabled")
         row += 1
 
         # Spacing
@@ -463,6 +473,29 @@ class App:
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", lambda _e: self._render())
 
+        # Log which engine will be used
+        self._log_engine_selection()
+
+    def _log_engine_selection(self):
+        """Print which engine is being used on startup."""
+        if _should_use_rust_engine():
+            print(
+                "✓ Using Rust engine (Python source matches certified hashes)"
+            )
+        else:
+            if not _HAS_RUST_ENGINE:
+                print(
+                    "⚠ Using Python engine "
+                    "(Rust engine not available - run: cd v2/engine_rs && "
+                    "maturin develop)"
+                )
+            else:
+                print(
+                    "⚠ Using Python engine "
+                    "(Python source has changed since last certification - "
+                    "run: python -m engine_cmp.compare)"
+                )
+
     # -- rendering --
 
     def _render(self):
@@ -506,11 +539,14 @@ class App:
         if params["seed"] is None:
             params["seed"] = random.randint(0, 2**32 - 1)
         params["initial_layout"] = self.layout
-        if self.controls.use_rust_var.get() and _HAS_RUST_ENGINE:
+
+        # Auto-select engine based on manifest verification
+        if _should_use_rust_engine():
             result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
             result = json.loads(result_json)
         else:
             result = generate_json(params)
+
         self.layout = result["layout"]
         self.history.add_to_history(self.layout)
         self._render()
