@@ -71,6 +71,8 @@ pub struct TerrainLayout {
     pub table_depth_inches: f64,
     #[serde(default)]
     pub placed_features: Vec<PlacedFeature>,
+    #[serde(default)]
+    pub rotationally_symmetric: bool,
 }
 
 // -- Catalog -------------------------------------------------------
@@ -126,6 +128,8 @@ pub struct EngineParams {
     pub min_feature_gap_inches: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_edge_gap_inches: Option<f64>,
+    #[serde(default)]
+    pub rotationally_symmetric: bool,
 }
 
 impl EngineParams {
@@ -198,6 +202,7 @@ mod tests {
                 table_width_inches: 60.0,
                 table_depth_inches: 44.0,
                 placed_features: vec![],
+                rotationally_symmetric: false,
             },
             score: 0.0,
             steps_completed: 50,

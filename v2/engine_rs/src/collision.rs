@@ -9,6 +9,24 @@ use crate::types::{PlacedFeature, TerrainObject, Transform};
 
 pub type Corners = [(f64, f64); 4];
 
+/// Create the 180-degree rotational mirror of a placed feature: (-x, -z, rot+180).
+pub fn mirror_placed_feature(pf: &PlacedFeature) -> PlacedFeature {
+    PlacedFeature {
+        feature: pf.feature.clone(),
+        transform: Transform {
+            x_inches: -pf.transform.x_inches,
+            y_inches: 0.0,
+            z_inches: -pf.transform.z_inches,
+            rotation_deg: pf.transform.rotation_deg + 180.0,
+        },
+    }
+}
+
+/// Check if a placed feature is at the table origin (0, 0).
+pub fn is_at_origin(pf: &PlacedFeature) -> bool {
+    pf.transform.x_inches == 0.0 && pf.transform.z_inches == 0.0
+}
+
 pub fn compose_transform(inner: &Transform, outer: &Transform) -> Transform {
     let cos_o = outer.rotation_deg.to_radians().cos();
     let sin_o = outer.rotation_deg.to_radians().sin();
@@ -321,7 +339,7 @@ pub fn get_tall_world_obbs(
 ///
 /// Validates:
 /// 1. All shapes within table bounds
-/// 2. No overlap with other features
+/// 2. No overlap with other features (including mirrors if symmetric)
 /// 3. Tall shapes (height >= 1") respect min_feature_gap
 /// 4. Tall shapes (height >= 1") respect min_edge_gap
 pub fn is_valid_placement(
@@ -332,9 +350,10 @@ pub fn is_valid_placement(
     objects_by_id: &HashMap<String, &TerrainObject>,
     min_feature_gap: Option<f64>,
     min_edge_gap: Option<f64>,
+    rotationally_symmetric: bool,
 ) -> bool {
-    let check_obbs =
-        get_world_obbs(&placed_features[check_idx], objects_by_id);
+    let check_pf = &placed_features[check_idx];
+    let check_obbs = get_world_obbs(check_pf, objects_by_id);
 
     // 1. Check table bounds
     for corners in &check_obbs {
@@ -343,11 +362,25 @@ pub fn is_valid_placement(
         }
     }
 
-    // 2. Check overlap with other features
+    // Build expanded "other features" list including mirrors when symmetric
+    let mut other_features: Vec<PlacedFeature> = Vec::new();
     for (i, pf) in placed_features.iter().enumerate() {
         if i == check_idx {
             continue;
         }
+        other_features.push(pf.clone());
+        if rotationally_symmetric && !is_at_origin(pf) {
+            other_features.push(mirror_placed_feature(pf));
+        }
+    }
+
+    // Also check feature's own mirror (can't overlap itself)
+    if rotationally_symmetric && !is_at_origin(check_pf) {
+        other_features.push(mirror_placed_feature(check_pf));
+    }
+
+    // 2. Check overlap with other features
+    for pf in &other_features {
         let other_obbs = get_world_obbs(pf, objects_by_id);
         for ca in &check_obbs {
             for cb in &other_obbs {
@@ -359,11 +392,7 @@ pub fn is_valid_placement(
     }
 
     // Gap checking only for tall geometries (height >= 1")
-    let check_tall = get_tall_world_obbs(
-        &placed_features[check_idx],
-        objects_by_id,
-        1.0,
-    );
+    let check_tall = get_tall_world_obbs(check_pf, objects_by_id, 1.0);
 
     if check_tall.is_empty() {
         return true;
@@ -388,15 +417,9 @@ pub fn is_valid_placement(
     // 4. Check feature gap
     if let Some(gap) = min_feature_gap {
         if gap > 0.0 {
-            for i in 0..placed_features.len() {
-                if i == check_idx {
-                    continue;
-                }
-                let other_tall = get_tall_world_obbs(
-                    &placed_features[i],
-                    objects_by_id,
-                    1.0,
-                );
+            for pf in &other_features {
+                let other_tall =
+                    get_tall_world_obbs(pf, objects_by_id, 1.0);
                 for ca in &check_tall {
                     for cb in &other_tall {
                         let dist = obb_distance(ca, cb);
@@ -552,13 +575,13 @@ mod tests {
 
         // This should fail with min_edge_gap_inches=2.0
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, Some(2.0)
+            &features, 0, 60.0, 44.0, &objs, None, Some(2.0), false
         );
         assert!(!valid);
 
         // But pass without gap constraint
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, None
+            &features, 0, 60.0, 44.0, &objs, None, None, false
         );
         assert!(valid);
     }
@@ -607,13 +630,13 @@ mod tests {
 
         // Gap is ~4 inches, so should fail with min_feature_gap_inches=5.0
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, Some(5.0), None
+            &features, 1, 60.0, 44.0, &objs, Some(5.0), None, false
         );
         assert!(!valid);
 
         // But pass without gap constraint
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, None, None
+            &features, 1, 60.0, 44.0, &objs, None, None, false
         );
         assert!(valid);
     }

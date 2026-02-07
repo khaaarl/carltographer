@@ -56,12 +56,22 @@ fn quantize_angle(value: f64) -> f64 {
 
 fn count_features_by_type(
     features: &[PlacedFeature],
+    rotationally_symmetric: bool,
 ) -> std::collections::HashMap<String, u32> {
-    // Count how many of each feature_type are currently in the layout.
+    // Count how many of each feature_type are visible on the table.
+    // When rotationally_symmetric, non-origin features count as 2
+    // (canonical + mirror). Origin features count as 1.
     let mut counts = std::collections::HashMap::new();
     for pf in features {
         let ft = pf.feature.feature_type.clone();
-        *counts.entry(ft).or_insert(0) += 1;
+        let inc = if rotationally_symmetric
+            && (pf.transform.x_inches != 0.0 || pf.transform.z_inches != 0.0)
+        {
+            2
+        } else {
+            1
+        };
+        *counts.entry(ft).or_insert(0) += inc;
     }
     counts
 }
@@ -174,7 +184,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
 
     for _ in 0..num_steps {
         let has_features = !placed_features.is_empty();
-        let feature_counts = count_features_by_type(&placed_features);
+        let feature_counts = count_features_by_type(&placed_features, params.rotationally_symmetric);
 
         // Compute action weights with multiplicative biasing across all prefs
         let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
@@ -248,6 +258,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     &objects_by_id,
                     params.min_feature_gap_inches,
                     params.min_edge_gap_inches,
+                    params.rotationally_symmetric,
                 ) {
                     nid += 1;
                 } else {
@@ -285,6 +296,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     &objects_by_id,
                     params.min_feature_gap_inches,
                     params.min_edge_gap_inches,
+                    params.rotationally_symmetric,
                 ) {
                     placed_features[idx] = old;
                 }
@@ -310,6 +322,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
             table_width_inches: params.table_width_inches,
             table_depth_inches: params.table_depth_inches,
             placed_features,
+            rotationally_symmetric: params.rotationally_symmetric,
         },
         score: 0.0,
         steps_completed: num_steps,
@@ -372,6 +385,7 @@ mod tests {
             feature_count_preferences: None,
             min_feature_gap_inches: None,
             min_edge_gap_inches: None,
+            rotationally_symmetric: false,
         }
     }
 
@@ -451,6 +465,7 @@ mod tests {
             feature_count_preferences: None,
             min_feature_gap_inches: None,
             min_edge_gap_inches: None,
+            rotationally_symmetric: false,
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());
@@ -470,5 +485,24 @@ mod tests {
         // Should have at least min features (may not always reach due to randomness)
         // but the biasing should make it more likely to stay in range
         assert!(count >= 3 || count <= 10);
+    }
+
+    #[test]
+    fn symmetric_deterministic() {
+        let mut params = make_params(42, 100);
+        params.rotationally_symmetric = true;
+        let r1 = generate(&params);
+        let r2 = generate(&params);
+        let j1 = serde_json::to_string(&r1).unwrap();
+        let j2 = serde_json::to_string(&r2).unwrap();
+        assert_eq!(j1, j2);
+    }
+
+    #[test]
+    fn symmetric_flag_on_output() {
+        let mut params = make_params(42, 50);
+        params.rotationally_symmetric = true;
+        let result = generate(&params);
+        assert!(result.layout.rotationally_symmetric);
     }
 }

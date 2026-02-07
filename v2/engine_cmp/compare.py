@@ -250,6 +250,7 @@ def make_test_params(
     min_edge_gap_inches: Optional[float] = None,
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None,
     catalog: Optional[TerrainCatalog] = None,
+    rotationally_symmetric: bool = False,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -262,6 +263,7 @@ def make_test_params(
         feature_count_preferences=feature_count_preferences or [],
         min_feature_gap_inches=min_feature_gap_inches,
         min_edge_gap_inches=min_edge_gap_inches,
+        rotationally_symmetric=rotationally_symmetric,
     )
 
 
@@ -278,6 +280,7 @@ class TestScenario:
     min_edge_gap_inches: Optional[float] = None
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None
     catalog: Optional[TerrainCatalog] = None
+    rotationally_symmetric: bool = False
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -290,6 +293,7 @@ class TestScenario:
             min_edge_gap_inches=self.min_edge_gap_inches,
             feature_count_preferences=self.feature_count_preferences,
             catalog=self.catalog,
+            rotationally_symmetric=self.rotationally_symmetric,
         )
 
 
@@ -389,6 +393,39 @@ TEST_SCENARIOS = [
                 max=4,
             ),
         ],
+    ),
+    TestScenario(
+        "symmetric_basic",
+        seed=42,
+        num_steps=50,
+        rotationally_symmetric=True,
+    ),
+    TestScenario(
+        "symmetric_with_gaps",
+        seed=42,
+        num_steps=50,
+        min_edge_gap_inches=2.0,
+        min_feature_gap_inches=3.0,
+        rotationally_symmetric=True,
+    ),
+    TestScenario(
+        "symmetric_multi_type",
+        seed=42,
+        num_steps=100,
+        catalog=make_multi_type_catalog(),
+        feature_count_preferences=[
+            FeatureCountPreference(
+                feature_type="obstacle",
+                min=2,
+                max=5,
+            ),
+            FeatureCountPreference(
+                feature_type="obscuring",
+                min=1,
+                max=3,
+            ),
+        ],
+        rotationally_symmetric=True,
     ),
 ]
 
@@ -525,6 +562,11 @@ def run_comparison(
             **(
                 {"min_edge_gap_inches": params.min_edge_gap_inches}
                 if params.min_edge_gap_inches is not None
+                else {}
+            ),
+            **(
+                {"rotationally_symmetric": True}
+                if params.rotationally_symmetric
                 else {}
             ),
         }

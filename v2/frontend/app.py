@@ -115,6 +115,18 @@ SAMPLE_CATALOG = {
 # ---------------------------------------------------------------------------
 
 
+def _mirror_pf_dict(pf):
+    """Create mirror dict for rendering."""
+    tf = pf.get("transform", {})
+    mirror_tf = {
+        "x_inches": -tf.get("x_inches", 0.0),
+        "y_inches": tf.get("y_inches", 0.0),
+        "z_inches": -tf.get("z_inches", 0.0),
+        "rotation_deg": tf.get("rotation_deg", 0.0) + 180.0,
+    }
+    return {**pf, "transform": mirror_tf}
+
+
 def _get_tf(d):
     """Extract (x, z, rot_deg) from a transform dict, defaulting to 0."""
     if not d:
@@ -174,6 +186,13 @@ class BattlefieldRenderer:
 
         for pf in layout["placed_features"]:
             self._draw_placed_feature(draw, pf)
+            if layout.get("rotationally_symmetric", False):
+                tf = pf.get("transform", {})
+                if (
+                    tf.get("x_inches", 0.0) != 0.0
+                    or tf.get("z_inches", 0.0) != 0.0
+                ):
+                    self._draw_placed_feature(draw, _mirror_pf_dict(pf))
 
         # Table border
         draw.rectangle([0, 0, w - 1, h - 1], outline=TABLE_BORDER, width=3)
@@ -594,6 +613,7 @@ class App:
             "table_width_inches": self.controls.table_width_var.get(),
             "table_depth_inches": self.controls.table_depth_var.get(),
             "placed_features": [],
+            "rotationally_symmetric": self.controls.symmetric_var.get(),
         }
         self._render()
 
@@ -603,7 +623,14 @@ class App:
             return
         if params["seed"] is None:
             params["seed"] = random.randint(0, 2**32 - 1)
-        params["initial_layout"] = self.layout
+
+        # Start fresh if symmetry setting changed
+        symmetric = params.get("rotationally_symmetric", False)
+        layout_symmetric = self.layout.get("rotationally_symmetric", False)
+        if symmetric != layout_symmetric:
+            params["initial_layout"] = None
+        else:
+            params["initial_layout"] = self.layout
 
         # Auto-select engine based on manifest verification
         if _should_use_rust_engine():

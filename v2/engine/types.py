@@ -155,6 +155,7 @@ class TerrainLayout:
     table_width: float
     table_depth: float
     placed_features: list[PlacedFeature] = field(default_factory=list)
+    rotationally_symmetric: bool = False
 
     @staticmethod
     def from_dict(d: dict) -> TerrainLayout:
@@ -165,6 +166,7 @@ class TerrainLayout:
                 PlacedFeature.from_dict(p)
                 for p in d.get("placed_features", [])
             ],
+            rotationally_symmetric=d.get("rotationally_symmetric", False),
         )
 
     def to_dict(self) -> dict:
@@ -172,6 +174,7 @@ class TerrainLayout:
             "table_width_inches": self.table_width,
             "table_depth_inches": self.table_depth,
             "placed_features": [p.to_dict() for p in self.placed_features],
+            "rotationally_symmetric": self.rotationally_symmetric,
         }
 
 
@@ -246,6 +249,7 @@ class EngineParams:
     )
     min_feature_gap_inches: float | None = None
     min_edge_gap_inches: float | None = None
+    rotationally_symmetric: bool = False
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
@@ -264,6 +268,7 @@ class EngineParams:
             feature_count_preferences=prefs,
             min_feature_gap_inches=d.get("min_feature_gap_inches"),
             min_edge_gap_inches=d.get("min_edge_gap_inches"),
+            rotationally_symmetric=d.get("rotationally_symmetric", False),
         )
 
 

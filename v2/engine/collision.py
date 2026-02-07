@@ -13,6 +13,21 @@ from .types import PlacedFeature, TerrainObject, Transform
 Corners = list[tuple[float, float]]
 
 
+def _mirror_placed_feature(pf: PlacedFeature) -> PlacedFeature:
+    """180 degree rotational mirror: (-x, -z, rot+180)."""
+    t = pf.transform
+    return PlacedFeature(
+        feature=pf.feature,
+        transform=Transform(
+            x=-t.x, z=-t.z, rotation_deg=t.rotation_deg + 180.0
+        ),
+    )
+
+
+def _is_at_origin(pf: PlacedFeature) -> bool:
+    return pf.transform.x == 0.0 and pf.transform.z == 0.0
+
+
 def compose_transform(inner: Transform, outer: Transform) -> Transform:
     """Apply inner transform, then outer transform."""
     cos_o = math.cos(math.radians(outer.rotation_deg))
@@ -295,27 +310,41 @@ def is_valid_placement(
     objects_by_id: dict[str, TerrainObject],
     min_feature_gap: float | None = None,
     min_edge_gap: float | None = None,
+    rotationally_symmetric: bool = False,
 ) -> bool:
     """Check that the feature at check_idx is validly placed.
 
     Validates:
     1. All shapes within table bounds
-    2. No overlap with other features
+    2. No overlap with other features (including mirrors if symmetric)
     3. Tall shapes (height >= 1") respect min_feature_gap
     4. Tall shapes (height >= 1") respect min_edge_gap
     """
+    check_pf = placed_features[check_idx]
+
     # Get all shapes for bounds and overlap checking
-    check_obbs = get_world_obbs(placed_features[check_idx], objects_by_id)
+    check_obbs = get_world_obbs(check_pf, objects_by_id)
 
     # 1. Check table bounds
     for corners in check_obbs:
         if not obb_in_bounds(corners, table_width, table_depth):
             return False
 
-    # 2. Check overlap with other features
+    # Build expanded "other features" list including mirrors when symmetric
+    other_features: list[PlacedFeature] = []
     for i, pf in enumerate(placed_features):
         if i == check_idx:
             continue
+        other_features.append(pf)
+        if rotationally_symmetric and not _is_at_origin(pf):
+            other_features.append(_mirror_placed_feature(pf))
+
+    # Also check feature's own mirror (can't overlap itself)
+    if rotationally_symmetric and not _is_at_origin(check_pf):
+        other_features.append(_mirror_placed_feature(check_pf))
+
+    # 2. Check overlap with other features
+    for pf in other_features:
         other_obbs = get_world_obbs(pf, objects_by_id)
         for ca in check_obbs:
             for cb in other_obbs:
@@ -324,7 +353,7 @@ def is_valid_placement(
 
     # Gap checking only for tall geometries (height >= 1")
     check_tall = get_tall_world_obbs(
-        placed_features[check_idx],
+        check_pf,
         objects_by_id,
         min_height=1.0,
     )
@@ -343,9 +372,7 @@ def is_valid_placement(
 
     # 4. Check feature gap
     if min_feature_gap is not None and min_feature_gap > 0:
-        for i, pf in enumerate(placed_features):
-            if i == check_idx:
-                continue
+        for pf in other_features:
             other_tall = get_tall_world_obbs(pf, objects_by_id, min_height=1.0)
             for ca in check_tall:
                 for cb in other_tall:

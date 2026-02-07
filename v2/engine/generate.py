@@ -27,11 +27,20 @@ def _quantize_angle(value: float) -> float:
 
 
 def _count_features_by_type(layout: TerrainLayout) -> dict[str, int]:
-    """Count how many of each feature_type are currently in the layout."""
+    """Count how many of each feature_type are visible on the table.
+
+    When rotationally_symmetric, non-origin features count as 2
+    (canonical + mirror). Origin features count as 1.
+    """
     counts: dict[str, int] = {}
     for pf in layout.placed_features:
         ft = pf.feature.feature_type
-        counts[ft] = counts.get(ft, 0) + 1
+        if layout.rotationally_symmetric and (
+            pf.transform.x != 0.0 or pf.transform.z != 0.0
+        ):
+            counts[ft] = counts.get(ft, 0) + 2
+        else:
+            counts[ft] = counts.get(ft, 0) + 1
     return counts
 
 
@@ -133,12 +142,14 @@ def generate(params: EngineParams) -> EngineResult:
             table_width=params.table_width,
             table_depth=params.table_depth,
             placed_features=list(params.initial_layout.placed_features),
+            rotationally_symmetric=params.rotationally_symmetric,
         )
         next_id = _next_feature_id(layout)
     else:
         layout = TerrainLayout(
             table_width=params.table_width,
             table_depth=params.table_depth,
+            rotationally_symmetric=params.rotationally_symmetric,
         )
         next_id = 1
 
@@ -200,6 +211,7 @@ def generate(params: EngineParams) -> EngineResult:
                 objects_by_id,
                 min_feature_gap=params.min_feature_gap_inches,
                 min_edge_gap=params.min_edge_gap_inches,
+                rotationally_symmetric=params.rotationally_symmetric,
             ):
                 next_id += 1
             else:
@@ -224,6 +236,7 @@ def generate(params: EngineParams) -> EngineResult:
                 objects_by_id,
                 min_feature_gap=params.min_feature_gap_inches,
                 min_edge_gap=params.min_edge_gap_inches,
+                rotationally_symmetric=params.rotationally_symmetric,
             ):
                 features[idx] = old
 

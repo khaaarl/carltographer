@@ -337,6 +337,49 @@ class TestGenerate:
         result = generate(params)
         assert len(result.layout.placed_features) > 0
 
+    def test_symmetric_deterministic(self):
+        """Symmetric mode is deterministic."""
+        pd = _make_params_dict(seed=42, num_steps=100)
+        pd["rotationally_symmetric"] = True
+        p1 = EngineParams.from_dict(pd)
+        p2 = EngineParams.from_dict(pd)
+        r1 = generate(p1)
+        r2 = generate(p2)
+        assert r1.layout.to_dict() == r2.layout.to_dict()
+
+    def test_symmetric_flag_on_output(self):
+        """Output layout has rotationally_symmetric flag."""
+        pd = _make_params_dict(seed=42, num_steps=50)
+        pd["rotationally_symmetric"] = True
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        assert result.layout.rotationally_symmetric is True
+        d = result.layout.to_dict()
+        assert d["rotationally_symmetric"] is True
+
+    def test_symmetric_no_self_overlap(self):
+        """Symmetric features don't overlap their own mirrors."""
+        pd = _make_params_dict(seed=42, num_steps=200)
+        pd["rotationally_symmetric"] = True
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        from engine.collision import _is_at_origin, _mirror_placed_feature
+
+        for pf in result.layout.placed_features:
+            if _is_at_origin(pf):
+                continue
+            mirror = _mirror_placed_feature(pf)
+            obbs_orig = get_world_obbs(pf, objects_by_id)
+            obbs_mirror = get_world_obbs(mirror, objects_by_id)
+            for ca in obbs_orig:
+                for cb in obbs_mirror:
+                    assert not obbs_overlap(ca, cb), (
+                        f"Feature at ({pf.transform.x}, {pf.transform.z}) "
+                        f"overlaps its mirror"
+                    )
+
 
 # -- JSON -----------------------------------------------------------
 
