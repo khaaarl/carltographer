@@ -67,6 +67,18 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Freeform tags for categorization and filtering (e.g. 'container', 'ruin_wall', 'ruin_floor', 'modular')."
+        },
+        "fill_color": {
+          "type": ["string", "null"],
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "default": null,
+          "description": "Hex color for rendering this object (e.g. '#8b3a1a'). null means use a frontend default."
+        },
+        "outline_color": {
+          "type": ["string", "null"],
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "default": null,
+          "description": "Hex color for the outline when rendering. null means no outline."
         }
       },
       "required": ["id", "shapes"],

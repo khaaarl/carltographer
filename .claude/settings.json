@@ -31,6 +31,8 @@
       "Bash(pre-commit run:*)",
       "Bash(rustc *)",
       "Bash(ruff:*)",
+      "Bash(source .env/bin/activate:*)",
+      "Bash(source v2/.env/bin/activate:*)",
       "Bash(ty:*)",
       "Bash(wc:*)"
     ],

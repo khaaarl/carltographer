@@ -14,27 +14,92 @@ from PIL import Image, ImageDraw, ImageTk
 
 TABLE_BG = "#2d5a27"  # dark green gaming mat
 TABLE_BORDER = "#111111"
-CRATE_FILL = "#8b3a1a"  # rusty red
-CRATE_OUTLINE = "#000000"
 CANVAS_BG = "#1e1e1e"
+DEFAULT_FILL = "#888888"
 
-# -- Sample data --
+# ---------------------------------------------------------------------------
+# Sample data (structured per carltographer.schema.json)
+# ---------------------------------------------------------------------------
 
-# Each crate is (x_inches, z_inches, rotation_deg) relative to table center.
-# Crate dimensions: 5" wide x 2.5" deep (obstacle terrain).
-CRATE_WIDTH = 5.0
-CRATE_DEPTH = 2.5
+CRATE_OBJECT = {
+    "id": "crate",
+    "name": "Crate",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 5.0,
+            "depth_inches": 2.5,
+            "height_inches": 2.5,
+        }
+    ],
+    "tags": ["container"],
+    "fill_color": "#8b3a1a",
+    "outline_color": "#000000",
+}
 
-SAMPLE_CRATES = [
-    (0, 0, 0),
-    (-12, -18, 45),
-    (14, 10, 0),
-    (-8, 20, 90),
-    (16, -14, 30),
-    (-15, -4, 0),
-    (5, -22, 15),
-    (-10, 12, 60),
-]
+SAMPLE_CATALOG = {
+    "name": "Sample terrain",
+    "objects": [{"item": CRATE_OBJECT, "quantity": None}],
+    "features": [],
+}
+
+
+def _crate_feature(feature_id):
+    """Shorthand: a single-crate obstacle feature."""
+    return {
+        "id": feature_id,
+        "feature_type": "obstacle",
+        "components": [{"object_id": "crate"}],
+    }
+
+
+def _tf(x=0, z=0, rot=0):
+    """Shorthand for a transform dict."""
+    return {"x_inches": x, "z_inches": z, "rotation_deg": rot}
+
+
+SAMPLE_LAYOUT = {
+    "table_width_inches": 44,
+    "table_depth_inches": 60,
+    "placed_features": [
+        {"feature": _crate_feature("c1"), "transform": _tf(0, 0, 0)},
+        {"feature": _crate_feature("c2"), "transform": _tf(-12, -18, 45)},
+        {"feature": _crate_feature("c3"), "transform": _tf(14, 10, 0)},
+        {"feature": _crate_feature("c4"), "transform": _tf(-8, 20, 90)},
+        {"feature": _crate_feature("c5"), "transform": _tf(16, -14, 30)},
+        {"feature": _crate_feature("c6"), "transform": _tf(-15, -4, 0)},
+        {"feature": _crate_feature("c7"), "transform": _tf(5, -22, 15)},
+        {"feature": _crate_feature("c8"), "transform": _tf(-10, 12, 60)},
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Transform helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_tf(d):
+    """Extract (x, z, rot_deg) from a transform dict, defaulting to 0."""
+    if not d:
+        return 0.0, 0.0, 0.0
+    return (
+        d.get("x_inches", 0.0),
+        d.get("z_inches", 0.0),
+        d.get("rotation_deg", 0.0),
+    )
+
+
+def _compose(outer, inner):
+    """Compose two (x, z, rot_deg) transforms (inner applied first)."""
+    ox, oz, orot = outer
+    ix, iz, irot = inner
+    rad = math.radians(orot)
+    cos_r = math.cos(rad)
+    sin_r = math.sin(rad)
+    x = ox + ix * cos_r - iz * sin_r
+    z = oz + ix * sin_r + iz * cos_r
+    return (x, z, orot + irot)
 
 
 # ---------------------------------------------------------------------------
@@ -45,10 +110,11 @@ SAMPLE_CRATES = [
 class BattlefieldRenderer:
     """Renders a terrain layout to a Pillow image."""
 
-    def __init__(self, table_width, table_depth, ppi):
+    def __init__(self, table_width, table_depth, ppi, objects_by_id):
         self.table_width = table_width
         self.table_depth = table_depth
         self.ppi = ppi
+        self.objects_by_id = objects_by_id
 
     def _to_px(self, x_inches, z_inches):
         """Table coords (center origin) -> pixel coords (top-left origin)."""
@@ -56,22 +122,41 @@ class BattlefieldRenderer:
         py = (z_inches + self.table_depth / 2) * self.ppi
         return px, py
 
-    def render(self, crates):
+    def render(self, layout):
         w = int(self.table_width * self.ppi)
         h = int(self.table_depth * self.ppi)
         img = Image.new("RGB", (w, h), TABLE_BG)
         draw = ImageDraw.Draw(img)
 
-        for cx, cz, rot in crates:
-            self._draw_crate(draw, cx, cz, rot)
+        for pf in layout["placed_features"]:
+            self._draw_placed_feature(draw, pf)
 
         # Table border
         draw.rectangle([0, 0, w - 1, h - 1], outline=TABLE_BORDER, width=3)
         return img
 
-    def _draw_crate(self, draw, cx, cz, rot_deg):
-        hw = CRATE_WIDTH / 2
-        hd = CRATE_DEPTH / 2
+    def _draw_placed_feature(self, draw, placed_feature):
+        feature = placed_feature["feature"]
+        feat_tf = _get_tf(placed_feature.get("transform"))
+
+        for comp in feature["components"]:
+            obj = self.objects_by_id.get(comp["object_id"])
+            if obj is None:
+                continue
+            comp_tf = _get_tf(comp.get("transform"))
+
+            fill = obj.get("fill_color") or DEFAULT_FILL
+            outline = obj.get("outline_color")
+
+            for shape in obj["shapes"]:
+                offset_tf = _get_tf(shape.get("offset"))
+                combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
+                self._draw_rect(draw, shape, combined, fill, outline)
+
+    def _draw_rect(self, draw, shape, tf, fill, outline):
+        cx, cz, rot_deg = tf
+        hw = shape["width_inches"] / 2
+        hd = shape["depth_inches"] / 2
         corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
 
         rad = math.radians(rot_deg)
@@ -85,7 +170,10 @@ class BattlefieldRenderer:
             px_corners.append(self._to_px(rx, rz))
 
         draw.polygon(
-            px_corners, fill=CRATE_FILL, outline=CRATE_OUTLINE, width=2
+            px_corners,
+            fill=fill,
+            outline=outline,
+            width=2 if outline else 0,
         )
 
 
@@ -201,7 +289,7 @@ class ControlPanel(ttk.Frame):
                 "min_feature_gap_inches": self.min_gap_var.get(),
                 "min_edge_gap_inches": self.min_edge_gap_var.get(),
                 "num_steps": self.num_steps_var.get(),
-                "catalog": {"name": "default", "objects": [], "features": []},
+                "catalog": SAMPLE_CATALOG,
             }
         except (tk.TclError, ValueError):
             return None
@@ -210,6 +298,21 @@ class ControlPanel(ttk.Frame):
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
+
+
+def _build_object_index(catalog):
+    """Build {object_id: object_dict} from a catalog."""
+    index = {}
+    for entry in catalog.get("objects", []):
+        obj = entry["item"]
+        index[obj["id"]] = obj
+    # Also index objects that appear inside catalog features.
+    for entry in catalog.get("features", []):
+        for comp in entry["item"].get("components", []):
+            if "object" in comp:
+                obj = comp["object"]
+                index[obj["id"]] = obj
+    return index
 
 
 class App:
@@ -236,7 +339,8 @@ class App:
         self.controls.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 5), pady=5)
 
         self._photo = None  # prevent GC
-        self.crates = list(SAMPLE_CRATES)
+        self.layout = SAMPLE_LAYOUT
+        self.objects_by_id = _build_object_index(SAMPLE_CATALOG)
 
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", lambda _e: self._render())
@@ -261,8 +365,8 @@ class App:
         if ppi <= 0:
             return
 
-        renderer = BattlefieldRenderer(tw, td, ppi)
-        img = renderer.render(self.crates)
+        renderer = BattlefieldRenderer(tw, td, ppi, self.objects_by_id)
+        img = renderer.render(self.layout)
 
         self._photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
