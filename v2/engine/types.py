@@ -219,6 +219,21 @@ class TerrainCatalog:
 
 
 @dataclass
+class FeatureCountPreference:
+    feature_type: str
+    min: int = 0
+    max: int | None = None
+
+    @staticmethod
+    def from_dict(d: dict) -> FeatureCountPreference:
+        return FeatureCountPreference(
+            feature_type=d["feature_type"],
+            min=d.get("min", 0),
+            max=d.get("max"),
+        )
+
+
+@dataclass
 class EngineParams:
     seed: int
     table_width: float
@@ -226,10 +241,17 @@ class EngineParams:
     catalog: TerrainCatalog
     num_steps: int = 100
     initial_layout: TerrainLayout | None = None
+    feature_count_preferences: list[FeatureCountPreference] = field(
+        default_factory=list
+    )
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
         il = d.get("initial_layout")
+        prefs = [
+            FeatureCountPreference.from_dict(p)
+            for p in d.get("feature_count_preferences", [])
+        ]
         return EngineParams(
             seed=d["seed"],
             table_width=d["table_width_inches"],
@@ -237,6 +259,7 @@ class EngineParams:
             catalog=TerrainCatalog.from_dict(d["catalog"]),
             num_steps=d.get("num_steps", 100),
             initial_layout=(TerrainLayout.from_dict(il) if il else None),
+            feature_count_preferences=prefs,
         )
 
 

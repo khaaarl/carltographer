@@ -188,6 +188,8 @@ class ControlPanel(ttk.Frame):
         self.min_gap_var = tk.DoubleVar(value=2.0)
         self.min_edge_gap_var = tk.DoubleVar(value=1.0)
         self.use_rust_var = tk.BooleanVar(value=False)
+        self.min_crates_var = tk.IntVar(value=0)
+        self.max_crates_var = tk.IntVar(value=999)
 
         self._build()
 
@@ -233,13 +235,11 @@ class ControlPanel(ttk.Frame):
         row = self._field(row, "Feature gap (in):", self.min_gap_var)
         row = self._field(row, "Edge gap (in):", self.min_edge_gap_var)
 
-        # Feature counts placeholder
+        # Feature counts
         row = self._sep(row)
         row = self._section(row, "Feature Counts")
-        ttk.Label(self, text="(not yet implemented)", foreground="gray").grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=2
-        )
-        row += 1
+        row = self._field(row, "Min obstacles:", self.min_crates_var)
+        row = self._field(row, "Max obstacles:", self.max_crates_var)
 
         # Generate button
         row = self._sep(row)
@@ -286,6 +286,19 @@ class ControlPanel(ttk.Frame):
         except ValueError:
             seed = None
         try:
+            # Build feature count preferences
+            feature_count_prefs = []
+            min_crates = self.min_crates_var.get()
+            max_crates = self.max_crates_var.get()
+            if min_crates > 0 or max_crates < 999:
+                feature_count_prefs.append(
+                    {
+                        "feature_type": "obstacle",
+                        "min": min_crates,
+                        "max": max_crates,
+                    }
+                )
+
             return {
                 "seed": seed,
                 "table_width_inches": self.table_width_var.get(),
@@ -295,6 +308,7 @@ class ControlPanel(ttk.Frame):
                 "min_edge_gap_inches": self.min_edge_gap_var.get(),
                 "num_steps": self.num_steps_var.get(),
                 "catalog": SAMPLE_CATALOG,
+                "feature_count_preferences": feature_count_prefs,
             }
         except (tk.TclError, ValueError):
             return None
