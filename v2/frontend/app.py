@@ -7,15 +7,16 @@ with a control panel for engine parameters.
 import json
 import math
 import random
+import time
 import tkinter as tk
 from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from engine import generate_json
+from ..engine import generate_json
 
 try:
-    import engine_rs as _engine_rs
+    from .. import engine_rs as _engine_rs
 
     _HAS_RUST_ENGINE = True
 except ImportError:
@@ -173,10 +174,11 @@ class BattlefieldRenderer:
 class ControlPanel(ttk.Frame):
     """Sidebar with engine parameter controls."""
 
-    def __init__(self, parent, on_table_changed, on_generate):
+    def __init__(self, parent, on_table_changed, on_generate, on_load_layout):
         super().__init__(parent, padding=10)
         self.on_table_changed = on_table_changed
         self.on_generate = on_generate
+        self.on_load_layout = on_load_layout
 
         # -- tk variables --
         self.table_width_var = tk.DoubleVar(value=60.0)
@@ -187,6 +189,10 @@ class ControlPanel(ttk.Frame):
         self.min_gap_var = tk.DoubleVar(value=2.0)
         self.min_edge_gap_var = tk.DoubleVar(value=1.0)
         self.use_rust_var = tk.BooleanVar(value=False)
+
+        # History tracking
+        self.layout_history = []  # list of (timestamp, layout_dict) tuples
+        self.history_listbox = None
 
         self._build()
 
@@ -245,6 +251,30 @@ class ControlPanel(ttk.Frame):
         ttk.Button(self, text="Generate", command=self.on_generate).grid(
             row=row, column=0, columnspan=2, pady=10, sticky="ew"
         )
+        row += 1
+
+        # History section
+        row = self._sep(row)
+        ttk.Label(self, text="Recent Layouts", font=("", 11, "bold")).grid(
+            row=row, column=0, columnspan=2, pady=(8, 4), sticky="w"
+        )
+        row += 1
+
+        # Listbox with scrollbar for history
+        scrollbar = ttk.Scrollbar(self)
+        scrollbar.grid(row=row, column=1, sticky="ns", pady=(0, 10))
+
+        self.history_listbox = tk.Listbox(
+            self,
+            height=6,
+            yscrollcommand=scrollbar.set,
+            font=("", 9),
+        )
+        self.history_listbox.grid(
+            row=row, column=0, columnspan=1, sticky="ew", pady=(0, 10)
+        )
+        self.history_listbox.bind("<<ListboxSelect>>", self._on_history_select)
+        scrollbar.config(command=self.history_listbox.yview)
 
     def _section(self, row, title):
         ttk.Label(self, text=title, font=("", 11, "bold")).grid(
@@ -298,6 +328,31 @@ class ControlPanel(ttk.Frame):
         except (tk.TclError, ValueError):
             return None
 
+    def add_to_history(self, layout):
+        """Add a layout to the history with current timestamp."""
+        timestamp = int(time.time())
+        self.layout_history.append((timestamp, layout))
+
+        # Add to listbox display (limit to 20 recent)
+        if len(self.layout_history) > 20:
+            self.layout_history.pop(0)
+            self.history_listbox.delete(0)
+
+        self.history_listbox.insert(
+            tk.END,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp)),
+        )
+
+    def _on_history_select(self, event):
+        """Load selected layout from history."""
+        selection = self.history_listbox.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx < len(self.layout_history):
+            _timestamp, layout = self.layout_history[idx]
+            self.on_load_layout(layout)
+
 
 # ---------------------------------------------------------------------------
 # Main application
@@ -339,6 +394,7 @@ class App:
             self.root,
             on_table_changed=self._render,
             on_generate=self._on_generate,
+            on_load_layout=self._load_layout,
         )
         self.controls.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 5), pady=5)
 
@@ -384,6 +440,11 @@ class App:
 
     # -- actions --
 
+    def _load_layout(self, layout):
+        """Load a layout from history and display it."""
+        self.layout = layout
+        self._render()
+
     def _on_generate(self):
         params = self.controls.get_params()
         if not params:
@@ -397,6 +458,7 @@ class App:
         else:
             result = generate_json(params)
         self.layout = result["layout"]
+        self.controls.add_to_history(self.layout)
         self._render()
 
     def run(self):
