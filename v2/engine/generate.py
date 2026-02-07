@@ -33,14 +33,32 @@ def _instantiate_feature(
     )
 
 
+def _next_feature_id(layout: TerrainLayout) -> int:
+    """Find the next unused feature_N id number."""
+    max_id = 0
+    for pf in layout.placed_features:
+        parts = pf.feature.id.split("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            max_id = max(max_id, int(parts[1]))
+    return max_id + 1
+
+
 def generate(params: EngineParams) -> EngineResult:
     rng = PCG32(params.seed)
     objects_by_id = _build_object_index(params.catalog)
-    layout = TerrainLayout(
-        table_width=params.table_width,
-        table_depth=params.table_depth,
-    )
-    next_id = 1
+    if params.initial_layout is not None:
+        layout = TerrainLayout(
+            table_width=params.table_width,
+            table_depth=params.table_depth,
+            placed_features=list(params.initial_layout.placed_features),
+        )
+        next_id = _next_feature_id(layout)
+    else:
+        layout = TerrainLayout(
+            table_width=params.table_width,
+            table_depth=params.table_depth,
+        )
+        next_id = 1
 
     catalog_features = [cf.item for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0

@@ -225,15 +225,18 @@ class EngineParams:
     table_depth: float
     catalog: TerrainCatalog
     num_steps: int = 100
+    initial_layout: TerrainLayout | None = None
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
+        il = d.get("initial_layout")
         return EngineParams(
             seed=d["seed"],
             table_width=d["table_width_inches"],
             table_depth=d["table_depth_inches"],
             catalog=TerrainCatalog.from_dict(d["catalog"]),
             num_steps=d.get("num_steps", 100),
+            initial_layout=(TerrainLayout.from_dict(il) if il else None),
         )
 
 

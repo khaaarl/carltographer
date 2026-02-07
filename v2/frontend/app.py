@@ -5,10 +5,13 @@ with a control panel for engine parameters.
 """
 
 import math
+import random
 import tkinter as tk
 from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
+
+from v2.engine import generate_json
 
 # -- Visual constants --
 
@@ -37,40 +40,16 @@ CRATE_OBJECT = {
     "outline_color": "#000000",
 }
 
+CRATE_FEATURE = {
+    "id": "crate",
+    "feature_type": "obstacle",
+    "components": [{"object_id": "crate"}],
+}
+
 SAMPLE_CATALOG = {
     "name": "Sample terrain",
     "objects": [{"item": CRATE_OBJECT, "quantity": None}],
-    "features": [],
-}
-
-
-def _crate_feature(feature_id):
-    """Shorthand: a single-crate obstacle feature."""
-    return {
-        "id": feature_id,
-        "feature_type": "obstacle",
-        "components": [{"object_id": "crate"}],
-    }
-
-
-def _tf(x=0, z=0, rot=0):
-    """Shorthand for a transform dict."""
-    return {"x_inches": x, "z_inches": z, "rotation_deg": rot}
-
-
-SAMPLE_LAYOUT = {
-    "table_width_inches": 44,
-    "table_depth_inches": 60,
-    "placed_features": [
-        {"feature": _crate_feature("c1"), "transform": _tf(0, 0, 0)},
-        {"feature": _crate_feature("c2"), "transform": _tf(-12, -18, 45)},
-        {"feature": _crate_feature("c3"), "transform": _tf(14, 10, 0)},
-        {"feature": _crate_feature("c4"), "transform": _tf(-8, 20, 90)},
-        {"feature": _crate_feature("c5"), "transform": _tf(16, -14, 30)},
-        {"feature": _crate_feature("c6"), "transform": _tf(-15, -4, 0)},
-        {"feature": _crate_feature("c7"), "transform": _tf(5, -22, 15)},
-        {"feature": _crate_feature("c8"), "transform": _tf(-10, 12, 60)},
-    ],
+    "features": [{"item": CRATE_FEATURE, "quantity": None}],
 }
 
 
@@ -191,10 +170,10 @@ class ControlPanel(ttk.Frame):
         self.on_generate = on_generate
 
         # -- tk variables --
-        self.table_width_var = tk.DoubleVar(value=44.0)
-        self.table_depth_var = tk.DoubleVar(value=60.0)
-        self.seed_var = tk.IntVar(value=42)
-        self.num_steps_var = tk.IntVar(value=1000)
+        self.table_width_var = tk.DoubleVar(value=60.0)
+        self.table_depth_var = tk.DoubleVar(value=44.0)
+        self.seed_var = tk.StringVar(value="")
+        self.num_steps_var = tk.IntVar(value=1)
         self.symmetric_var = tk.BooleanVar(value=False)
         self.min_gap_var = tk.DoubleVar(value=2.0)
         self.min_edge_gap_var = tk.DoubleVar(value=1.0)
@@ -279,10 +258,18 @@ class ControlPanel(ttk.Frame):
             pass
 
     def get_params(self):
-        """Return current params as a dict matching engine_params schema."""
+        """Return current params as a dict matching engine_params schema.
+
+        Seed is None if the field is blank or not a valid integer.
+        """
+        try:
+            seed_str = self.seed_var.get().strip()
+            seed = int(seed_str) if seed_str else None
+        except ValueError:
+            seed = None
         try:
             return {
-                "seed": self.seed_var.get(),
+                "seed": seed,
                 "table_width_inches": self.table_width_var.get(),
                 "table_depth_inches": self.table_depth_var.get(),
                 "rotationally_symmetric": self.symmetric_var.get(),
@@ -339,7 +326,11 @@ class App:
         self.controls.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 5), pady=5)
 
         self._photo = None  # prevent GC
-        self.layout = SAMPLE_LAYOUT
+        self.layout = {
+            "table_width_inches": 60,
+            "table_depth_inches": 44,
+            "placed_features": [],
+        }
         self.objects_by_id = _build_object_index(SAMPLE_CATALOG)
 
         self.root.after(50, self._render)
@@ -378,8 +369,14 @@ class App:
 
     def _on_generate(self):
         params = self.controls.get_params()
-        if params:
-            print(f"Generate requested: {params}")
+        if not params:
+            return
+        if params["seed"] is None:
+            params["seed"] = random.randint(0, 2**32 - 1)
+        params["initial_layout"] = self.layout
+        result = generate_json(params)
+        self.layout = result["layout"]
+        self._render()
 
     def run(self):
         self.root.mainloop()
