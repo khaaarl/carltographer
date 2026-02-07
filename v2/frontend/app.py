@@ -44,6 +44,7 @@ def _should_use_rust_engine() -> bool:
 # -- Visual constants --
 
 TABLE_BG = "#2d5a27"  # dark green gaming mat
+TABLE_GRID = "#264e22"  # subtle darker grid
 TABLE_BORDER = "#111111"
 CANVAS_BG = "#1e1e1e"
 DEFAULT_FILL = "#888888"
@@ -162,6 +163,14 @@ class BattlefieldRenderer:
         h = int(self.table_depth * self.ppi)
         img = Image.new("RGB", (w, h), TABLE_BG)
         draw = ImageDraw.Draw(img)
+
+        # 1" grid
+        for ix in range(1, int(self.table_width)):
+            px = int(ix * self.ppi)
+            draw.line([(px, 0), (px, h - 1)], fill=TABLE_GRID)
+        for iz in range(1, int(self.table_depth)):
+            py = int(iz * self.ppi)
+            draw.line([(0, py), (w - 1, py)], fill=TABLE_GRID)
 
         for pf in layout["placed_features"]:
             self._draw_placed_feature(draw, pf)
