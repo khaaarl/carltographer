@@ -9,7 +9,7 @@ import math
 import random
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
@@ -248,11 +248,14 @@ class BattlefieldRenderer:
 class ControlPanel(ttk.Frame):
     """Sidebar with engine parameter controls."""
 
-    def __init__(self, parent, on_table_changed, on_generate, on_clear):
+    def __init__(
+        self, parent, on_table_changed, on_generate, on_clear, on_save
+    ):
         super().__init__(parent, padding=10)
         self.on_table_changed = on_table_changed
         self.on_generate = on_generate
         self.on_clear = on_clear
+        self.on_save = on_save
 
         # -- tk variables --
         self.table_width_var = tk.DoubleVar(value=60.0)
@@ -319,6 +322,10 @@ class ControlPanel(ttk.Frame):
         )
         row += 1
         ttk.Button(self, text="Clear Layout", command=self.on_clear).grid(
+            row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
+        )
+        row += 1
+        ttk.Button(self, text="Save Image", command=self.on_save).grid(
             row=row, column=0, columnspan=2, pady=(2, 10), sticky="ew"
         )
 
@@ -529,6 +536,7 @@ class App:
             on_table_changed=self._render,
             on_generate=self._on_generate,
             on_clear=self._on_clear,
+            on_save=self._on_save,
         )
         self.controls.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
@@ -616,6 +624,26 @@ class App:
             "rotationally_symmetric": self.controls.symmetric_var.get(),
         }
         self._render()
+
+    def _on_save(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG files", "*.png")],
+        )
+        if not path:
+            return
+
+        params = self.controls.get_params()
+        if params is None:
+            return
+
+        tw = params["table_width_inches"]
+        td = params["table_depth_inches"]
+        ppi = 20
+
+        renderer = BattlefieldRenderer(tw, td, ppi, self.objects_by_id)
+        img = renderer.render(self.layout)
+        img.save(path)
 
     def _on_generate(self):
         params = self.controls.get_params()
