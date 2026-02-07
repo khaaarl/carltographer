@@ -74,10 +74,38 @@ CRATE_FEATURE = {
     "components": [{"object_id": "crate"}],
 }
 
+RUINS_OBJECT = {
+    "id": "ruins",
+    "name": "Ruins",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 12.0,
+            "depth_inches": 6.0,
+            "height_inches": 0.0,
+        }
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#888888",
+    "outline_color": "#000000",
+}
+
+RUINS_FEATURE = {
+    "id": "ruins",
+    "feature_type": "obscuring",
+    "components": [{"object_id": "ruins"}],
+}
+
 SAMPLE_CATALOG = {
     "name": "Sample terrain",
-    "objects": [{"item": CRATE_OBJECT, "quantity": None}],
-    "features": [{"item": CRATE_FEATURE, "quantity": None}],
+    "objects": [
+        {"item": CRATE_OBJECT, "quantity": None},
+        {"item": RUINS_OBJECT, "quantity": None},
+    ],
+    "features": [
+        {"item": CRATE_FEATURE, "quantity": None},
+        {"item": RUINS_FEATURE, "quantity": None},
+    ],
 }
 
 
@@ -207,6 +235,8 @@ class ControlPanel(ttk.Frame):
         self.min_edge_gap_var = tk.StringVar(value="")
         self.min_crates_var = tk.StringVar(value="")
         self.max_crates_var = tk.StringVar(value="")
+        self.min_ruins_var = tk.StringVar(value="")
+        self.max_ruins_var = tk.StringVar(value="")
 
         self._build()
 
@@ -250,6 +280,8 @@ class ControlPanel(ttk.Frame):
         row = self._section(row, "Feature Counts")
         row = self._field(row, "Min obstacles:", self.min_crates_var)
         row = self._field(row, "Max obstacles:", self.max_crates_var)
+        row = self._field(row, "Min ruins:", self.min_ruins_var)
+        row = self._field(row, "Max ruins:", self.max_ruins_var)
 
         # Generate button
         row = self._sep(row)
@@ -310,6 +342,8 @@ class ControlPanel(ttk.Frame):
 
             min_crates = parse_int(self.min_crates_var.get())
             max_crates = parse_int(self.max_crates_var.get())
+            min_ruins = parse_int(self.min_ruins_var.get())
+            max_ruins = parse_int(self.max_ruins_var.get())
             min_gap = parse_float(self.min_gap_var.get())
             min_edge_gap = parse_float(self.min_edge_gap_var.get())
 
@@ -321,6 +355,14 @@ class ControlPanel(ttk.Frame):
                         "feature_type": "obstacle",
                         "min": min_crates if min_crates is not None else 0,
                         "max": max_crates,
+                    }
+                )
+            if min_ruins is not None or max_ruins is not None:
+                feature_count_prefs.append(
+                    {
+                        "feature_type": "obscuring",
+                        "min": min_ruins if min_ruins is not None else 0,
+                        "max": max_ruins,
                     }
                 )
 

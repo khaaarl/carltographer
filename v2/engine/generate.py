@@ -50,28 +50,52 @@ def _weighted_choice(rng: PCG32, weights: list[float]) -> int:
     return len(weights) - 1
 
 
-def _compute_action_weights(
-    current_count: int,
-    min_count: int,
-    max_count: int | None,
-    has_catalog: bool,
-    has_features: bool,
-) -> tuple[float, float, float]:
-    """Returns (add_weight, move_weight, delete_weight)."""
-    add_weight = 1.0 if has_catalog else 0.0
-    move_weight = 1.0 if has_features else 0.0
-    delete_weight = 1.0 if has_features else 0.0
+def _compute_template_weights(
+    catalog_features: list[TerrainFeature],
+    feature_counts: dict[str, int],
+    preferences: list,
+) -> list[float]:
+    """Compute weights for selecting which catalog feature to add.
 
-    if current_count < min_count:
-        shortage = min_count - current_count
-        add_weight *= 1.0 + shortage * 2.0
-        delete_weight *= 0.1
-    elif max_count is not None and current_count > max_count:
-        excess = current_count - max_count
-        delete_weight *= 1.0 + excess * 2.0
-        add_weight *= 0.1
+    Boosts weight for types below their min, reduces for types at/above max.
+    """
+    pref_by_type = {p.feature_type: p for p in preferences}
+    weights = []
+    for cf in catalog_features:
+        pref = pref_by_type.get(cf.feature_type)
+        w = 1.0
+        if pref is not None:
+            current = feature_counts.get(cf.feature_type, 0)
+            if current < pref.min:
+                w = 1.0 + (pref.min - current) * 2.0
+            elif pref.max is not None and current >= pref.max:
+                w = 0.1
+        weights.append(w)
+    return weights
 
-    return (add_weight, move_weight, delete_weight)
+
+def _compute_delete_weights(
+    features: list[PlacedFeature],
+    feature_counts: dict[str, int],
+    preferences: list,
+) -> list[float]:
+    """Compute weights for selecting which feature to delete.
+
+    Boosts weight for types above their max, reduces for types at/below min.
+    """
+    pref_by_type = {p.feature_type: p for p in preferences}
+    weights = []
+    for pf in features:
+        pref = pref_by_type.get(pf.feature.feature_type)
+        w = 1.0
+        if pref is not None:
+            current = feature_counts.get(pf.feature.feature_type, 0)
+            if pref.max is not None and current > pref.max:
+                w = 1.0 + (current - pref.max) * 2.0
+            elif current <= pref.min:
+                w = 0.1
+        weights.append(w)
+    return weights
 
 
 def _build_object_index(
@@ -126,26 +150,22 @@ def generate(params: EngineParams) -> EngineResult:
         has_features = len(features) > 0
         feature_counts = _count_features_by_type(layout)
 
-        # Default weights
+        # Compute action weights with multiplicative biasing across all prefs
         add_weight = 1.0 if has_catalog else 0.0
         move_weight = 1.0 if has_features else 0.0
         delete_weight = 1.0 if has_features else 0.0
 
-        # Apply biasing for feature types with preferences
         for pref in params.feature_count_preferences:
-            ft = pref.feature_type
-            current = feature_counts.get(ft, 0)
+            current = feature_counts.get(pref.feature_type, 0)
+            if current < pref.min:
+                shortage = pref.min - current
+                add_weight *= 1.0 + shortage * 2.0
+                delete_weight *= 0.1
+            elif pref.max is not None and current > pref.max:
+                excess = current - pref.max
+                delete_weight *= 1.0 + excess * 2.0
+                add_weight *= 0.1
 
-            # For obstacle type, apply biasing to all add/delete actions
-            # (assumes catalog primarily contains obstacles)
-            if ft == "obstacle" and has_catalog:
-                add_weight, move_weight, delete_weight = (
-                    _compute_action_weights(
-                        current, pref.min, pref.max, has_catalog, has_features
-                    )
-                )
-
-        # Weighted random selection
         weights = [add_weight, move_weight, delete_weight]
         action = _weighted_choice(rng, weights)
 
@@ -153,9 +173,15 @@ def generate(params: EngineParams) -> EngineResult:
             continue  # All weights were 0
 
         if action == 0:
-            template = catalog_features[
-                rng.next_int(0, len(catalog_features) - 1)
-            ]
+            template_weights = _compute_template_weights(
+                catalog_features,
+                feature_counts,
+                params.feature_count_preferences,
+            )
+            tidx = _weighted_choice(rng, template_weights)
+            if tidx < 0:
+                continue
+            template = catalog_features[tidx]
             new_feat = _instantiate_feature(template, next_id)
             x = _quantize_position(
                 rng.next_float() * params.table_width - params.table_width / 2
@@ -202,7 +228,12 @@ def generate(params: EngineParams) -> EngineResult:
                 features[idx] = old
 
         elif action == 2:
-            idx = rng.next_int(0, len(features) - 1)
+            delete_weights = _compute_delete_weights(
+                features, feature_counts, params.feature_count_preferences
+            )
+            idx = _weighted_choice(rng, delete_weights)
+            if idx < 0:
+                continue
             features.pop(idx)
 
     return EngineResult(
