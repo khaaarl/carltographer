@@ -1,9 +1,12 @@
 import math
 
 from engine.collision import (
+    get_tall_world_obbs,
     get_world_obbs,
     obb_corners,
+    obb_distance,
     obb_in_bounds,
+    obb_to_table_edge_distance,
     obbs_overlap,
 )
 from engine.generate import generate, generate_json
@@ -197,6 +200,142 @@ class TestGenerate:
         }
         result = generate_json(params_dict)
         assert result["layout"]["placed_features"] == []
+
+    def test_edge_gap_enforcement(self):
+        """All tall shapes respect edge gap constraint."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=200)
+        )
+        params.min_edge_gap_inches = 3.0
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        for pf in result.layout.placed_features:
+            tall_obbs = get_tall_world_obbs(pf, objects_by_id, min_height=1.0)
+            for corners in tall_obbs:
+                dist = obb_to_table_edge_distance(
+                    corners,
+                    params.table_width,
+                    params.table_depth,
+                )
+                assert dist >= params.min_edge_gap_inches - 1e-6, (
+                    f"Shape too close to edge: dist={dist}, min={params.min_edge_gap_inches}"
+                )
+
+    def test_feature_gap_enforcement(self):
+        """All tall shape pairs respect feature gap constraint."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=200)
+        )
+        params.min_feature_gap_inches = 2.0
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        features = result.layout.placed_features
+        for i in range(len(features)):
+            tall_i = get_tall_world_obbs(
+                features[i], objects_by_id, min_height=1.0
+            )
+            for j in range(i + 1, len(features)):
+                tall_j = get_tall_world_obbs(
+                    features[j], objects_by_id, min_height=1.0
+                )
+                for ca in tall_i:
+                    for cb in tall_j:
+                        dist = obb_distance(ca, cb)
+                        assert dist >= params.min_feature_gap_inches - 1e-6, (
+                            f"Features {i} and {j} too close: dist={dist}, min={params.min_feature_gap_inches}"
+                        )
+
+    def test_short_shapes_ignored_in_gap_checks(self):
+        """Shapes with height < 1" do not participate in gap checks."""
+        # Create a catalog with mixed heights
+        catalog_dict = {
+            "objects": [
+                {
+                    "item": {
+                        "id": "tall_crate",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 5.0,
+                                "depth_inches": 2.5,
+                                "height_inches": 2.0,  # Tall
+                            }
+                        ],
+                    },
+                },
+                {
+                    "item": {
+                        "id": "short_scatter",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 3.0,
+                                "depth_inches": 3.0,
+                                "height_inches": 0.5,  # Short (< 1")
+                            }
+                        ],
+                    },
+                },
+            ],
+            "features": [
+                {
+                    "item": {
+                        "id": "tall",
+                        "feature_type": "obstacle",
+                        "components": [{"object_id": "tall_crate"}],
+                    },
+                },
+                {
+                    "item": {
+                        "id": "short",
+                        "feature_type": "scatter",
+                        "components": [{"object_id": "short_scatter"}],
+                    },
+                },
+            ],
+        }
+        params_dict = {
+            "seed": 42,
+            "table_width_inches": 60,
+            "table_depth_inches": 44,
+            "catalog": catalog_dict,
+            "num_steps": 200,
+            "min_feature_gap_inches": 10.0,  # Large gap
+            "min_edge_gap_inches": 5.0,
+        }
+        result = generate_json(params_dict)
+        # With large gaps, should still produce features since short
+        # shapes don't participate in gap checks
+        assert len(result["layout"]["placed_features"]) > 0
+
+    def test_determinism_with_gaps(self):
+        """Same seed with gaps produces identical layouts."""
+        params1 = EngineParams.from_dict(
+            _make_params_dict(seed=123, num_steps=200)
+        )
+        params1.min_feature_gap_inches = 2.0
+        params1.min_edge_gap_inches = 3.0
+
+        params2 = EngineParams.from_dict(
+            _make_params_dict(seed=123, num_steps=200)
+        )
+        params2.min_feature_gap_inches = 2.0
+        params2.min_edge_gap_inches = 3.0
+
+        result1 = generate(params1)
+        result2 = generate(params2)
+        assert result1.layout.to_dict() == result2.layout.to_dict()
+
+    def test_no_gaps_specified(self):
+        """With no gaps specified, generation works normally."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=200)
+        )
+        # min_feature_gap_inches and min_edge_gap_inches are None by default
+        result = generate(params)
+        assert len(result.layout.placed_features) > 0
 
 
 # -- JSON -----------------------------------------------------------

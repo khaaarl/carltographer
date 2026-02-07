@@ -158,6 +158,8 @@ def generate(params: EngineParams) -> EngineResult:
                 params.table_width,
                 params.table_depth,
                 objects_by_id,
+                min_feature_gap=params.min_feature_gap_inches,
+                min_edge_gap=params.min_edge_gap_inches,
             ):
                 next_id += 1
             else:
@@ -176,6 +178,8 @@ def generate(params: EngineParams) -> EngineResult:
                 params.table_width,
                 params.table_depth,
                 objects_by_id,
+                min_feature_gap=params.min_feature_gap_inches,
+                min_edge_gap=params.min_edge_gap_inches,
             ):
                 features[idx] = old
 

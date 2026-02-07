@@ -244,6 +244,8 @@ class EngineParams:
     feature_count_preferences: list[FeatureCountPreference] = field(
         default_factory=list
     )
+    min_feature_gap_inches: float | None = None
+    min_edge_gap_inches: float | None = None
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
@@ -260,6 +262,8 @@ class EngineParams:
             num_steps=d.get("num_steps", 100),
             initial_layout=(TerrainLayout.from_dict(il) if il else None),
             feature_count_preferences=prefs,
+            min_feature_gap_inches=d.get("min_feature_gap_inches"),
+            min_edge_gap_inches=d.get("min_edge_gap_inches"),
         )
 
 
