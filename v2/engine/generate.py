@@ -16,6 +16,16 @@ from .types import (
 )
 
 
+def _quantize_position(value: float) -> float:
+    """Quantize position to nearest 0.1 inch."""
+    return round(value / 0.1) * 0.1
+
+
+def _quantize_angle(value: float) -> float:
+    """Quantize angle to nearest 15 degrees."""
+    return round(value / 15.0) * 15.0
+
+
 def _count_features_by_type(layout: TerrainLayout) -> dict[str, int]:
     """Count how many of each feature_type are currently in the layout."""
     counts: dict[str, int] = {}
@@ -147,9 +157,13 @@ def generate(params: EngineParams) -> EngineResult:
                 rng.next_int(0, len(catalog_features) - 1)
             ]
             new_feat = _instantiate_feature(template, next_id)
-            x = rng.next_float() * params.table_width - params.table_width / 2
-            z = rng.next_float() * params.table_depth - params.table_depth / 2
-            rot = rng.next_float() * 360.0
+            x = _quantize_position(
+                rng.next_float() * params.table_width - params.table_width / 2
+            )
+            z = _quantize_position(
+                rng.next_float() * params.table_depth - params.table_depth / 2
+            )
+            rot = _quantize_angle(rng.next_float() * 360.0)
             placed = PlacedFeature(new_feat, Transform(x, z, rot))
             features.append(placed)
             if is_valid_placement(
@@ -168,9 +182,13 @@ def generate(params: EngineParams) -> EngineResult:
         elif action == 1:
             idx = rng.next_int(0, len(features) - 1)
             old = features[idx]
-            x = rng.next_float() * params.table_width - params.table_width / 2
-            z = rng.next_float() * params.table_depth - params.table_depth / 2
-            rot = rng.next_float() * 360.0
+            x = _quantize_position(
+                rng.next_float() * params.table_width - params.table_width / 2
+            )
+            z = _quantize_position(
+                rng.next_float() * params.table_depth - params.table_depth / 2
+            )
+            rot = _quantize_angle(rng.next_float() * 360.0)
             features[idx] = PlacedFeature(old.feature, Transform(x, z, rot))
             if not is_valid_placement(
                 features,
