@@ -19,6 +19,7 @@
       "Bash(git log:*)",
       "Bash(git status:*)",
       "Bash(grep:*)",
+      "Bash(isort:*)",
       "Bash(ls *)",
       "Bash(mkdir:*)",
       "Bash(pip *)",

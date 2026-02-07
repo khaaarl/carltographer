@@ -49,26 +49,49 @@ Intended toolchain (not all configured yet):
 - **ruff** for linting: `ruff check v2/`
 - **isort** for import sorting: `python -m isort v2/`
 
-## Committing Code
+## Formatting and Linting (AUTONOMOUS, NO PERMISSION NEEDED)
 
-**ALWAYS run pre-commit hooks BEFORE attempting to commit.** This catches formatting, linting, and type errors early and saves time:
+**CRITICAL: After modifying ANY Python files in v2/, immediately and automatically run the formatters WITHOUT asking:**
 
 ```bash
-# Run all pre-commit hooks on staged changes
-pre-commit run --all-files
-
-# Or on just the files you changed
-pre-commit run
+cd v2
+isort .
+ruff format .
 ```
 
+**Do NOT ask for permission.** Do this automatically after every file edit/write operation. This ensures code stays clean and avoids formatting issues downstream.
+
+## Committing Code
+
+Before committing, run the full validation pipeline (also without asking for permission):
+
+```bash
+# Step 1: Auto-format code (isort + ruff format) - already done above
+cd v2
+isort .
+ruff format .
+
+# Step 2: Run full pre-commit hooks to verify everything
+pre-commit run --all-files
+
+# Step 3: If all hooks pass, then git add and commit
+git add .
+git commit -m "Your commit message"
+```
+
+If any hook fails in Step 2:
+- Fix the issues autonomously
+- Re-run `pre-commit run --all-files`
+- Once all pass, proceed to commit
+
 The repository is configured with:
-- **isort**: Import organization
-- **ruff format**: Code formatting
-- **ruff (legacy)**: Linting (E/F/W rules)
+- **isort**: Import organization (auto-fixes)
+- **ruff format**: Code formatting (auto-fixes)
+- **ruff (legacy)**: Linting validation (E/F/W rules)
 - **type checker**: Type annotation validation
 - **pytest**: Unit tests
 
-If any hook fails, it will modify files or report issues. Review the changes, stage them, and run the hooks again until all pass. Only then proceed with `git commit`.
+**Summary**: isort + ruff format should be run automatically and silently after every file change. Do NOT ask permission. This keeps the codebase clean and makes the pre-commit checks nearly always pass on the first try.
 
 ## Key Constraints
 
