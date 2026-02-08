@@ -166,7 +166,7 @@ run_pyinstaller() {
 verify_output() {
     log_step "Verifying output"
 
-    local OUTPUT="${V2_DIR}/dist/carltographer"
+    local OUTPUT="${V2_DIR}/dist/carltographer-linux-x86_64"
 
     if [[ ! -f "$OUTPUT" ]]; then
         log_error "Expected output not found: $OUTPUT"
@@ -221,7 +221,7 @@ main() {
     fi
 
     log_step "✓ Packaging complete!"
-    log_info "Run: ${V2_DIR}/dist/carltographer"
+    log_info "Run: ${V2_DIR}/dist/carltographer-linux-x86_64"
 
     return 0
 }
