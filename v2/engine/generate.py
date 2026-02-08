@@ -121,6 +121,7 @@ def _compute_score(
     layout: TerrainLayout,
     feature_count_preferences: list[FeatureCountPreference],
     objects_by_id: dict[str, TerrainObject],
+    skip_visibility: bool = False,
 ) -> float:
     """Compute fitness score for hill-climbing.
 
@@ -138,6 +139,9 @@ def _compute_score(
 
     if total_deficit > 0:
         return PHASE2_BASE / (1.0 + total_deficit)
+
+    if skip_visibility:
+        return PHASE2_BASE
 
     vis = compute_layout_visibility(layout, objects_by_id)
     vis_pct = vis["overall"]["value"]
@@ -190,7 +194,10 @@ def generate(params: EngineParams) -> EngineResult:
     has_catalog = len(catalog_features) > 0
 
     current_score = _compute_score(
-        layout, params.feature_count_preferences, objects_by_id
+        layout,
+        params.feature_count_preferences,
+        objects_by_id,
+        params.skip_visibility,
     )
 
     for _ in range(params.num_steps):
@@ -251,7 +258,10 @@ def generate(params: EngineParams) -> EngineResult:
                 rotationally_symmetric=params.rotationally_symmetric,
             ):
                 new_score = _compute_score(
-                    layout, params.feature_count_preferences, objects_by_id
+                    layout,
+                    params.feature_count_preferences,
+                    objects_by_id,
+                    params.skip_visibility,
                 )
                 if new_score >= current_score:
                     current_score = new_score
@@ -283,7 +293,10 @@ def generate(params: EngineParams) -> EngineResult:
                 rotationally_symmetric=params.rotationally_symmetric,
             ):
                 new_score = _compute_score(
-                    layout, params.feature_count_preferences, objects_by_id
+                    layout,
+                    params.feature_count_preferences,
+                    objects_by_id,
+                    params.skip_visibility,
                 )
                 if new_score >= current_score:
                     current_score = new_score
@@ -301,14 +314,18 @@ def generate(params: EngineParams) -> EngineResult:
                 continue
             saved = features.pop(idx)
             new_score = _compute_score(
-                layout, params.feature_count_preferences, objects_by_id
+                layout,
+                params.feature_count_preferences,
+                objects_by_id,
+                params.skip_visibility,
             )
             if new_score >= current_score:
                 current_score = new_score
             else:
                 features.insert(idx, saved)
 
-    layout.visibility = compute_layout_visibility(layout, objects_by_id)
+    if not params.skip_visibility:
+        layout.visibility = compute_layout_visibility(layout, objects_by_id)
 
     return EngineResult(
         layout=layout,

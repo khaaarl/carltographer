@@ -175,6 +175,8 @@ pub struct EngineParams {
     pub rotationally_symmetric: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission: Option<Mission>,
+    #[serde(default)]
+    pub skip_visibility: bool,
 }
 
 impl EngineParams {

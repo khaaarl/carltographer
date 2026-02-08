@@ -457,8 +457,6 @@ fn fraction_of_dz_visible(
 pub fn compute_layout_visibility(
     layout: &TerrainLayout,
     objects_by_id: &HashMap<String, &TerrainObject>,
-    grid_spacing: f64,
-    grid_offset: f64,
     min_blocking_height: f64,
 ) -> serde_json::Value {
     let half_w = layout.table_width_inches / 2.0;
@@ -466,24 +464,54 @@ pub fn compute_layout_visibility(
     let table_area =
         layout.table_width_inches * layout.table_depth_inches;
 
-    // Generate grid sample points
-    let mut sample_points: Vec<(f64, f64)> = Vec::new();
-    let mut x = -half_w + grid_offset;
-    while x < half_w {
-        let mut z = -half_d + grid_offset;
-        while z < half_d {
-            sample_points.push((x, z));
-            z += grid_spacing;
+    // Build objective ranges for proximity check
+    let mut obj_ranges: Vec<(f64, f64, f64)> = Vec::new();
+    if let Some(ref mission) = layout.mission {
+        for obj_marker in &mission.objectives {
+            obj_ranges.push((
+                obj_marker.position.x_inches,
+                obj_marker.position.z_inches,
+                0.75 + obj_marker.range_inches,
+            ));
         }
-        x += grid_spacing;
+    }
+
+    // Generate grid sample points: integer coords, skip edges, 2" spacing
+    // except near objectives (1" spacing)
+    let mut sample_points: Vec<(f64, f64)> = Vec::new();
+    let ix_start = (-half_w) as i32 + 1;
+    let ix_end = half_w as i32 - 1;
+    let iz_start = (-half_d) as i32 + 1;
+    let iz_end = half_d as i32 - 1;
+
+    for ix in ix_start..=ix_end {
+        for iz in iz_start..=iz_end {
+            if ix % 2 == 0 && iz % 2 == 0 {
+                sample_points.push((ix as f64, iz as f64));
+            } else {
+                // Check proximity to any objective
+                let fx = ix as f64;
+                let fz = iz as f64;
+                let mut near_obj = false;
+                for &(ox, oz, radius) in &obj_ranges {
+                    let dx = fx - ox;
+                    let dz = fz - oz;
+                    if dx * dx + dz * dz <= radius * radius {
+                        near_obj = true;
+                        break;
+                    }
+                }
+                if near_obj {
+                    sample_points.push((fx, fz));
+                }
+            }
+        }
     }
 
     if sample_points.is_empty() {
         return serde_json::json!({
             "overall": {
                 "value": 100.0,
-                "grid_spacing_inches": grid_spacing,
-                "grid_offset_inches": grid_offset,
                 "min_blocking_height_inches": min_blocking_height,
                 "sample_count": 0
             }
@@ -525,7 +553,7 @@ pub fn compute_layout_visibility(
                 })
                 .collect();
             let samples =
-                sample_points_in_dz(dz, grid_spacing, grid_offset);
+                sample_points_in_dz(dz, 1.0, 0.0);
             dz_vis_accum.insert(dz.id.clone(), (0.0, 0));
             for other_dz in dzs {
                 if other_dz.id != dz.id {
@@ -564,8 +592,8 @@ pub fn compute_layout_visibility(
                 obj_marker.position.x_inches,
                 obj_marker.position.z_inches,
                 obj_radius,
-                grid_spacing,
-                grid_offset,
+                1.0,
+                0.0,
             );
             obj_sample_points.push(pts);
         }
@@ -775,8 +803,6 @@ pub fn compute_layout_visibility(
     let mut result = serde_json::json!({
         "overall": {
             "value": value,
-            "grid_spacing_inches": grid_spacing,
-            "grid_offset_inches": grid_offset,
             "min_blocking_height_inches": min_blocking_height,
             "sample_count": sample_points.len()
         }
@@ -977,7 +1003,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -992,7 +1018,7 @@ mod tests {
             HashMap::new();
         objects.insert("box".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
         assert!(val > 50.0);
@@ -1008,7 +1034,7 @@ mod tests {
             HashMap::new();
         objects.insert("box".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1023,7 +1049,7 @@ mod tests {
             HashMap::new();
         objects.insert("ruins".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
     }
@@ -1176,7 +1202,7 @@ mod tests {
             make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
 
         assert!(result.get("dz_visibility").is_some());
         let dz_vis = &result["dz_visibility"];
@@ -1204,7 +1230,7 @@ mod tests {
             make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
 
         let cross = &result["dz_to_dz_visibility"];
         // No terrain -> nothing hidden -> 0%
@@ -1235,7 +1261,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
         assert!(result.get("dz_visibility").is_none());
         assert!(result.get("dz_to_dz_visibility").is_none());
     }
@@ -1324,7 +1350,7 @@ mod tests {
         );
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
 
         assert!(result.get("objective_hidability").is_some());
         let oh = &result["objective_hidability"];
@@ -1357,7 +1383,7 @@ mod tests {
         );
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0);
         assert!(result.get("objective_hidability").is_none());
     }
 }

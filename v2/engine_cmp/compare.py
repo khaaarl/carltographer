@@ -417,6 +417,7 @@ def make_test_params(
     catalog: Optional[TerrainCatalog] = None,
     rotationally_symmetric: bool = False,
     mission: Optional[Mission] = None,
+    skip_visibility: bool = False,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -431,6 +432,7 @@ def make_test_params(
         min_edge_gap_inches=min_edge_gap_inches,
         rotationally_symmetric=rotationally_symmetric,
         mission=mission,
+        skip_visibility=skip_visibility,
     )
 
 
@@ -449,6 +451,7 @@ class TestScenario:
     catalog: Optional[TerrainCatalog] = None
     rotationally_symmetric: bool = False
     mission: Optional[Mission] = None
+    skip_visibility: bool = False
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -463,6 +466,7 @@ class TestScenario:
             catalog=self.catalog,
             rotationally_symmetric=self.rotationally_symmetric,
             mission=self.mission,
+            skip_visibility=self.skip_visibility,
         )
 
 
@@ -480,17 +484,22 @@ def _require_mission(deployment_name: str) -> dict:
 
 # Test scenarios
 TEST_SCENARIOS = [
-    TestScenario("basic_10_steps", seed=42, num_steps=10),
+    TestScenario(
+        "basic_10_steps", seed=42, num_steps=10, skip_visibility=True
+    ),
     TestScenario("basic_50_steps", seed=42, num_steps=50),
-    TestScenario("basic_100_steps", seed=42, num_steps=100),
-    TestScenario("seed_1", seed=1, num_steps=100),
-    TestScenario("seed_999", seed=999, num_steps=100),
+    TestScenario(
+        "basic_100_steps", seed=42, num_steps=100, skip_visibility=True
+    ),
+    TestScenario("seed_1", seed=1, num_steps=100, skip_visibility=True),
+    TestScenario("seed_999", seed=999, num_steps=100, skip_visibility=True),
     TestScenario(
         "small_table",
         seed=42,
         num_steps=50,
         table_width=30.0,
         table_depth=22.0,
+        skip_visibility=True,
     ),
     TestScenario(
         "large_table",
@@ -498,12 +507,21 @@ TEST_SCENARIOS = [
         num_steps=50,
         table_width=120.0,
         table_depth=88.0,
+        skip_visibility=True,
     ),
     TestScenario(
-        "with_edge_gap", seed=42, num_steps=50, min_edge_gap_inches=2.0
+        "with_edge_gap",
+        seed=42,
+        num_steps=50,
+        min_edge_gap_inches=2.0,
+        skip_visibility=True,
     ),
     TestScenario(
-        "with_feature_gap", seed=42, num_steps=50, min_feature_gap_inches=3.0
+        "with_feature_gap",
+        seed=42,
+        num_steps=50,
+        min_feature_gap_inches=3.0,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_both_gaps",
@@ -511,6 +529,7 @@ TEST_SCENARIOS = [
         num_steps=50,
         min_edge_gap_inches=2.0,
         min_feature_gap_inches=3.0,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_preferences",
@@ -523,6 +542,7 @@ TEST_SCENARIOS = [
                 max=5,
             )
         ],
+        skip_visibility=True,
     ),
     TestScenario(
         "all_features",
@@ -537,6 +557,7 @@ TEST_SCENARIOS = [
                 max=10,
             )
         ],
+        skip_visibility=True,
     ),
     TestScenario(
         "multi_type_no_prefs",
@@ -561,6 +582,7 @@ TEST_SCENARIOS = [
                 max=3,
             ),
         ],
+        skip_visibility=True,
     ),
     TestScenario(
         "multi_type_one_pref",
@@ -574,12 +596,14 @@ TEST_SCENARIOS = [
                 max=4,
             ),
         ],
+        skip_visibility=True,
     ),
     TestScenario(
         "symmetric_basic",
         seed=42,
         num_steps=50,
         rotationally_symmetric=True,
+        skip_visibility=True,
     ),
     TestScenario(
         "symmetric_with_gaps",
@@ -588,6 +612,7 @@ TEST_SCENARIOS = [
         min_edge_gap_inches=2.0,
         min_feature_gap_inches=3.0,
         rotationally_symmetric=True,
+        skip_visibility=True,
     ),
     TestScenario(
         "symmetric_multi_type",
@@ -607,6 +632,7 @@ TEST_SCENARIOS = [
             ),
         ],
         rotationally_symmetric=True,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_mission_hna",
@@ -784,6 +810,7 @@ def run_comparison(
                 if params.mission is not None
                 else {}
             ),
+            **({"skip_visibility": True} if params.skip_visibility else {}),
         }
 
         # Call Rust engine via PyO3

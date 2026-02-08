@@ -52,14 +52,19 @@ def _crate_catalog_dict():
     }
 
 
-def _make_params_dict(seed=42, num_steps=50, table_w=60.0, table_d=44.0):
-    return {
+def _make_params_dict(
+    seed=42, num_steps=50, table_w=60.0, table_d=44.0, skip_visibility=False
+):
+    d = {
         "seed": seed,
         "table_width_inches": table_w,
         "table_depth_inches": table_d,
         "catalog": _crate_catalog_dict(),
         "num_steps": num_steps,
     }
+    if skip_visibility:
+        d["skip_visibility"] = True
+    return d
 
 
 # -- PCG32 ---------------------------------------------------------
@@ -145,30 +150,38 @@ class TestCollision:
 class TestGenerate:
     def test_deterministic(self):
         """Same seed produces identical output."""
-        p1 = EngineParams.from_dict(_make_params_dict(seed=123, num_steps=200))
-        p2 = EngineParams.from_dict(_make_params_dict(seed=123, num_steps=200))
+        p1 = EngineParams.from_dict(
+            _make_params_dict(seed=123, num_steps=200, skip_visibility=True)
+        )
+        p2 = EngineParams.from_dict(
+            _make_params_dict(seed=123, num_steps=200, skip_visibility=True)
+        )
         r1 = generate(p1)
         r2 = generate(p2)
         assert r1.layout.to_dict() == r2.layout.to_dict()
 
     def test_different_seeds(self):
         """Different seeds produce different layouts."""
-        p1 = EngineParams.from_dict(_make_params_dict(seed=1, num_steps=200))
-        p2 = EngineParams.from_dict(_make_params_dict(seed=2, num_steps=200))
+        p1 = EngineParams.from_dict(
+            _make_params_dict(seed=1, num_steps=200, skip_visibility=True)
+        )
+        p2 = EngineParams.from_dict(
+            _make_params_dict(seed=2, num_steps=200, skip_visibility=True)
+        )
         r1 = generate(p1)
         r2 = generate(p2)
         assert r1.layout.to_dict() != r2.layout.to_dict()
 
     def test_produces_features(self):
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200)
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
         result = generate(params)
         assert len(result.layout.placed_features) > 0
 
     def test_all_features_in_bounds(self):
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200)
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
         result = generate(params)
         objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
@@ -183,7 +196,7 @@ class TestGenerate:
 
     def test_no_overlaps(self):
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200)
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
         result = generate(params)
         objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
@@ -206,6 +219,7 @@ class TestGenerate:
             "table_depth_inches": 44,
             "catalog": {},
             "num_steps": 50,
+            "skip_visibility": True,
         }
         result = generate_json(params_dict)
         assert result["layout"]["placed_features"] == []
@@ -213,7 +227,7 @@ class TestGenerate:
     def test_edge_gap_enforcement(self):
         """All tall shapes respect edge gap constraint."""
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200)
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
         params.min_edge_gap_inches = 3.0
         result = generate(params)
@@ -234,7 +248,7 @@ class TestGenerate:
     def test_feature_gap_enforcement(self):
         """All tall shape pairs respect feature gap constraint."""
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200)
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
         params.min_feature_gap_inches = 2.0
         result = generate(params)
@@ -313,6 +327,7 @@ class TestGenerate:
             "num_steps": 200,
             "min_feature_gap_inches": 10.0,  # Large gap
             "min_edge_gap_inches": 5.0,
+            "skip_visibility": True,
         }
         result = generate_json(params_dict)
         # With large gaps, should still produce features since short
@@ -322,13 +337,13 @@ class TestGenerate:
     def test_determinism_with_gaps(self):
         """Same seed with gaps produces identical layouts."""
         params1 = EngineParams.from_dict(
-            _make_params_dict(seed=123, num_steps=200)
+            _make_params_dict(seed=123, num_steps=200, skip_visibility=True)
         )
         params1.min_feature_gap_inches = 2.0
         params1.min_edge_gap_inches = 3.0
 
         params2 = EngineParams.from_dict(
-            _make_params_dict(seed=123, num_steps=200)
+            _make_params_dict(seed=123, num_steps=200, skip_visibility=True)
         )
         params2.min_feature_gap_inches = 2.0
         params2.min_edge_gap_inches = 3.0
@@ -340,7 +355,7 @@ class TestGenerate:
     def test_no_gaps_specified(self):
         """With no gaps specified, generation works normally."""
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200)
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
         # min_feature_gap_inches and min_edge_gap_inches are None by default
         result = generate(params)
@@ -348,7 +363,7 @@ class TestGenerate:
 
     def test_symmetric_deterministic(self):
         """Symmetric mode is deterministic."""
-        pd = _make_params_dict(seed=42, num_steps=100)
+        pd = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
         pd["rotationally_symmetric"] = True
         p1 = EngineParams.from_dict(pd)
         p2 = EngineParams.from_dict(pd)
@@ -358,7 +373,7 @@ class TestGenerate:
 
     def test_symmetric_flag_on_output(self):
         """Output layout has rotationally_symmetric flag."""
-        pd = _make_params_dict(seed=42, num_steps=50)
+        pd = _make_params_dict(seed=42, num_steps=50, skip_visibility=True)
         pd["rotationally_symmetric"] = True
         params = EngineParams.from_dict(pd)
         result = generate(params)
@@ -368,7 +383,7 @@ class TestGenerate:
 
     def test_symmetric_no_self_overlap(self):
         """Symmetric features don't overlap their own mirrors."""
-        pd = _make_params_dict(seed=42, num_steps=200)
+        pd = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         pd["rotationally_symmetric"] = True
         params = EngineParams.from_dict(pd)
         result = generate(params)

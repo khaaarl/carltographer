@@ -413,8 +413,6 @@ def _fraction_of_dz_visible(
 def compute_layout_visibility(
     layout: TerrainLayout,
     objects_by_id: dict[str, TerrainObject],
-    grid_spacing: float = 1.0,
-    grid_offset: float = 0.5,
     min_blocking_height: float = 4.0,
 ) -> dict:
     """Compute visibility score for a terrain layout.
@@ -423,12 +421,13 @@ def compute_layout_visibility(
     visibility polygon for each, and returns the average visibility
     ratio (visible area / total area).
 
+    Observer grid uses integer coordinates, skips table edges, uses 2" spacing
+    (even coordinates only) except near objectives where 1" spacing is used.
+
     Returns dict with format:
     {
         "overall": {
             "value": 72.53,
-            "grid_spacing_inches": 1.0,
-            "grid_offset_inches": 0.5,
             "min_blocking_height_inches": 4.0,
             "sample_count": 2640
         }
@@ -438,22 +437,48 @@ def compute_layout_visibility(
     half_d = layout.table_depth / 2.0
     table_area = layout.table_width * layout.table_depth
 
-    # Generate grid sample points
+    # Build objective ranges for proximity check
+    obj_ranges: list[tuple[float, float, float]] = []
+    if layout.mission is not None:
+        for obj_marker in layout.mission.objectives:
+            obj_ranges.append(
+                (
+                    obj_marker.position.x,
+                    obj_marker.position.z,
+                    0.75 + obj_marker.range_inches,
+                )
+            )
+
+    # Generate grid sample points: integer coords, skip edges, 2" spacing
+    # except near objectives (1" spacing)
     sample_points: list[tuple[float, float]] = []
-    x = -half_w + grid_offset
-    while x < half_w:
-        z = -half_d + grid_offset
-        while z < half_d:
-            sample_points.append((x, z))
-            z += grid_spacing
-        x += grid_spacing
+    ix_start = int(-half_w) + 1
+    ix_end = int(half_w) - 1
+    iz_start = int(-half_d) + 1
+    iz_end = int(half_d) - 1
+
+    for ix in range(ix_start, ix_end + 1):
+        for iz in range(iz_start, iz_end + 1):
+            if ix % 2 == 0 and iz % 2 == 0:
+                sample_points.append((float(ix), float(iz)))
+            else:
+                # Check proximity to any objective
+                fx = float(ix)
+                fz = float(iz)
+                near_obj = False
+                for ox, oz, radius in obj_ranges:
+                    dx = fx - ox
+                    dz = fz - oz
+                    if dx * dx + dz * dz <= radius * radius:
+                        near_obj = True
+                        break
+                if near_obj:
+                    sample_points.append((fx, fz))
 
     if not sample_points:
         return {
             "overall": {
                 "value": 100.0,
-                "grid_spacing_inches": grid_spacing,
-                "grid_offset_inches": grid_offset,
                 "min_blocking_height_inches": min_blocking_height,
                 "sample_count": 0,
             }
@@ -480,7 +505,7 @@ def compute_layout_visibility(
 
         for dz in dzs:
             polys_tuples = [[(p.x, p.z) for p in poly] for poly in dz.polygons]
-            dz_samples = _sample_points_in_dz(dz, grid_spacing, grid_offset)
+            dz_samples = _sample_points_in_dz(dz, 1.0, 0.0)
             dz_data.append((dz.id, polys_tuples, dz_samples))
             dz_vis_accum[dz.id] = [0.0, 0]  # [total_fraction, observer_count]
             for other_dz in dzs:
@@ -508,8 +533,8 @@ def compute_layout_visibility(
                 obj_marker.position.x,
                 obj_marker.position.z,
                 obj_radius,
-                grid_spacing,
-                grid_offset,
+                1.0,
+                0.0,
             )
             obj_sample_points.append(pts)
 
@@ -632,8 +657,6 @@ def compute_layout_visibility(
     result: dict = {
         "overall": {
             "value": value,
-            "grid_spacing_inches": grid_spacing,
-            "grid_offset_inches": grid_offset,
             "min_blocking_height_inches": min_blocking_height,
             "sample_count": len(sample_points),
         }

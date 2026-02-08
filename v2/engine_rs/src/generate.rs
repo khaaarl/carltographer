@@ -165,6 +165,7 @@ fn compute_score(
     layout: &TerrainLayout,
     preferences: &[FeatureCountPreference],
     objects_by_id: &HashMap<String, &TerrainObject>,
+    skip_visibility: bool,
 ) -> f64 {
     // Compute fitness score for hill-climbing.
     // Phase 1 (score < PHASE2_BASE): gradient toward satisfying count preferences.
@@ -192,11 +193,13 @@ fn compute_score(
         return PHASE2_BASE / (1.0 + total_deficit as f64);
     }
 
+    if skip_visibility {
+        return PHASE2_BASE;
+    }
+
     let vis = crate::visibility::compute_layout_visibility(
         layout,
         objects_by_id,
-        1.0,  // grid_spacing
-        0.5,  // grid_offset
         4.0,  // min_blocking_height
     );
     let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
@@ -236,7 +239,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         mission: params.mission.clone(),
     };
 
-    let mut current_score = compute_score(&layout, prefs, &objects_by_id);
+    let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
 
     for _ in 0..num_steps {
         let has_features = !layout.placed_features.is_empty();
@@ -315,7 +318,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    let new_score = compute_score(&layout, prefs, &objects_by_id);
+                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
                     if new_score >= current_score {
                         current_score = new_score;
                         nid += 1;
@@ -359,7 +362,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    let new_score = compute_score(&layout, prefs, &objects_by_id);
+                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
                     if new_score >= current_score {
                         current_score = new_score;
                     } else {
@@ -380,7 +383,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     None => continue,
                 };
                 let saved = layout.placed_features.remove(idx);
-                let new_score = compute_score(&layout, prefs, &objects_by_id);
+                let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
                 if new_score >= current_score {
                     current_score = new_score;
                 } else {
@@ -391,15 +394,15 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         }
     }
 
-    layout.visibility = Some(
-        crate::visibility::compute_layout_visibility(
-            &layout,
-            &objects_by_id,
-            1.0,  // grid_spacing
-            0.5,  // grid_offset
-            4.0,  // min_blocking_height
-        ),
-    );
+    if !params.skip_visibility {
+        layout.visibility = Some(
+            crate::visibility::compute_layout_visibility(
+                &layout,
+                &objects_by_id,
+                4.0,  // min_blocking_height
+            ),
+        );
+    }
 
     EngineResult {
         layout,
@@ -466,6 +469,7 @@ mod tests {
             min_edge_gap_inches: None,
             rotationally_symmetric: false,
             mission: None,
+            skip_visibility: false,
         }
     }
 
@@ -547,6 +551,7 @@ mod tests {
             min_edge_gap_inches: None,
             rotationally_symmetric: false,
             mission: None,
+            skip_visibility: false,
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());

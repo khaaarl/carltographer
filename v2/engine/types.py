@@ -347,6 +347,7 @@ class EngineParams:
     min_edge_gap_inches: float | None = None
     rotationally_symmetric: bool = False
     mission: Mission | None = None
+    skip_visibility: bool = False
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
@@ -368,6 +369,7 @@ class EngineParams:
             min_edge_gap_inches=d.get("min_edge_gap_inches"),
             rotationally_symmetric=d.get("rotationally_symmetric", False),
             mission=Mission.from_dict(m) if m else None,
+            skip_visibility=d.get("skip_visibility", False),
         )
 
 
