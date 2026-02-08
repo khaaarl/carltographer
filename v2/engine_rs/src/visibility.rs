@@ -4,13 +4,15 @@
 //! by sampling observer positions on a grid and computing visibility
 //! polygons via angular sweep.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::collision::{
     compose_transform, is_at_origin, mirror_placed_feature, obb_corners,
     Corners,
 };
-use crate::types::{PlacedFeature, TerrainLayout, TerrainObject, Transform};
+use crate::types::{
+    DeploymentZone, PlacedFeature, TerrainLayout, TerrainObject, Transform,
+};
 
 /// A line segment: (x1, z1, x2, z2)
 type Segment = (f64, f64, f64, f64);
@@ -293,6 +295,112 @@ fn compute_visibility_polygon(
     polygon.iter().map(|p| (p.1, p.2)).collect()
 }
 
+/// Generate grid sample points that fall inside a polygon.
+/// Uses AABB bounding box to limit search, then PIP-filters.
+fn sample_points_in_polygon(
+    polygon: &[(f64, f64)],
+    grid_spacing: f64,
+    grid_offset: f64,
+) -> Vec<(f64, f64)> {
+    if polygon.len() < 3 {
+        return Vec::new();
+    }
+    let min_x = polygon.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let max_x = polygon
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_z = polygon.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let max_z = polygon
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    let mut start_x = ((min_x - grid_offset) / grid_spacing).floor()
+        * grid_spacing
+        + grid_offset;
+    let mut start_z = ((min_z - grid_offset) / grid_spacing).floor()
+        * grid_spacing
+        + grid_offset;
+    if start_x < min_x {
+        start_x += grid_spacing;
+    }
+    if start_z < min_z {
+        start_z += grid_spacing;
+    }
+
+    let mut x = start_x;
+    while x < max_x {
+        let mut z = start_z;
+        while z < max_z {
+            if point_in_polygon(x, z, polygon) {
+                points.push((x, z));
+            }
+            z += grid_spacing;
+        }
+        x += grid_spacing;
+    }
+    points
+}
+
+/// Generate grid sample points across all polygon rings of a deployment zone.
+fn sample_points_in_dz(
+    dz: &DeploymentZone,
+    grid_spacing: f64,
+    grid_offset: f64,
+) -> Vec<(f64, f64)> {
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    for poly in &dz.polygons {
+        let poly_tuples: Vec<(f64, f64)> =
+            poly.iter().map(|p| (p.x_inches, p.z_inches)).collect();
+        for pt in sample_points_in_polygon(
+            &poly_tuples,
+            grid_spacing,
+            grid_offset,
+        ) {
+            let key = (pt.0.to_bits(), pt.1.to_bits());
+            if seen.insert(key) {
+                points.push(pt);
+            }
+        }
+    }
+    points
+}
+
+/// Test if a point is inside any of the given polygon rings.
+fn point_in_any_polygon(
+    px: f64,
+    pz: f64,
+    polygons: &[Vec<(f64, f64)>],
+) -> bool {
+    for poly in polygons {
+        if point_in_polygon(px, pz, poly) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Compute fraction of DZ sample points visible (inside vis polygon).
+fn fraction_of_dz_visible(
+    vis_poly: &[(f64, f64)],
+    dz_sample_points: &[(f64, f64)],
+) -> f64 {
+    if dz_sample_points.is_empty() {
+        return 0.0;
+    }
+    if vis_poly.len() < 3 {
+        return 0.0;
+    }
+    let count = dz_sample_points
+        .iter()
+        .filter(|&&(px, pz)| point_in_polygon(px, pz, vis_poly))
+        .count();
+    count as f64 / dz_sample_points.len() as f64
+}
+
 /// Compute visibility score for a terrain layout.
 ///
 /// Samples observer positions on a grid across the table, computes
@@ -334,6 +442,104 @@ pub fn compute_layout_visibility(
         });
     }
 
+    // -- DZ pre-loop setup --
+    let has_dzs = layout
+        .mission
+        .as_ref()
+        .map_or(false, |m| !m.deployment_zones.is_empty());
+
+    // (dz_id, polygon_tuples, sample_points)
+    struct DzData {
+        id: String,
+        polys: Vec<Vec<(f64, f64)>>,
+        samples: Vec<(f64, f64)>,
+    }
+
+    let mut dz_data: Vec<DzData> = Vec::new();
+    // {dz_id: [total_fraction, observer_count]}
+    let mut dz_vis_accum: HashMap<String, (f64, i64)> = HashMap::new();
+    // Cross-DZ: track which target sample indices have been seen by ANY observer
+    let mut dz_cross_seen: HashMap<String, HashSet<usize>> = HashMap::new();
+    let mut dz_cross_obs_count: HashMap<String, i64> = HashMap::new();
+
+    if has_dzs {
+        let mission = layout.mission.as_ref().unwrap();
+        let dzs = &mission.deployment_zones;
+
+        for dz in dzs {
+            let polys: Vec<Vec<(f64, f64)>> = dz
+                .polygons
+                .iter()
+                .map(|poly| {
+                    poly.iter()
+                        .map(|p| (p.x_inches, p.z_inches))
+                        .collect()
+                })
+                .collect();
+            let samples =
+                sample_points_in_dz(dz, grid_spacing, grid_offset);
+            dz_vis_accum.insert(dz.id.clone(), (0.0, 0));
+            for other_dz in dzs {
+                if other_dz.id != dz.id {
+                    let key =
+                        format!("{}_from_{}", dz.id, other_dz.id);
+                    dz_cross_seen.insert(key.clone(), HashSet::new());
+                    dz_cross_obs_count.insert(key, 0);
+                }
+            }
+            dz_data.push(DzData {
+                id: dz.id.clone(),
+                polys,
+                samples,
+            });
+        }
+    }
+
+    // Helper closure to handle DZ accumulation for a given observer
+    // when visibility is full (no segments or < 3 vis_poly vertices)
+    let accumulate_dz_full =
+        |dz_data: &[DzData],
+         dz_vis_accum: &mut HashMap<String, (f64, i64)>,
+         dz_cross_seen: &mut HashMap<String, HashSet<usize>>,
+         dz_cross_obs_count: &mut HashMap<String, i64>,
+         sx: f64,
+         sz: f64| {
+            for dd in dz_data {
+                let observer_in_dz =
+                    point_in_any_polygon(sx, sz, &dd.polys);
+                if !observer_in_dz {
+                    if let Some(acc) =
+                        dz_vis_accum.get_mut(&dd.id)
+                    {
+                        acc.0 += 1.0;
+                        acc.1 += 1;
+                    }
+                } else {
+                    // Full visibility: all target samples are seen
+                    for other_dd in dz_data {
+                        if other_dd.id != dd.id {
+                            let key = format!(
+                                "{}_from_{}",
+                                other_dd.id, dd.id
+                            );
+                            if let Some(count) =
+                                dz_cross_obs_count.get_mut(&key)
+                            {
+                                *count += 1;
+                            }
+                            if let Some(seen) =
+                                dz_cross_seen.get_mut(&key)
+                            {
+                                for i in 0..other_dd.samples.len() {
+                                    seen.insert(i);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
     let mut total_ratio = 0.0;
 
     for &(sx, sz) in &sample_points {
@@ -347,6 +553,16 @@ pub fn compute_layout_visibility(
 
         if segments.is_empty() {
             total_ratio += 1.0;
+            if has_dzs {
+                accumulate_dz_full(
+                    &dz_data,
+                    &mut dz_vis_accum,
+                    &mut dz_cross_seen,
+                    &mut dz_cross_obs_count,
+                    sx,
+                    sz,
+                );
+            }
             continue;
         }
 
@@ -355,19 +571,79 @@ pub fn compute_layout_visibility(
         );
         if vis_poly.len() < 3 {
             total_ratio += 1.0;
+            if has_dzs {
+                accumulate_dz_full(
+                    &dz_data,
+                    &mut dz_vis_accum,
+                    &mut dz_cross_seen,
+                    &mut dz_cross_obs_count,
+                    sx,
+                    sz,
+                );
+            }
             continue;
         }
 
         let vis_area = polygon_area(&vis_poly);
         let ratio = (vis_area / table_area).min(1.0);
         total_ratio += ratio;
+
+        // DZ visibility accumulation
+        if has_dzs {
+            for dd in &dz_data {
+                let observer_in_dz =
+                    point_in_any_polygon(sx, sz, &dd.polys);
+                if !observer_in_dz {
+                    let frac = fraction_of_dz_visible(
+                        &vis_poly,
+                        &dd.samples,
+                    );
+                    if let Some(acc) =
+                        dz_vis_accum.get_mut(&dd.id)
+                    {
+                        acc.0 += frac;
+                        acc.1 += 1;
+                    }
+                } else {
+                    // Observer inside this DZ: mark visible target samples
+                    for other_dd in &dz_data {
+                        if other_dd.id != dd.id {
+                            let key = format!(
+                                "{}_from_{}",
+                                other_dd.id, dd.id
+                            );
+                            if let Some(count) =
+                                dz_cross_obs_count.get_mut(&key)
+                            {
+                                *count += 1;
+                            }
+                            if let Some(seen) =
+                                dz_cross_seen.get_mut(&key)
+                            {
+                                for (i, &(px, pz)) in
+                                    other_dd.samples.iter().enumerate()
+                                {
+                                    if !seen.contains(&i) {
+                                        if point_in_polygon(
+                                            px, pz, &vis_poly,
+                                        ) {
+                                            seen.insert(i);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let avg_visibility = total_ratio / sample_points.len() as f64;
     let value =
-        (avg_visibility * 100.0 * 100.0).round() / 100.0; // round to 2 decimal places
+        (avg_visibility * 100.0 * 100.0).round() / 100.0;
 
-    serde_json::json!({
+    let mut result = serde_json::json!({
         "overall": {
             "value": value,
             "grid_spacing_inches": grid_spacing,
@@ -375,7 +651,70 @@ pub fn compute_layout_visibility(
             "min_blocking_height_inches": min_blocking_height,
             "sample_count": sample_points.len()
         }
-    })
+    });
+
+    // Build DZ visibility results
+    if has_dzs {
+        let mut dz_visibility = serde_json::Map::new();
+        let mut dz_to_dz_visibility = serde_json::Map::new();
+
+        for (dz_id, &(total_frac, obs_count)) in &dz_vis_accum {
+            let avg = if obs_count > 0 {
+                total_frac / obs_count as f64
+            } else {
+                0.0
+            };
+            let dz_samples_count = dz_data
+                .iter()
+                .find(|dd| dd.id == *dz_id)
+                .map_or(0, |dd| dd.samples.len());
+            dz_visibility.insert(
+                dz_id.clone(),
+                serde_json::json!({
+                    "value": (avg * 100.0 * 100.0).round() / 100.0,
+                    "dz_sample_count": dz_samples_count,
+                    "observer_count": obs_count
+                }),
+            );
+        }
+
+        for (key, seen_set) in &dz_cross_seen {
+            let target_id = key.split("_from_").next().unwrap_or("");
+            let target_samples_count = dz_data
+                .iter()
+                .find(|dd| dd.id == target_id)
+                .map_or(0, |dd| dd.samples.len());
+            let hidden_count =
+                target_samples_count - seen_set.len();
+            let hidden_pct = if target_samples_count > 0 {
+                (hidden_count as f64 / target_samples_count as f64
+                    * 100.0
+                    * 100.0)
+                    .round()
+                    / 100.0
+            } else {
+                0.0
+            };
+            let obs_count =
+                dz_cross_obs_count.get(key).copied().unwrap_or(0);
+            dz_to_dz_visibility.insert(
+                key.clone(),
+                serde_json::json!({
+                    "value": hidden_pct,
+                    "hidden_count": hidden_count,
+                    "target_sample_count": target_samples_count,
+                    "observer_count": obs_count
+                }),
+            );
+        }
+
+        result["dz_visibility"] =
+            serde_json::Value::Object(dz_visibility);
+        result["dz_to_dz_visibility"] =
+            serde_json::Value::Object(dz_to_dz_visibility);
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -448,6 +787,7 @@ mod tests {
             placed_features: features,
             rotationally_symmetric: false,
             visibility: None,
+            mission: None,
         }
     }
 
@@ -545,5 +885,175 @@ mod tests {
             0.0, 0.0, 1.0, 0.0, -5.0, -5.0, -5.0, 5.0,
         );
         assert!(t.is_none());
+    }
+
+    // -- DZ helper tests --
+
+    #[test]
+    fn sample_points_in_polygon_rect() {
+        let rect =
+            vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let pts = sample_points_in_polygon(&rect, 1.0, 0.5);
+        assert_eq!(pts.len(), 100);
+    }
+
+    #[test]
+    fn sample_points_in_polygon_triangle() {
+        let tri = vec![(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)];
+        let pts = sample_points_in_polygon(&tri, 1.0, 0.5);
+        assert!(pts.len() > 0);
+        assert!(pts.len() < 100);
+    }
+
+    #[test]
+    fn fraction_full_coverage() {
+        let dz_samples =
+            vec![(1.5, 1.5), (2.5, 1.5), (1.5, 2.5), (2.5, 2.5)];
+        let vis_poly =
+            vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let frac = fraction_of_dz_visible(&vis_poly, &dz_samples);
+        assert!((frac - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fraction_no_coverage() {
+        let dz_samples =
+            vec![(1.5, 1.5), (2.5, 1.5), (1.5, 2.5), (2.5, 2.5)];
+        let vis_poly = vec![
+            (20.0, 20.0),
+            (30.0, 20.0),
+            (30.0, 30.0),
+            (20.0, 30.0),
+        ];
+        let frac = fraction_of_dz_visible(&vis_poly, &dz_samples);
+        assert!(frac.abs() < 1e-9);
+    }
+
+    // -- DZ integration tests --
+
+    use crate::types::{DeploymentZone, Mission, Point2D};
+
+    fn make_rect_dz(
+        id: &str,
+        x1: f64,
+        z1: f64,
+        x2: f64,
+        z2: f64,
+    ) -> DeploymentZone {
+        DeploymentZone {
+            id: id.into(),
+            polygons: vec![vec![
+                Point2D {
+                    x_inches: x1,
+                    z_inches: z1,
+                },
+                Point2D {
+                    x_inches: x2,
+                    z_inches: z1,
+                },
+                Point2D {
+                    x_inches: x2,
+                    z_inches: z2,
+                },
+                Point2D {
+                    x_inches: x1,
+                    z_inches: z2,
+                },
+            ]],
+        }
+    }
+
+    fn make_layout_with_mission(
+        w: f64,
+        d: f64,
+        features: Vec<PlacedFeature>,
+        mission: Option<Mission>,
+    ) -> TerrainLayout {
+        TerrainLayout {
+            table_width_inches: w,
+            table_depth_inches: d,
+            placed_features: features,
+            rotationally_symmetric: false,
+            visibility: None,
+            mission,
+        }
+    }
+
+    #[test]
+    fn dz_empty_table_full_visibility() {
+        let green_dz = make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
+        let mission = Mission {
+            name: "test".into(),
+            objectives: vec![],
+            deployment_zones: vec![green_dz, red_dz],
+            rotationally_symmetric: false,
+        };
+        let layout =
+            make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
+        let objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let result =
+            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+
+        assert!(result.get("dz_visibility").is_some());
+        let dz_vis = &result["dz_visibility"];
+        assert_eq!(
+            dz_vis["green"]["value"].as_f64().unwrap(),
+            100.0
+        );
+        assert_eq!(
+            dz_vis["red"]["value"].as_f64().unwrap(),
+            100.0
+        );
+    }
+
+    #[test]
+    fn dz_to_dz_empty_table() {
+        let green_dz = make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
+        let mission = Mission {
+            name: "test".into(),
+            objectives: vec![],
+            deployment_zones: vec![green_dz, red_dz],
+            rotationally_symmetric: false,
+        };
+        let layout =
+            make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
+        let objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let result =
+            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+
+        let cross = &result["dz_to_dz_visibility"];
+        // No terrain -> nothing hidden -> 0%
+        assert_eq!(
+            cross["red_from_green"]["value"].as_f64().unwrap(),
+            0.0
+        );
+        assert_eq!(
+            cross["green_from_red"]["value"].as_f64().unwrap(),
+            0.0
+        );
+        assert_eq!(
+            cross["red_from_green"]["hidden_count"]
+                .as_i64()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            cross["green_from_red"]["hidden_count"]
+                .as_i64()
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn no_mission_no_dz_keys() {
+        let layout = make_layout(60.0, 44.0, vec![]);
+        let objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let result =
+            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+        assert!(result.get("dz_visibility").is_none());
+        assert!(result.get("dz_to_dz_visibility").is_none());
     }
 }

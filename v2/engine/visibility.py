@@ -16,7 +16,13 @@ from .collision import (
     get_world_obbs,
     obb_corners,
 )
-from .types import PlacedFeature, TerrainLayout, TerrainObject, Transform
+from .types import (
+    DeploymentZone,
+    PlacedFeature,
+    TerrainLayout,
+    TerrainObject,
+    Transform,
+)
 
 Segment = tuple[float, float, float, float]  # (x1, z1, x2, z2)
 
@@ -269,6 +275,94 @@ def _compute_visibility_polygon(
     return [(p[1], p[2]) for p in polygon]
 
 
+def _sample_points_in_polygon(
+    polygon: list[tuple[float, float]],
+    grid_spacing: float,
+    grid_offset: float,
+) -> list[tuple[float, float]]:
+    """Generate grid sample points that fall inside a polygon.
+
+    Uses AABB bounding box to limit search, then PIP-filters.
+    """
+    if len(polygon) < 3:
+        return []
+    xs = [p[0] for p in polygon]
+    zs = [p[1] for p in polygon]
+    min_x, max_x = min(xs), max(xs)
+    min_z, max_z = min(zs), max(zs)
+
+    points: list[tuple[float, float]] = []
+    # Align grid to global grid (same as table-wide grid)
+    # Find first grid x >= min_x
+    start_x = (
+        math.floor((min_x - grid_offset) / grid_spacing) * grid_spacing
+        + grid_offset
+    )
+    start_z = (
+        math.floor((min_z - grid_offset) / grid_spacing) * grid_spacing
+        + grid_offset
+    )
+    if start_x < min_x:
+        start_x += grid_spacing
+    if start_z < min_z:
+        start_z += grid_spacing
+
+    x = start_x
+    while x < max_x:
+        z = start_z
+        while z < max_z:
+            if _point_in_polygon(x, z, polygon):
+                points.append((x, z))
+            z += grid_spacing
+        x += grid_spacing
+    return points
+
+
+def _sample_points_in_dz(
+    dz: DeploymentZone,
+    grid_spacing: float,
+    grid_offset: float,
+) -> list[tuple[float, float]]:
+    """Generate grid sample points across all polygon rings of a deployment zone."""
+    seen: set[tuple[float, float]] = set()
+    points: list[tuple[float, float]] = []
+    for poly in dz.polygons:
+        poly_tuples = [(p.x, p.z) for p in poly]
+        for pt in _sample_points_in_polygon(
+            poly_tuples, grid_spacing, grid_offset
+        ):
+            if pt not in seen:
+                seen.add(pt)
+                points.append(pt)
+    return points
+
+
+def _point_in_any_polygon(
+    px: float, pz: float, polygons: list[list[tuple[float, float]]]
+) -> bool:
+    """Test if a point is inside any of the given polygon rings."""
+    for poly in polygons:
+        if _point_in_polygon(px, pz, poly):
+            return True
+    return False
+
+
+def _fraction_of_dz_visible(
+    vis_poly: list[tuple[float, float]],
+    dz_sample_points: list[tuple[float, float]],
+) -> float:
+    """Compute fraction of DZ sample points visible (inside vis polygon)."""
+    if not dz_sample_points:
+        return 0.0
+    if len(vis_poly) < 3:
+        return 0.0
+    count = 0
+    for px, pz in dz_sample_points:
+        if _point_in_polygon(px, pz, vis_poly):
+            count += 1
+    return count / len(dz_sample_points)
+
+
 def compute_layout_visibility(
     layout: TerrainLayout,
     objects_by_id: dict[str, TerrainObject],
@@ -318,6 +412,36 @@ def compute_layout_visibility(
             }
         }
 
+    # -- DZ pre-loop setup --
+    has_dzs = (
+        layout.mission is not None and len(layout.mission.deployment_zones) > 0
+    )
+    dz_data: list[
+        tuple[str, list[list[tuple[float, float]]], list[tuple[float, float]]]
+    ] = []  # (dz_id, polygon_tuples, sample_points)
+
+    # Accumulators for dz_visibility: {dz_id: [total_fraction, observer_count]}
+    dz_vis_accum: dict[str, list[float]] = {}
+    # Cross-DZ: track which target sample indices have been seen by ANY observer
+    # {target_id_from_observer_id: set of seen target sample indices}
+    dz_cross_seen: dict[str, set[int]] = {}
+    dz_cross_obs_count: dict[str, int] = {}
+
+    if has_dzs:
+        mission = layout.mission
+        dzs = mission.deployment_zones
+
+        for dz in dzs:
+            polys_tuples = [[(p.x, p.z) for p in poly] for poly in dz.polygons]
+            dz_samples = _sample_points_in_dz(dz, grid_spacing, grid_offset)
+            dz_data.append((dz.id, polys_tuples, dz_samples))
+            dz_vis_accum[dz.id] = [0.0, 0]  # [total_fraction, observer_count]
+            for other_dz in dzs:
+                if other_dz.id != dz.id:
+                    key = f"{dz.id}_from_{other_dz.id}"
+                    dz_cross_seen[key] = set()
+                    dz_cross_obs_count[key] = 0
+
     total_ratio = 0.0
 
     for sx, sz in sample_points:
@@ -327,6 +451,27 @@ def compute_layout_visibility(
 
         if not segments:
             total_ratio += 1.0
+            if has_dzs:
+                # Full visibility: all DZ samples visible
+                for dz_id, dz_polys, dz_samples in dz_data:
+                    observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                    if not observer_in_dz:
+                        dz_vis_accum[dz_id][0] += 1.0
+                        dz_vis_accum[dz_id][1] += 1
+                    else:
+                        # Observer inside this DZ: all target samples seen
+                        for (
+                            other_id,
+                            _other_polys,
+                            other_samples,
+                        ) in dz_data:
+                            if other_id != dz_id:
+                                key = f"{other_id}_from_{dz_id}"
+                                if key in dz_cross_seen:
+                                    dz_cross_obs_count[key] += 1
+                                    dz_cross_seen[key].update(
+                                        range(len(other_samples))
+                                    )
             continue
 
         vis_poly = _compute_visibility_polygon(
@@ -334,16 +479,61 @@ def compute_layout_visibility(
         )
         if len(vis_poly) < 3:
             total_ratio += 1.0
+            if has_dzs:
+                for dz_id, dz_polys, dz_samples in dz_data:
+                    observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                    if not observer_in_dz:
+                        dz_vis_accum[dz_id][0] += 1.0
+                        dz_vis_accum[dz_id][1] += 1
+                    else:
+                        for (
+                            other_id,
+                            _other_polys,
+                            other_samples,
+                        ) in dz_data:
+                            if other_id != dz_id:
+                                key = f"{other_id}_from_{dz_id}"
+                                if key in dz_cross_seen:
+                                    dz_cross_obs_count[key] += 1
+                                    dz_cross_seen[key].update(
+                                        range(len(other_samples))
+                                    )
             continue
 
         vis_area = _polygon_area(vis_poly)
         ratio = min(vis_area / table_area, 1.0)
         total_ratio += ratio
 
+        # DZ visibility accumulation
+        if has_dzs:
+            for dz_id, dz_polys, dz_samples in dz_data:
+                observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                if not observer_in_dz:
+                    # Observer outside this DZ: contributes to dz_visibility
+                    frac = _fraction_of_dz_visible(vis_poly, dz_samples)
+                    dz_vis_accum[dz_id][0] += frac
+                    dz_vis_accum[dz_id][1] += 1
+                else:
+                    # Observer inside this DZ: mark visible target samples
+                    for (
+                        other_id,
+                        _other_polys,
+                        other_samples,
+                    ) in dz_data:
+                        if other_id != dz_id:
+                            key = f"{other_id}_from_{dz_id}"
+                            if key in dz_cross_seen:
+                                dz_cross_obs_count[key] += 1
+                                seen = dz_cross_seen[key]
+                                for i, (px, pz) in enumerate(other_samples):
+                                    if i not in seen:
+                                        if _point_in_polygon(px, pz, vis_poly):
+                                            seen.add(i)
+
     avg_visibility = total_ratio / len(sample_points)
     value = round(avg_visibility * 100.0, 2)
 
-    return {
+    result: dict = {
         "overall": {
             "value": value,
             "grid_spacing_inches": grid_spacing,
@@ -352,3 +542,52 @@ def compute_layout_visibility(
             "sample_count": len(sample_points),
         }
     }
+
+    # Build DZ visibility results
+    if has_dzs:
+        mission = layout.mission
+        dzs = mission.deployment_zones
+
+        dz_visibility: dict = {}
+        dz_to_dz_visibility: dict = {}
+
+        for dz_id, accum in dz_vis_accum.items():
+            total_frac, obs_count = accum
+            avg = total_frac / obs_count if obs_count > 0 else 0.0
+            dz_samples_count = 0
+            for did, _dp, ds in dz_data:
+                if did == dz_id:
+                    dz_samples_count = len(ds)
+                    break
+            dz_visibility[dz_id] = {
+                "value": round(avg * 100.0, 2),
+                "dz_sample_count": dz_samples_count,
+                "observer_count": obs_count,
+            }
+
+        for key, seen_set in dz_cross_seen.items():
+            # Extract target_id from key (format: "target_from_observer")
+            parts = key.split("_from_")
+            target_id = parts[0]
+            target_samples_count = 0
+            for did, _dp, ds in dz_data:
+                if did == target_id:
+                    target_samples_count = len(ds)
+                    break
+            hidden_count = target_samples_count - len(seen_set)
+            hidden_pct = (
+                round(hidden_count / target_samples_count * 100.0, 2)
+                if target_samples_count > 0
+                else 0.0
+            )
+            dz_to_dz_visibility[key] = {
+                "value": hidden_pct,
+                "hidden_count": hidden_count,
+                "target_sample_count": target_samples_count,
+                "observer_count": dz_cross_obs_count.get(key, 0),
+            }
+
+        result["dz_visibility"] = dz_visibility
+        result["dz_to_dz_visibility"] = dz_to_dz_visibility
+
+    return result

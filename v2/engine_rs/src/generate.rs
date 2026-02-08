@@ -400,6 +400,7 @@ mod tests {
             min_feature_gap_inches: None,
             min_edge_gap_inches: None,
             rotationally_symmetric: false,
+            mission: None,
         }
     }
 
@@ -480,6 +481,7 @@ mod tests {
             min_feature_gap_inches: None,
             min_edge_gap_inches: None,
             rotationally_symmetric: false,
+            mission: None,
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());

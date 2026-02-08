@@ -147,6 +147,48 @@ def compare_visibility(
     if s1 != s2:
         diffs.append(f"Visibility sample_count: {s1} vs {s2}")
 
+    # Compare DZ visibility
+    dz1 = vis1.get("dz_visibility")
+    dz2 = vis2.get("dz_visibility")
+    if (dz1 is None) != (dz2 is None):
+        diffs.append(
+            f"dz_visibility: one is None, other is not "
+            f"(py={dz1 is not None}, rs={dz2 is not None})"
+        )
+    elif dz1 is not None and dz2 is not None:
+        for key in set(list(dz1.keys()) + list(dz2.keys())):
+            if key not in dz1:
+                diffs.append(f"dz_visibility[{key}]: missing in Python")
+            elif key not in dz2:
+                diffs.append(f"dz_visibility[{key}]: missing in Rust")
+            else:
+                dv1 = dz1[key].get("value", 0.0)
+                dv2 = dz2[key].get("value", 0.0)
+                if abs(dv1 - dv2) > 0.01:
+                    diffs.append(f"dz_visibility[{key}] value: {dv1} vs {dv2}")
+
+    # Compare DZ-to-DZ visibility
+    cross1 = vis1.get("dz_to_dz_visibility")
+    cross2 = vis2.get("dz_to_dz_visibility")
+    if (cross1 is None) != (cross2 is None):
+        diffs.append(
+            f"dz_to_dz_visibility: one is None, other is not "
+            f"(py={cross1 is not None}, rs={cross2 is not None})"
+        )
+    elif cross1 is not None and cross2 is not None:
+        for key in set(list(cross1.keys()) + list(cross2.keys())):
+            if key not in cross1:
+                diffs.append(f"dz_to_dz_visibility[{key}]: missing in Python")
+            elif key not in cross2:
+                diffs.append(f"dz_to_dz_visibility[{key}]: missing in Rust")
+            else:
+                cv1 = cross1[key].get("value", 0.0)
+                cv2 = cross2[key].get("value", 0.0)
+                if abs(cv1 - cv2) > 0.01:
+                    diffs.append(
+                        f"dz_to_dz_visibility[{key}] value: {cv1} vs {cv2}"
+                    )
+
     return len(diffs) == 0, diffs
 
 

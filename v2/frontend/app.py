@@ -113,64 +113,15 @@ RUINS_FEATURE = {
     "components": [{"object_id": "ruins"}],
 }
 
-WTC_THREE_STOREY_WALLS = {
-    "id": "wtc_three_storey_walls",
-    "name": "WTC Three Storey Walls",
-    "shapes": [
-        {
-            "shape_type": "rectangular_prism",
-            "width_inches": 9.0,
-            "depth_inches": 0.1,
-            "height_inches": 9.0,
-            "offset": {"x_inches": -0.65, "z_inches": -2.15},
-        },
-        {
-            "shape_type": "rectangular_prism",
-            "width_inches": 0.1,
-            "depth_inches": 5.0,
-            "height_inches": 9.0,
-            "offset": {"x_inches": -5.15, "z_inches": 0.35},
-        },
-        {
-            "shape_type": "rectangular_prism",
-            "width_inches": 0.6,
-            "depth_inches": 0.1,
-            "height_inches": 3.0,
-            "offset": {"x_inches": -5.5, "z_inches": -2.15},
-        },
-        {
-            "shape_type": "rectangular_prism",
-            "width_inches": 0.1,
-            "depth_inches": 0.6,
-            "height_inches": 3.0,
-            "offset": {"x_inches": -5.15, "z_inches": -2.5},
-        },
-    ],
-    "tags": ["ruins", "wtc"],
-    "fill_color": "#111111",
-    "outline_color": "#000000",
-}
-
-WTC_THREE_STOREY_FEATURE = {
-    "id": "wtc_three_storey",
-    "feature_type": "obscuring",
-    "components": [
-        {"object_id": "ruins"},
-        {"object_id": "wtc_three_storey_walls"},
-    ],
-}
-
 SAMPLE_CATALOG = {
     "name": "Sample terrain",
     "objects": [
         {"item": CRATE_OBJECT, "quantity": None},
         {"item": RUINS_OBJECT, "quantity": None},
-        {"item": WTC_THREE_STOREY_WALLS, "quantity": None},
     ],
     "features": [
         {"item": CRATE_FEATURE, "quantity": None},
         {"item": RUINS_FEATURE, "quantity": None},
-        {"item": WTC_THREE_STOREY_FEATURE, "quantity": None},
     ],
 }
 
@@ -655,6 +606,16 @@ class ControlPanel(ttk.Frame):
             row=row, column=0, columnspan=2, sticky="w", pady=2
         )
         row += 1
+        self.dz_vis_label = ttk.Label(right, text="")
+        self.dz_vis_label.grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=2
+        )
+        row += 1
+        self.dz_to_dz_vis_label = ttk.Label(right, text="")
+        self.dz_to_dz_vis_label.grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=2
+        )
+        row += 1
 
     def _section(self, parent, row, title):
         ttk.Label(parent, text=title, font=("", 11, "bold")).grid(
@@ -1114,7 +1075,7 @@ class App:
         self._render()
 
     def _update_visibility_display(self):
-        """Update visibility label from current layout."""
+        """Update visibility labels from current layout."""
         vis = self.layout.get("visibility")
         if isinstance(vis, dict) and "overall" in vis:
             overall = vis["overall"]
@@ -1123,8 +1084,37 @@ class App:
                 self.controls.visibility_label.config(
                     text=f"Visibility: {val}%"
                 )
+
+                # DZ visibility
+                dz_vis = vis.get("dz_visibility")
+                if isinstance(dz_vis, dict) and dz_vis:
+                    parts = [
+                        f"{dz_id}: {data['value']}%"
+                        for dz_id, data in dz_vis.items()
+                    ]
+                    self.controls.dz_vis_label.config(
+                        text=f"DZ Vis: {', '.join(parts)}"
+                    )
+                else:
+                    self.controls.dz_vis_label.config(text="")
+
+                # DZ hidden fraction (% of DZ hidden from opposing DZ)
+                dz_cross = vis.get("dz_to_dz_visibility")
+                if isinstance(dz_cross, dict) and dz_cross:
+                    parts = [
+                        f"{key}: {data['value']}%"
+                        for key, data in dz_cross.items()
+                    ]
+                    self.controls.dz_to_dz_vis_label.config(
+                        text=f"DZ Hidden: {', '.join(parts)}"
+                    )
+                else:
+                    self.controls.dz_to_dz_vis_label.config(text="")
                 return
+
         self.controls.visibility_label.config(text="Visibility: --")
+        self.controls.dz_vis_label.config(text="")
+        self.controls.dz_to_dz_vis_label.config(text="")
 
     def run(self):
         self.root.mainloop()
