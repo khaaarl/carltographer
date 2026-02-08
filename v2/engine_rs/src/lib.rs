@@ -6,11 +6,11 @@
 
 use pyo3::prelude::*;
 
-mod collision;
-mod generate;
-mod prng;
-mod types;
-mod visibility;
+pub mod collision;
+pub mod generate;
+pub mod prng;
+pub mod types;
+pub mod visibility;
 
 /// Run the terrain generation engine.
 ///

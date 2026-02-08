@@ -691,6 +691,110 @@ TEST_SCENARIOS = [
 ]
 
 
+def params_to_json_dict(params: EngineParams) -> dict:
+    """Convert EngineParams to the JSON-compatible dict expected by the Rust engine."""
+    return {
+        "seed": params.seed,
+        "table_width_inches": params.table_width,
+        "table_depth_inches": params.table_depth,
+        "catalog": {
+            "objects": [
+                {
+                    "item": {
+                        "id": obj.item.id,
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": shape.width,
+                                "depth_inches": shape.depth,
+                                "height_inches": shape.height,
+                                **(
+                                    {"offset": shape.offset.to_dict()}
+                                    if shape.offset
+                                    else {}
+                                ),
+                            }
+                            for shape in obj.item.shapes
+                        ],
+                        **({"name": obj.item.name} if obj.item.name else {}),
+                        **({"tags": obj.item.tags} if obj.item.tags else {}),
+                    },
+                    **({"quantity": obj.quantity} if obj.quantity else {}),
+                }
+                for obj in params.catalog.objects
+            ],
+            "features": [
+                {
+                    "item": {
+                        "id": feat.item.id,
+                        "feature_type": feat.item.feature_type,
+                        "components": [
+                            {
+                                "object_id": comp.object_id,
+                                **(
+                                    {"transform": comp.transform.to_dict()}
+                                    if comp.transform
+                                    else {}
+                                ),
+                            }
+                            for comp in feat.item.components
+                        ],
+                    },
+                    **({"quantity": feat.quantity} if feat.quantity else {}),
+                }
+                for feat in params.catalog.features
+            ],
+            **({"name": params.catalog.name} if params.catalog.name else {}),
+        },
+        "num_steps": params.num_steps,
+        **(
+            {"initial_layout": params.initial_layout.to_dict()}
+            if params.initial_layout
+            else {}
+        ),
+        **(
+            {
+                "feature_count_preferences": [
+                    {
+                        "feature_type": p.feature_type,
+                        "min": p.min,
+                        "max": p.max,
+                    }
+                    for p in params.feature_count_preferences
+                ]
+            }
+            if params.feature_count_preferences
+            else {}
+        ),
+        **(
+            {"min_feature_gap_inches": params.min_feature_gap_inches}
+            if params.min_feature_gap_inches is not None
+            else {}
+        ),
+        **(
+            {"min_edge_gap_inches": params.min_edge_gap_inches}
+            if params.min_edge_gap_inches is not None
+            else {}
+        ),
+        **(
+            {"rotationally_symmetric": True}
+            if params.rotationally_symmetric
+            else {}
+        ),
+        **(
+            {"mission": params.mission.to_dict()}
+            if params.mission is not None
+            else {}
+        ),
+        **({"skip_visibility": True} if params.skip_visibility else {}),
+        **(
+            {"scoring_targets": params.scoring_targets.to_dict()}
+            if params.scoring_targets is not None
+            else {}
+        ),
+    }
+
+
 def run_comparison(
     params: EngineParams,
     verbose: bool = False,
@@ -725,123 +829,7 @@ def run_comparison(
             )
             return False, diffs
 
-        # Convert params to dict for JSON serialization
-        params_dict = {
-            "seed": params.seed,
-            "table_width_inches": params.table_width,
-            "table_depth_inches": params.table_depth,
-            "catalog": {
-                "objects": [
-                    {
-                        "item": {
-                            "id": obj.item.id,
-                            "shapes": [
-                                {
-                                    "shape_type": "rectangular_prism",
-                                    "width_inches": shape.width,
-                                    "depth_inches": shape.depth,
-                                    "height_inches": shape.height,
-                                    **(
-                                        {"offset": shape.offset.to_dict()}
-                                        if shape.offset
-                                        else {}
-                                    ),
-                                }
-                                for shape in obj.item.shapes
-                            ],
-                            **(
-                                {"name": obj.item.name}
-                                if obj.item.name
-                                else {}
-                            ),
-                            **(
-                                {"tags": obj.item.tags}
-                                if obj.item.tags
-                                else {}
-                            ),
-                        },
-                        **({"quantity": obj.quantity} if obj.quantity else {}),
-                    }
-                    for obj in params.catalog.objects
-                ],
-                "features": [
-                    {
-                        "item": {
-                            "id": feat.item.id,
-                            "feature_type": feat.item.feature_type,
-                            "components": [
-                                {
-                                    "object_id": comp.object_id,
-                                    **(
-                                        {"transform": comp.transform.to_dict()}
-                                        if comp.transform
-                                        else {}
-                                    ),
-                                }
-                                for comp in feat.item.components
-                            ],
-                        },
-                        **(
-                            {"quantity": feat.quantity}
-                            if feat.quantity
-                            else {}
-                        ),
-                    }
-                    for feat in params.catalog.features
-                ],
-                **(
-                    {"name": params.catalog.name}
-                    if params.catalog.name
-                    else {}
-                ),
-            },
-            "num_steps": params.num_steps,
-            **(
-                {"initial_layout": params.initial_layout.to_dict()}
-                if params.initial_layout
-                else {}
-            ),
-            **(
-                {
-                    "feature_count_preferences": [
-                        {
-                            "feature_type": p.feature_type,
-                            "min": p.min,
-                            "max": p.max,
-                        }
-                        for p in params.feature_count_preferences
-                    ]
-                }
-                if params.feature_count_preferences
-                else {}
-            ),
-            **(
-                {"min_feature_gap_inches": params.min_feature_gap_inches}
-                if params.min_feature_gap_inches is not None
-                else {}
-            ),
-            **(
-                {"min_edge_gap_inches": params.min_edge_gap_inches}
-                if params.min_edge_gap_inches is not None
-                else {}
-            ),
-            **(
-                {"rotationally_symmetric": True}
-                if params.rotationally_symmetric
-                else {}
-            ),
-            **(
-                {"mission": params.mission.to_dict()}
-                if params.mission is not None
-                else {}
-            ),
-            **({"skip_visibility": True} if params.skip_visibility else {}),
-            **(
-                {"scoring_targets": params.scoring_targets.to_dict()}
-                if params.scoring_targets is not None
-                else {}
-            ),
-        }
+        params_dict = params_to_json_dict(params)
 
         # Call Rust engine via PyO3
         rs_json_str = engine_rs.generate_json(  # type: ignore[attr-defined]
