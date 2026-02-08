@@ -1353,6 +1353,7 @@ class App:
             "placed_features": [],
             "rotationally_symmetric": self.controls.symmetric_var.get(),
         }
+        self._update_visibility_display()
         self._render()
 
     def _on_save(self):
