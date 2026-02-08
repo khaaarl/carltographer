@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::collision::{
-    compose_transform, is_at_origin, mirror_placed_feature, obb_corners,
-    Corners,
+    compose_transform, get_tall_world_obbs, is_at_origin,
+    mirror_placed_feature, obb_corners, Corners,
 };
 use crate::types::{
     DeploymentZone, PlacedFeature, TerrainLayout, TerrainObject, Transform,
@@ -506,6 +506,34 @@ pub fn compute_layout_visibility(
                 }
             }
         }
+    }
+
+    // Filter out observer points inside tall terrain (height >= 1")
+    let mut tall_footprints: Vec<Vec<(f64, f64)>> = Vec::new();
+    {
+        let mut effective_features: Vec<PlacedFeature> = Vec::new();
+        for pf in &layout.placed_features {
+            effective_features.push(pf.clone());
+            if layout.rotationally_symmetric && !is_at_origin(pf) {
+                effective_features
+                    .push(mirror_placed_feature(pf));
+            }
+        }
+        for pf in &effective_features {
+            for corners in
+                get_tall_world_obbs(pf, objects_by_id, 1.0)
+            {
+                tall_footprints.push(corners_to_vec(&corners));
+            }
+        }
+    }
+
+    if !tall_footprints.is_empty() {
+        sample_points.retain(|&(x, z)| {
+            !tall_footprints
+                .iter()
+                .any(|fp| point_in_polygon(x, z, fp))
+        });
     }
 
     if sample_points.is_empty() {
@@ -1362,6 +1390,64 @@ mod tests {
             oh["green"]["total_objectives"].as_i64().unwrap(),
             5
         );
+    }
+
+    // -- Observer filtering tests --
+
+    #[test]
+    fn tall_terrain_reduces_sample_count() {
+        let empty_layout = make_layout(60.0, 44.0, vec![]);
+        let empty_objects: HashMap<String, &TerrainObject> =
+            HashMap::new();
+        let empty_result = compute_layout_visibility(
+            &empty_layout,
+            &empty_objects,
+            4.0,
+        );
+        let empty_count =
+            empty_result["overall"]["sample_count"].as_i64().unwrap();
+
+        let obj = make_object("box", 10.0, 10.0, 2.0);
+        let feat = make_feature("f1", "box", "obstacle");
+        let pf = make_placed(feat, 0.0, 0.0);
+        let layout = make_layout(60.0, 44.0, vec![pf]);
+        let mut objects: HashMap<String, &TerrainObject> =
+            HashMap::new();
+        objects.insert("box".into(), &obj);
+        let result =
+            compute_layout_visibility(&layout, &objects, 4.0);
+        let filtered_count =
+            result["overall"]["sample_count"].as_i64().unwrap();
+
+        assert!(filtered_count < empty_count);
+    }
+
+    #[test]
+    fn short_terrain_does_not_reduce_sample_count() {
+        let empty_layout = make_layout(60.0, 44.0, vec![]);
+        let empty_objects: HashMap<String, &TerrainObject> =
+            HashMap::new();
+        let empty_result = compute_layout_visibility(
+            &empty_layout,
+            &empty_objects,
+            4.0,
+        );
+        let empty_count =
+            empty_result["overall"]["sample_count"].as_i64().unwrap();
+
+        let obj = make_object("box", 10.0, 10.0, 0.5);
+        let feat = make_feature("f1", "box", "obstacle");
+        let pf = make_placed(feat, 0.0, 0.0);
+        let layout = make_layout(60.0, 44.0, vec![pf]);
+        let mut objects: HashMap<String, &TerrainObject> =
+            HashMap::new();
+        objects.insert("box".into(), &obj);
+        let result =
+            compute_layout_visibility(&layout, &objects, 4.0);
+        let filtered_count =
+            result["overall"]["sample_count"].as_i64().unwrap();
+
+        assert_eq!(filtered_count, empty_count);
     }
 
     #[test]

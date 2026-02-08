@@ -639,3 +639,42 @@ class TestObjectiveHidability:
         layout = _make_layout(60, 44, [])
         result = compute_layout_visibility(layout, {})
         assert "objective_hidability" not in result
+
+
+# -- Observer filtering tests --
+
+
+class TestObserverFilteringInsideTallTerrain:
+    def test_tall_terrain_reduces_sample_count(self):
+        """A tall terrain piece (height >= 1") should reduce sample_count."""
+        empty_layout = _make_layout(60, 44, [])
+        empty_result = compute_layout_visibility(empty_layout, {})
+        empty_count = empty_result["overall"]["sample_count"]
+
+        # Place a large tall piece at center
+        obj = _make_object("box", 10, 10, 2.0)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"box": obj}
+        result = compute_layout_visibility(layout, objects_by_id)
+        filtered_count = result["overall"]["sample_count"]
+
+        assert filtered_count < empty_count
+
+    def test_short_terrain_does_not_reduce_sample_count(self):
+        """A short terrain piece (height < 1") should NOT reduce sample_count."""
+        empty_layout = _make_layout(60, 44, [])
+        empty_result = compute_layout_visibility(empty_layout, {})
+        empty_count = empty_result["overall"]["sample_count"]
+
+        # Place a short piece at center
+        obj = _make_object("box", 10, 10, 0.5)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"box": obj}
+        result = compute_layout_visibility(layout, objects_by_id)
+        filtered_count = result["overall"]["sample_count"]
+
+        assert filtered_count == empty_count

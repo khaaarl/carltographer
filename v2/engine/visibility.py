@@ -13,6 +13,7 @@ from .collision import (
     _is_at_origin,
     _mirror_placed_feature,
     compose_transform,
+    get_tall_world_obbs,
     get_world_obbs,
     obb_corners,
 )
@@ -474,6 +475,24 @@ def compute_layout_visibility(
                         break
                 if near_obj:
                     sample_points.append((fx, fz))
+
+    # Filter out observer points inside tall terrain (height >= 1")
+    tall_footprints: list[list[tuple[float, float]]] = []
+    effective_features: list[PlacedFeature] = []
+    for pf in layout.placed_features:
+        effective_features.append(pf)
+        if layout.rotationally_symmetric and not _is_at_origin(pf):
+            effective_features.append(_mirror_placed_feature(pf))
+    for pf in effective_features:
+        for corners in get_tall_world_obbs(pf, objects_by_id, min_height=1.0):
+            tall_footprints.append(corners)
+
+    if tall_footprints:
+        sample_points = [
+            (x, z)
+            for x, z in sample_points
+            if not any(_point_in_polygon(x, z, fp) for fp in tall_footprints)
+        ]
 
     if not sample_points:
         return {
