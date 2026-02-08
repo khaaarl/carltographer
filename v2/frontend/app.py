@@ -315,6 +315,15 @@ class ControlPanel(ttk.Frame):
         row = self._field(row, "Min ruins:", self.min_ruins_var)
         row = self._field(row, "Max ruins:", self.max_ruins_var)
 
+        # Results
+        row = self._sep(row)
+        row = self._section(row, "Results")
+        self.visibility_label = ttk.Label(self, text="Visibility: --")
+        self.visibility_label.grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=2
+        )
+        row += 1
+
         # Buttons
         row = self._sep(row)
         ttk.Button(self, text="Generate", command=self.on_generate).grid(
@@ -668,8 +677,22 @@ class App:
             result = generate_json(params)
 
         self.layout = result["layout"]
+        self._update_visibility_display()
         self.history.add_to_history(self.layout)
         self._render()
+
+    def _update_visibility_display(self):
+        """Update visibility label from current layout."""
+        vis = self.layout.get("visibility")
+        if isinstance(vis, dict) and "overall" in vis:
+            overall = vis["overall"]
+            if isinstance(overall, dict) and "value" in overall:
+                val = overall["value"]
+                self.controls.visibility_label.config(
+                    text=f"Visibility: {val}%"
+                )
+                return
+        self.controls.visibility_label.config(text="Visibility: --")
 
     def run(self):
         self.root.mainloop()

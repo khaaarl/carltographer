@@ -156,6 +156,7 @@ class TerrainLayout:
     table_depth: float
     placed_features: list[PlacedFeature] = field(default_factory=list)
     rotationally_symmetric: bool = False
+    visibility: dict | None = None
 
     @staticmethod
     def from_dict(d: dict) -> TerrainLayout:
@@ -167,15 +168,19 @@ class TerrainLayout:
                 for p in d.get("placed_features", [])
             ],
             rotationally_symmetric=d.get("rotationally_symmetric", False),
+            visibility=d.get("visibility"),
         )
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "table_width_inches": self.table_width,
             "table_depth_inches": self.table_depth,
             "placed_features": [p.to_dict() for p in self.placed_features],
             "rotationally_symmetric": self.rotationally_symmetric,
         }
+        if self.visibility is not None:
+            d["visibility"] = self.visibility
+        return d
 
 
 @dataclass

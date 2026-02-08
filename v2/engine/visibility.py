@@ -1,0 +1,354 @@
+"""Visibility score computation for terrain layouts.
+
+Measures what percentage of the battlefield has clear line of sight
+by sampling observer positions on a grid and computing visibility
+polygons via angular sweep.
+"""
+
+from __future__ import annotations
+
+import math
+
+from .collision import (
+    _is_at_origin,
+    _mirror_placed_feature,
+    compose_transform,
+    get_world_obbs,
+    obb_corners,
+)
+from .types import PlacedFeature, TerrainLayout, TerrainObject, Transform
+
+Segment = tuple[float, float, float, float]  # (x1, z1, x2, z2)
+
+
+def _polygon_area(vertices: list[tuple[float, float]]) -> float:
+    """Compute polygon area using the shoelace formula.
+
+    Returns positive area regardless of winding order.
+    """
+    n = len(vertices)
+    if n < 3:
+        return 0.0
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += vertices[i][0] * vertices[j][1]
+        area -= vertices[j][0] * vertices[i][1]
+    return abs(area) / 2.0
+
+
+def _point_in_polygon(
+    px: float, pz: float, vertices: list[tuple[float, float]]
+) -> bool:
+    """Ray-casting point-in-polygon test."""
+    n = len(vertices)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, zi = vertices[i]
+        xj, zj = vertices[j]
+        if (zi > pz) != (zj > pz):
+            intersect_x = (xj - xi) * (pz - zi) / (zj - zi) + xi
+            if px < intersect_x:
+                inside = not inside
+        j = i
+    return inside
+
+
+def _ray_segment_intersection(
+    ox: float,
+    oz: float,
+    dx: float,
+    dz: float,
+    x1: float,
+    z1: float,
+    x2: float,
+    z2: float,
+) -> float | None:
+    """Find parameter t where ray (ox+t*dx, oz+t*dz) hits segment (x1,z1)-(x2,z2).
+
+    Returns t >= 0 if hit, None if miss or parallel.
+    """
+    sx = x2 - x1
+    sz = z2 - z1
+    denom = dx * sz - dz * sx
+    if abs(denom) < 1e-12:
+        return None
+
+    t = ((x1 - ox) * sz - (z1 - oz) * sx) / denom
+    u = ((x1 - ox) * dz - (z1 - oz) * dx) / denom
+
+    if t >= 0 and 0 <= u <= 1:
+        return t
+    return None
+
+
+def _get_footprint_corners(
+    placed: PlacedFeature,
+    objects_by_id: dict[str, TerrainObject],
+) -> list[list[tuple[float, float]]]:
+    """Get world-space OBB corners for all shapes in a feature (ignoring height)."""
+    return get_world_obbs(placed, objects_by_id)
+
+
+def _extract_blocking_segments(
+    layout: TerrainLayout,
+    objects_by_id: dict[str, TerrainObject],
+    observer_x: float,
+    observer_z: float,
+    min_blocking_height: float = 4.0,
+) -> list[Segment]:
+    """Extract line segments that block LoS from the given observer position.
+
+    Rules:
+    - Regular features (not "obscuring"): shapes with height >= min_blocking_height
+      produce all 4 OBB edges as blocking segments.
+    - Obscuring features: use footprint regardless of height:
+      - Observer inside footprint → skip feature entirely
+      - Observer outside → only back-facing edges block
+    """
+    segments: list[Segment] = []
+
+    # Build effective placed features list (include mirrors for symmetric)
+    effective_features: list[PlacedFeature] = []
+    for pf in layout.placed_features:
+        effective_features.append(pf)
+        if layout.rotationally_symmetric and not _is_at_origin(pf):
+            effective_features.append(_mirror_placed_feature(pf))
+
+    for pf in effective_features:
+        is_obscuring = pf.feature.feature_type == "obscuring"
+
+        if is_obscuring:
+            # Get all shape footprints regardless of height
+            all_corners = _get_footprint_corners(pf, objects_by_id)
+            if not all_corners:
+                continue
+
+            # Check if observer is inside any shape of this feature
+            observer_inside = False
+            for corners in all_corners:
+                if _point_in_polygon(observer_x, observer_z, corners):
+                    observer_inside = True
+                    break
+
+            if observer_inside:
+                continue  # Can see out from inside
+
+            # Observer outside: only back-facing edges block
+            for corners in all_corners:
+                n = len(corners)
+                for i in range(n):
+                    j = (i + 1) % n
+                    x1, z1 = corners[i]
+                    x2, z2 = corners[j]
+
+                    # Edge midpoint
+                    mx = (x1 + x2) / 2.0
+                    mz = (z1 + z2) / 2.0
+
+                    # Outward normal (perpendicular to edge, pointing outward)
+                    ex = x2 - x1
+                    ez = z2 - z1
+                    # For CCW winding, outward normal is (ez, -ex)
+                    # For CW winding, outward normal is (-ez, ex)
+                    # We determine outward by checking which side the polygon center is on
+                    # Compute polygon center
+                    cx = sum(c[0] for c in corners) / n
+                    cz = sum(c[1] for c in corners) / n
+                    # Normal candidate 1: (ez, -ex)
+                    nx, nz = ez, -ex
+                    # If center is on the same side as normal, flip
+                    dot_center = (cx - mx) * nx + (cz - mz) * nz
+                    if dot_center > 0:
+                        nx, nz = -nx, -nz
+
+                    # Back-facing: outward normal points away from observer
+                    dot_observer = (observer_x - mx) * nx + (
+                        observer_z - mz
+                    ) * nz
+                    if dot_observer < 0:
+                        # Normal points away from observer → back-facing edge
+                        segments.append((x1, z1, x2, z2))
+        else:
+            # Regular obstacle: only shapes with height >= min_blocking_height
+            for comp in pf.feature.components:
+                obj = objects_by_id.get(comp.object_id)
+                if obj is None:
+                    continue
+                comp_t = comp.transform or Transform()
+                for shape in obj.shapes:
+                    if shape.height < min_blocking_height:
+                        continue
+                    shape_t = shape.offset or Transform()
+                    world = compose_transform(
+                        compose_transform(shape_t, comp_t),
+                        pf.transform,
+                    )
+                    corners = obb_corners(
+                        world.x,
+                        world.z,
+                        shape.width / 2,
+                        shape.depth / 2,
+                        math.radians(world.rotation_deg),
+                    )
+                    # All 4 edges block
+                    for i in range(4):
+                        j = (i + 1) % 4
+                        segments.append(
+                            (
+                                corners[i][0],
+                                corners[i][1],
+                                corners[j][0],
+                                corners[j][1],
+                            )
+                        )
+
+    return segments
+
+
+def _compute_visibility_polygon(
+    ox: float,
+    oz: float,
+    segments: list[Segment],
+    table_half_w: float,
+    table_half_d: float,
+) -> list[tuple[float, float]]:
+    """Compute visibility polygon from observer (ox, oz) via angular sweep.
+
+    Returns polygon vertices sorted by angle.
+    """
+    # Add table boundary segments
+    all_segments = list(segments)
+    tw, td = table_half_w, table_half_d
+    all_segments.extend(
+        [
+            (-tw, -td, tw, -td),  # bottom
+            (tw, -td, tw, td),  # right
+            (tw, td, -tw, td),  # top
+            (-tw, td, -tw, -td),  # left
+        ]
+    )
+
+    # Collect unique endpoints
+    endpoints: set[tuple[float, float]] = set()
+    for x1, z1, x2, z2 in all_segments:
+        endpoints.add((x1, z1))
+        endpoints.add((x2, z2))
+
+    # For each endpoint, cast rays at angle and angle +/- epsilon
+    EPS = 1e-5
+    rays: list[tuple[float, float, float]] = []  # (angle, dx, dz)
+
+    for ex, ez in endpoints:
+        dx = ex - ox
+        dz = ez - oz
+        angle = math.atan2(dz, dx)
+        for a in (angle - EPS, angle, angle + EPS):
+            rays.append((a, math.cos(a), math.sin(a)))
+
+    # Sort rays by angle
+    rays.sort(key=lambda r: r[0])
+
+    # Cast each ray, find nearest intersection
+    polygon: list[tuple[float, float, float]] = []  # (angle, hit_x, hit_z)
+
+    for angle, dx, dz in rays:
+        min_t = float("inf")
+        for x1, z1, x2, z2 in all_segments:
+            t = _ray_segment_intersection(ox, oz, dx, dz, x1, z1, x2, z2)
+            if t is not None and t < min_t:
+                min_t = t
+
+        if min_t < float("inf"):
+            hit_x = ox + min_t * dx
+            hit_z = oz + min_t * dz
+            polygon.append((angle, hit_x, hit_z))
+
+    # Extract just the (x, z) coordinates
+    return [(p[1], p[2]) for p in polygon]
+
+
+def compute_layout_visibility(
+    layout: TerrainLayout,
+    objects_by_id: dict[str, TerrainObject],
+    grid_spacing: float = 1.0,
+    grid_offset: float = 0.5,
+    min_blocking_height: float = 4.0,
+) -> dict:
+    """Compute visibility score for a terrain layout.
+
+    Samples observer positions on a grid across the table, computes
+    visibility polygon for each, and returns the average visibility
+    ratio (visible area / total area).
+
+    Returns dict with format:
+    {
+        "overall": {
+            "value": 72.53,
+            "grid_spacing_inches": 1.0,
+            "grid_offset_inches": 0.5,
+            "min_blocking_height_inches": 4.0,
+            "sample_count": 2640
+        }
+    }
+    """
+    half_w = layout.table_width / 2.0
+    half_d = layout.table_depth / 2.0
+    table_area = layout.table_width * layout.table_depth
+
+    # Generate grid sample points
+    sample_points: list[tuple[float, float]] = []
+    x = -half_w + grid_offset
+    while x < half_w:
+        z = -half_d + grid_offset
+        while z < half_d:
+            sample_points.append((x, z))
+            z += grid_spacing
+        x += grid_spacing
+
+    if not sample_points:
+        return {
+            "overall": {
+                "value": 100.0,
+                "grid_spacing_inches": grid_spacing,
+                "grid_offset_inches": grid_offset,
+                "min_blocking_height_inches": min_blocking_height,
+                "sample_count": 0,
+            }
+        }
+
+    total_ratio = 0.0
+
+    for sx, sz in sample_points:
+        segments = _extract_blocking_segments(
+            layout, objects_by_id, sx, sz, min_blocking_height
+        )
+
+        if not segments:
+            total_ratio += 1.0
+            continue
+
+        vis_poly = _compute_visibility_polygon(
+            sx, sz, segments, half_w, half_d
+        )
+        if len(vis_poly) < 3:
+            total_ratio += 1.0
+            continue
+
+        vis_area = _polygon_area(vis_poly)
+        ratio = min(vis_area / table_area, 1.0)
+        total_ratio += ratio
+
+    avg_visibility = total_ratio / len(sample_points)
+    value = round(avg_visibility * 100.0, 2)
+
+    return {
+        "overall": {
+            "value": value,
+            "grid_spacing_inches": grid_spacing,
+            "grid_offset_inches": grid_offset,
+            "min_blocking_height_inches": min_blocking_height,
+            "sample_count": len(sample_points),
+        }
+    }

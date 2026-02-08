@@ -73,6 +73,8 @@ pub struct TerrainLayout {
     pub placed_features: Vec<PlacedFeature>,
     #[serde(default)]
     pub rotationally_symmetric: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<serde_json::Value>,
 }
 
 // -- Catalog -------------------------------------------------------
@@ -203,6 +205,7 @@ mod tests {
                 table_depth_inches: 44.0,
                 placed_features: vec![],
                 rotationally_symmetric: false,
+                visibility: None,
             },
             score: 0.0,
             steps_completed: 50,

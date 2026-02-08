@@ -14,6 +14,7 @@ from .types import (
     TerrainObject,
     Transform,
 )
+from .visibility import compute_layout_visibility
 
 
 def _quantize_position(value: float) -> float:
@@ -248,6 +249,8 @@ def generate(params: EngineParams) -> EngineResult:
             if idx < 0:
                 continue
             features.pop(idx)
+
+    layout.visibility = compute_layout_visibility(layout, objects_by_id)
 
     return EngineResult(
         layout=layout,

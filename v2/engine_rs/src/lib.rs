@@ -10,6 +10,7 @@ mod collision;
 mod generate;
 mod prng;
 mod types;
+mod visibility;
 
 /// Run the terrain generation engine.
 ///

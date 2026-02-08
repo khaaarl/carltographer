@@ -317,13 +317,26 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         }
     }
 
+    let mut layout = TerrainLayout {
+        table_width_inches: params.table_width_inches,
+        table_depth_inches: params.table_depth_inches,
+        placed_features,
+        rotationally_symmetric: params.rotationally_symmetric,
+        visibility: None,
+    };
+
+    layout.visibility = Some(
+        crate::visibility::compute_layout_visibility(
+            &layout,
+            &objects_by_id,
+            1.0,  // grid_spacing
+            0.5,  // grid_offset
+            4.0,  // min_blocking_height
+        ),
+    );
+
     EngineResult {
-        layout: TerrainLayout {
-            table_width_inches: params.table_width_inches,
-            table_depth_inches: params.table_depth_inches,
-            placed_features,
-            rotationally_symmetric: params.rotationally_symmetric,
-        },
+        layout,
         score: 0.0,
         steps_completed: num_steps,
     }

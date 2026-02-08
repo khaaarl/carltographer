@@ -116,6 +116,38 @@ def compare_layouts(layout1: dict, layout2: dict) -> tuple[bool, list[str]]:
     return len(diffs) == 0, diffs
 
 
+def compare_visibility(
+    vis1: dict | None, vis2: dict | None
+) -> tuple[bool, list[str]]:
+    """Compare visibility results between engines.
+
+    Returns (match: bool, diffs: list of error messages).
+    """
+    diffs = []
+
+    if vis1 is None and vis2 is None:
+        return True, []
+
+    if vis1 is None or vis2 is None:
+        diffs.append("Visibility: one is None, other is not")
+        return False, diffs
+
+    o1 = vis1.get("overall", {})
+    o2 = vis2.get("overall", {})
+
+    v1 = o1.get("value", 0.0)
+    v2 = o2.get("value", 0.0)
+    if abs(v1 - v2) > 0.01:
+        diffs.append(f"Visibility value: {v1} vs {v2}")
+
+    s1 = o1.get("sample_count", 0)
+    s2 = o2.get("sample_count", 0)
+    if s1 != s2:
+        diffs.append(f"Visibility sample_count: {s1} vs {s2}")
+
+    return len(diffs) == 0, diffs
+
+
 def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     """Compare full EngineResult objects.
 
@@ -128,6 +160,13 @@ def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     match, layout_diffs = compare_layouts(layout1, layout2)
     if not match:
         diffs.extend(layout_diffs)
+
+    # Compare visibility
+    vis1 = layout1.get("visibility")
+    vis2 = layout2.get("visibility")
+    vis_match, vis_diffs = compare_visibility(vis1, vis2)
+    if not vis_match:
+        diffs.extend(vis_diffs)
 
     return len(diffs) == 0, diffs
 
