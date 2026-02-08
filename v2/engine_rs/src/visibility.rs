@@ -369,6 +369,54 @@ fn sample_points_in_dz(
     points
 }
 
+/// Generate grid sample points that fall inside a circle.
+/// Uses AABB bounding box to limit search, then distance-filters.
+fn sample_points_in_circle(
+    cx: f64,
+    cz: f64,
+    radius: f64,
+    grid_spacing: f64,
+    grid_offset: f64,
+) -> Vec<(f64, f64)> {
+    if radius <= 0.0 {
+        return Vec::new();
+    }
+    let min_x = cx - radius;
+    let max_x = cx + radius;
+    let min_z = cz - radius;
+    let max_z = cz + radius;
+
+    let mut start_x = ((min_x - grid_offset) / grid_spacing).floor()
+        * grid_spacing
+        + grid_offset;
+    let mut start_z = ((min_z - grid_offset) / grid_spacing).floor()
+        * grid_spacing
+        + grid_offset;
+    if start_x < min_x {
+        start_x += grid_spacing;
+    }
+    if start_z < min_z {
+        start_z += grid_spacing;
+    }
+
+    let r_sq = radius * radius;
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    let mut x = start_x;
+    while x < max_x {
+        let mut z = start_z;
+        while z < max_z {
+            let dx = x - cx;
+            let dz = z - cz;
+            if dx * dx + dz * dz <= r_sq {
+                points.push((x, z));
+            }
+            z += grid_spacing;
+        }
+        x += grid_spacing;
+    }
+    points
+}
+
 /// Test if a point is inside any of the given polygon rings.
 fn point_in_any_polygon(
     px: f64,
@@ -495,6 +543,42 @@ pub fn compute_layout_visibility(
         }
     }
 
+    // -- Objective hidability pre-loop setup --
+    let has_objectives = has_dzs
+        && layout
+            .mission
+            .as_ref()
+            .map_or(false, |m| !m.objectives.is_empty());
+
+    // Per-objective sample points
+    let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
+    // {dz_id: {obj_index: HashSet of seen sample indices}}
+    let mut obj_seen_from_dz: HashMap<String, Vec<HashSet<usize>>> =
+        HashMap::new();
+
+    if has_objectives {
+        let mission = layout.mission.as_ref().unwrap();
+        for obj_marker in &mission.objectives {
+            let obj_radius = 0.75 + obj_marker.range_inches;
+            let pts = sample_points_in_circle(
+                obj_marker.position.x_inches,
+                obj_marker.position.z_inches,
+                obj_radius,
+                grid_spacing,
+                grid_offset,
+            );
+            obj_sample_points.push(pts);
+        }
+
+        for dz in &mission.deployment_zones {
+            let mut per_obj: Vec<HashSet<usize>> = Vec::new();
+            for _ in 0..mission.objectives.len() {
+                per_obj.push(HashSet::new());
+            }
+            obj_seen_from_dz.insert(dz.id.clone(), per_obj);
+        }
+    }
+
     // Helper closure to handle DZ accumulation for a given observer
     // when visibility is full (no segments or < 3 vis_poly vertices)
     let accumulate_dz_full =
@@ -502,6 +586,9 @@ pub fn compute_layout_visibility(
          dz_vis_accum: &mut HashMap<String, (f64, i64)>,
          dz_cross_seen: &mut HashMap<String, HashSet<usize>>,
          dz_cross_obs_count: &mut HashMap<String, i64>,
+         obj_seen_from_dz: &mut HashMap<String, Vec<HashSet<usize>>>,
+         obj_sample_points: &[Vec<(f64, f64)>],
+         has_objectives: bool,
          sx: f64,
          sz: f64| {
             for dd in dz_data {
@@ -536,6 +623,20 @@ pub fn compute_layout_visibility(
                             }
                         }
                     }
+                    // Full vis: all objective samples seen from this DZ
+                    if has_objectives {
+                        if let Some(per_obj) =
+                            obj_seen_from_dz.get_mut(&dd.id)
+                        {
+                            for (oi, obj_pts) in
+                                obj_sample_points.iter().enumerate()
+                            {
+                                for i in 0..obj_pts.len() {
+                                    per_obj[oi].insert(i);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         };
@@ -559,6 +660,9 @@ pub fn compute_layout_visibility(
                     &mut dz_vis_accum,
                     &mut dz_cross_seen,
                     &mut dz_cross_obs_count,
+                    &mut obj_seen_from_dz,
+                    &obj_sample_points,
+                    has_objectives,
                     sx,
                     sz,
                 );
@@ -577,6 +681,9 @@ pub fn compute_layout_visibility(
                     &mut dz_vis_accum,
                     &mut dz_cross_seen,
                     &mut dz_cross_obs_count,
+                    &mut obj_seen_from_dz,
+                    &obj_sample_points,
+                    has_objectives,
                     sx,
                     sz,
                 );
@@ -628,6 +735,28 @@ pub fn compute_layout_visibility(
                                             px, pz, &vis_poly,
                                         ) {
                                             seen.insert(i);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Objective hidability: mark seen objective samples
+                    if has_objectives {
+                        if let Some(per_obj) =
+                            obj_seen_from_dz.get_mut(&dd.id)
+                        {
+                            for (oi, obj_pts) in
+                                obj_sample_points.iter().enumerate()
+                            {
+                                for (i, &(px, pz)) in
+                                    obj_pts.iter().enumerate()
+                                {
+                                    if !per_obj[oi].contains(&i) {
+                                        if point_in_polygon(
+                                            px, pz, &vis_poly,
+                                        ) {
+                                            per_obj[oi].insert(i);
                                         }
                                     }
                                 }
@@ -712,6 +841,58 @@ pub fn compute_layout_visibility(
             serde_json::Value::Object(dz_visibility);
         result["dz_to_dz_visibility"] =
             serde_json::Value::Object(dz_to_dz_visibility);
+
+        // Build objective hidability results
+        if has_objectives {
+            let mission = layout.mission.as_ref().unwrap();
+            let dzs = &mission.deployment_zones;
+            let total_objectives = mission.objectives.len();
+            let mut objective_hidability = serde_json::Map::new();
+
+            for dz in dzs {
+                // Count objectives where at least 1 sample NOT seen
+                let mut safe_count = 0;
+                if let Some(per_obj) = obj_seen_from_dz.get(&dz.id) {
+                    for oi in 0..total_objectives {
+                        let total_pts = obj_sample_points[oi].len();
+                        if total_pts == 0 {
+                            continue;
+                        }
+                        let seen_count = per_obj[oi].len();
+                        if seen_count < total_pts {
+                            safe_count += 1;
+                        }
+                    }
+                }
+
+                // Store under the opposing player's DZ id
+                for other_dz in dzs {
+                    if other_dz.id != dz.id {
+                        let pct = if total_objectives > 0 {
+                            (safe_count as f64
+                                / total_objectives as f64
+                                * 100.0
+                                * 100.0)
+                                .round()
+                                / 100.0
+                        } else {
+                            0.0
+                        };
+                        objective_hidability.insert(
+                            other_dz.id.clone(),
+                            serde_json::json!({
+                                "value": pct,
+                                "safe_count": safe_count,
+                                "total_objectives": total_objectives
+                            }),
+                        );
+                    }
+                }
+            }
+
+            result["objective_hidability"] =
+                serde_json::Value::Object(objective_hidability);
+        }
     }
 
     result
@@ -931,7 +1112,9 @@ mod tests {
 
     // -- DZ integration tests --
 
-    use crate::types::{DeploymentZone, Mission, Point2D};
+    use crate::types::{
+        DeploymentZone, Mission, ObjectiveMarker, Point2D,
+    };
 
     fn make_rect_dz(
         id: &str,
@@ -1055,5 +1238,126 @@ mod tests {
             compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
         assert!(result.get("dz_visibility").is_none());
         assert!(result.get("dz_to_dz_visibility").is_none());
+    }
+
+    // -- Sample points in circle tests --
+
+    #[test]
+    fn sample_points_in_circle_known_radius() {
+        let pts = sample_points_in_circle(0.0, 0.0, 3.75, 1.0, 0.5);
+        assert!(!pts.is_empty());
+        let r_sq = 3.75 * 3.75;
+        for &(x, z) in &pts {
+            assert!(x * x + z * z <= r_sq + 1e-9);
+        }
+    }
+
+    #[test]
+    fn sample_points_in_circle_zero_radius() {
+        let pts = sample_points_in_circle(0.0, 0.0, 0.0, 1.0, 0.5);
+        assert!(pts.is_empty());
+    }
+
+    // -- Objective hidability tests --
+
+    fn make_standard_objectives() -> Vec<ObjectiveMarker> {
+        vec![
+            ObjectiveMarker {
+                id: "obj1".into(),
+                position: Point2D {
+                    x_inches: 0.0,
+                    z_inches: 0.0,
+                },
+                range_inches: 3.0,
+            },
+            ObjectiveMarker {
+                id: "obj2".into(),
+                position: Point2D {
+                    x_inches: -12.0,
+                    z_inches: -8.0,
+                },
+                range_inches: 3.0,
+            },
+            ObjectiveMarker {
+                id: "obj3".into(),
+                position: Point2D {
+                    x_inches: 12.0,
+                    z_inches: -8.0,
+                },
+                range_inches: 3.0,
+            },
+            ObjectiveMarker {
+                id: "obj4".into(),
+                position: Point2D {
+                    x_inches: -12.0,
+                    z_inches: 8.0,
+                },
+                range_inches: 3.0,
+            },
+            ObjectiveMarker {
+                id: "obj5".into(),
+                position: Point2D {
+                    x_inches: 12.0,
+                    z_inches: 8.0,
+                },
+                range_inches: 3.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn objective_hidability_empty_table() {
+        let green_dz =
+            make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
+        let mission = Mission {
+            name: "test".into(),
+            objectives: make_standard_objectives(),
+            deployment_zones: vec![green_dz, red_dz],
+            rotationally_symmetric: false,
+        };
+        let layout = make_layout_with_mission(
+            60.0,
+            44.0,
+            vec![],
+            Some(mission),
+        );
+        let objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let result =
+            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+
+        assert!(result.get("objective_hidability").is_some());
+        let oh = &result["objective_hidability"];
+        assert_eq!(oh["green"]["value"].as_f64().unwrap(), 0.0);
+        assert_eq!(oh["red"]["value"].as_f64().unwrap(), 0.0);
+        assert_eq!(oh["green"]["safe_count"].as_i64().unwrap(), 0);
+        assert_eq!(oh["red"]["safe_count"].as_i64().unwrap(), 0);
+        assert_eq!(
+            oh["green"]["total_objectives"].as_i64().unwrap(),
+            5
+        );
+    }
+
+    #[test]
+    fn no_objectives_no_key() {
+        let green_dz =
+            make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
+        let mission = Mission {
+            name: "test".into(),
+            objectives: vec![],
+            deployment_zones: vec![green_dz, red_dz],
+            rotationally_symmetric: false,
+        };
+        let layout = make_layout_with_mission(
+            60.0,
+            44.0,
+            vec![],
+            Some(mission),
+        );
+        let objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let result =
+            compute_layout_visibility(&layout, &objects, 1.0, 0.5, 4.0);
+        assert!(result.get("objective_hidability").is_none());
     }
 }

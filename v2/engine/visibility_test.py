@@ -4,6 +4,7 @@ from engine.types import (
     DeploymentZone,
     FeatureComponent,
     Mission,
+    ObjectiveMarker,
     PlacedFeature,
     Point2D,
     Shape,
@@ -18,6 +19,7 @@ from engine.visibility import (
     _point_in_polygon,
     _polygon_area,
     _ray_segment_intersection,
+    _sample_points_in_circle,
     _sample_points_in_polygon,
     compute_layout_visibility,
 )
@@ -282,11 +284,11 @@ class TestComputeLayoutVisibility:
 # -- DZ helper function tests --
 
 
-def _make_simple_mission(dz_list, symmetric=False):
+def _make_simple_mission(dz_list, symmetric=False, objectives=None):
     """Create a Mission with the given deployment zones."""
     return Mission(
         name="test",
-        objectives=[],
+        objectives=objectives or [],
         deployment_zones=dz_list,
         rotationally_symmetric=symmetric,
     )
@@ -494,3 +496,152 @@ class TestDzVisibility:
         # Values should be close but not necessarily identical due to
         # floating-point differences in observer iteration order
         assert abs(green_val - red_val) < 1.0
+
+
+# -- Sample points in circle tests --
+
+
+class TestSamplePointsInCircle:
+    def test_known_radius(self):
+        """Circle at origin with radius 3.75, 1" grid, 0.5 offset."""
+        pts = _sample_points_in_circle(0.0, 0.0, 3.75, 1.0, 0.5)
+        # Grid points from -3.5 to 3.5 in each axis that fit inside r=3.75
+        assert len(pts) > 0
+        # All points should be within the circle
+        for x, z in pts:
+            assert x * x + z * z <= 3.75**2 + 1e-9
+
+    def test_zero_radius(self):
+        """Zero radius yields no points."""
+        pts = _sample_points_in_circle(0.0, 0.0, 0.0, 1.0, 0.5)
+        assert len(pts) == 0
+
+    def test_offset_center(self):
+        """Circle at non-origin position still works."""
+        pts = _sample_points_in_circle(10.0, 5.0, 3.75, 1.0, 0.5)
+        assert len(pts) > 0
+        for x, z in pts:
+            dx = x - 10.0
+            dz = z - 5.0
+            assert dx * dx + dz * dz <= 3.75**2 + 1e-9
+
+
+# -- Objective hidability tests --
+
+
+def _make_standard_objectives():
+    """Create 5 objectives at standard positions for a 60x44 table."""
+    return [
+        ObjectiveMarker(id="obj1", position=Point2D(x=0.0, z=0.0)),
+        ObjectiveMarker(id="obj2", position=Point2D(x=-12.0, z=-8.0)),
+        ObjectiveMarker(id="obj3", position=Point2D(x=12.0, z=-8.0)),
+        ObjectiveMarker(id="obj4", position=Point2D(x=-12.0, z=8.0)),
+        ObjectiveMarker(id="obj5", position=Point2D(x=12.0, z=8.0)),
+    ]
+
+
+class TestObjectiveHidability:
+    def test_empty_table_no_hiding(self):
+        """No terrain: all objectives fully visible -> 0% safe."""
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        objectives = _make_standard_objectives()
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[],
+            mission=mission,
+        )
+        result = compute_layout_visibility(layout, {})
+
+        assert "objective_hidability" in result
+        oh = result["objective_hidability"]
+        assert oh["green"]["value"] == 0.0
+        assert oh["red"]["value"] == 0.0
+        assert oh["green"]["safe_count"] == 0
+        assert oh["red"]["safe_count"] == 0
+        assert oh["green"]["total_objectives"] == 5
+        assert oh["red"]["total_objectives"] == 5
+
+    def test_blocker_creates_hiding(self):
+        """Wall near objectives creates hiding spots -> > 0% safe."""
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        # Single objective at center
+        objectives = [
+            ObjectiveMarker(id="obj1", position=Point2D(x=0.0, z=0.0))
+        ]
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        # Tall wall right next to the objective, blocking view from red DZ
+        obj = _make_object("wall", 2, 8, 5)
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 2, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"wall": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        oh = result["objective_hidability"]
+        # Green player can hide from red DZ observers (wall blocks red's view)
+        assert oh["green"]["safe_count"] >= 1
+
+    def test_asymmetric_hiding(self):
+        """Wall near one DZ creates asymmetric hiding values."""
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        objectives = _make_standard_objectives()
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        # Wall close to red DZ side, blocking red's view of objectives
+        obj = _make_object("wall", 2, 40, 5)
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 15, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"wall": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        oh = result["objective_hidability"]
+        # Green player benefits more from wall near red DZ
+        # (wall blocks red's view, creating hiding spots for green)
+        assert oh["green"]["safe_count"] >= oh["red"]["safe_count"]
+
+    def test_no_objectives_no_key(self):
+        """Mission with DZs but no objectives -> key absent."""
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        mission = _make_simple_mission([green_dz, red_dz])
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[],
+            mission=mission,
+        )
+        result = compute_layout_visibility(layout, {})
+        assert "objective_hidability" not in result
+
+    def test_no_mission_no_key(self):
+        """No mission at all -> key absent."""
+        layout = _make_layout(60, 44, [])
+        result = compute_layout_visibility(layout, {})
+        assert "objective_hidability" not in result

@@ -189,6 +189,34 @@ def compare_visibility(
                         f"dz_to_dz_visibility[{key}] value: {cv1} vs {cv2}"
                     )
 
+    # Compare objective hidability
+    oh1 = vis1.get("objective_hidability")
+    oh2 = vis2.get("objective_hidability")
+    if (oh1 is None) != (oh2 is None):
+        diffs.append(
+            f"objective_hidability: one is None, other is not "
+            f"(py={oh1 is not None}, rs={oh2 is not None})"
+        )
+    elif oh1 is not None and oh2 is not None:
+        for key in set(list(oh1.keys()) + list(oh2.keys())):
+            if key not in oh1:
+                diffs.append(f"objective_hidability[{key}]: missing in Python")
+            elif key not in oh2:
+                diffs.append(f"objective_hidability[{key}]: missing in Rust")
+            else:
+                ov1 = oh1[key].get("value", 0.0)
+                ov2 = oh2[key].get("value", 0.0)
+                if abs(ov1 - ov2) > 0.01:
+                    diffs.append(
+                        f"objective_hidability[{key}] value: {ov1} vs {ov2}"
+                    )
+                sc1 = oh1[key].get("safe_count", 0)
+                sc2 = oh2[key].get("safe_count", 0)
+                if sc1 != sc2:
+                    diffs.append(
+                        f"objective_hidability[{key}] safe_count: {sc1} vs {sc2}"
+                    )
+
     return len(diffs) == 0, diffs
 
 

@@ -337,6 +337,53 @@ def _sample_points_in_dz(
     return points
 
 
+def _sample_points_in_circle(
+    cx: float,
+    cz: float,
+    radius: float,
+    grid_spacing: float,
+    grid_offset: float,
+) -> list[tuple[float, float]]:
+    """Generate grid sample points that fall inside a circle.
+
+    Uses AABB bounding box to limit search, then distance-filters.
+    """
+    if radius <= 0:
+        return []
+    min_x = cx - radius
+    max_x = cx + radius
+    min_z = cz - radius
+    max_z = cz + radius
+
+    # Align to global grid
+    start_x = (
+        math.floor((min_x - grid_offset) / grid_spacing) * grid_spacing
+        + grid_offset
+    )
+    start_z = (
+        math.floor((min_z - grid_offset) / grid_spacing) * grid_spacing
+        + grid_offset
+    )
+    if start_x < min_x:
+        start_x += grid_spacing
+    if start_z < min_z:
+        start_z += grid_spacing
+
+    r_sq = radius * radius
+    points: list[tuple[float, float]] = []
+    x = start_x
+    while x < max_x:
+        z = start_z
+        while z < max_z:
+            dx = x - cx
+            dz = z - cz
+            if dx * dx + dz * dz <= r_sq:
+                points.append((x, z))
+            z += grid_spacing
+        x += grid_spacing
+    return points
+
+
 def _point_in_any_polygon(
     px: float, pz: float, polygons: list[list[tuple[float, float]]]
 ) -> bool:
@@ -442,6 +489,35 @@ def compute_layout_visibility(
                     dz_cross_seen[key] = set()
                     dz_cross_obs_count[key] = 0
 
+    # -- Objective hidability pre-loop setup --
+    has_objectives = (
+        has_dzs
+        and layout.mission is not None
+        and len(layout.mission.objectives) > 0
+    )
+    # Per-objective sample points
+    obj_sample_points: list[list[tuple[float, float]]] = []
+    # {dz_id: {obj_index: set of seen sample indices}}
+    obj_seen_from_dz: dict[str, dict[int, set[int]]] = {}
+
+    if has_objectives:
+        mission = layout.mission
+        for obj_marker in mission.objectives:
+            obj_radius = 0.75 + obj_marker.range_inches
+            pts = _sample_points_in_circle(
+                obj_marker.position.x,
+                obj_marker.position.z,
+                obj_radius,
+                grid_spacing,
+                grid_offset,
+            )
+            obj_sample_points.append(pts)
+
+        for dz in mission.deployment_zones:
+            obj_seen_from_dz[dz.id] = {
+                i: set() for i in range(len(mission.objectives))
+            }
+
     total_ratio = 0.0
 
     for sx, sz in sample_points:
@@ -472,6 +548,12 @@ def compute_layout_visibility(
                                     dz_cross_seen[key].update(
                                         range(len(other_samples))
                                     )
+                        # Full vis: all objective samples seen from this DZ
+                        if has_objectives:
+                            for oi, obj_pts in enumerate(obj_sample_points):
+                                obj_seen_from_dz[dz_id][oi].update(
+                                    range(len(obj_pts))
+                                )
             continue
 
         vis_poly = _compute_visibility_polygon(
@@ -498,6 +580,12 @@ def compute_layout_visibility(
                                     dz_cross_seen[key].update(
                                         range(len(other_samples))
                                     )
+                        # Full vis: all objective samples seen from this DZ
+                        if has_objectives:
+                            for oi, obj_pts in enumerate(obj_sample_points):
+                                obj_seen_from_dz[dz_id][oi].update(
+                                    range(len(obj_pts))
+                                )
             continue
 
         vis_area = _polygon_area(vis_poly)
@@ -529,6 +617,14 @@ def compute_layout_visibility(
                                     if i not in seen:
                                         if _point_in_polygon(px, pz, vis_poly):
                                             seen.add(i)
+                    # Objective hidability: mark seen objective samples
+                    if has_objectives:
+                        for oi, obj_pts in enumerate(obj_sample_points):
+                            seen = obj_seen_from_dz[dz_id][oi]
+                            for i, (px, pz) in enumerate(obj_pts):
+                                if i not in seen:
+                                    if _point_in_polygon(px, pz, vis_poly):
+                                        seen.add(i)
 
     avg_visibility = total_ratio / len(sample_points)
     value = round(avg_visibility * 100.0, 2)
@@ -589,5 +685,44 @@ def compute_layout_visibility(
 
         result["dz_visibility"] = dz_visibility
         result["dz_to_dz_visibility"] = dz_to_dz_visibility
+
+        # Build objective hidability results
+        if has_objectives:
+            mission = layout.mission
+            dzs = mission.deployment_zones
+            objective_hidability: dict = {}
+
+            for dz in dzs:
+                # Objectives "safe" for the OPPOSING player means
+                # objectives where at least 1 sample was NOT seen from this DZ
+                total_objectives = len(mission.objectives)
+                safe_count = 0
+                for oi in range(total_objectives):
+                    total_pts = len(obj_sample_points[oi])
+                    if total_pts == 0:
+                        continue
+                    seen_count = len(obj_seen_from_dz[dz.id][oi])
+                    if seen_count < total_pts:
+                        safe_count += 1
+
+                # This DZ's threat data: the opposing player can hide at
+                # safe_count objectives. Label by the opposing player's color.
+                # Convention: green.value = % objectives green can hide at
+                # = objectives with hiding spots from red's perspective
+                # So we store under the OTHER DZ's id.
+                for other_dz in dzs:
+                    if other_dz.id != dz.id:
+                        pct = (
+                            round(safe_count / total_objectives * 100.0, 2)
+                            if total_objectives > 0
+                            else 0.0
+                        )
+                        objective_hidability[other_dz.id] = {
+                            "value": pct,
+                            "safe_count": safe_count,
+                            "total_objectives": total_objectives,
+                        }
+
+            result["objective_hidability"] = objective_hidability
 
     return result

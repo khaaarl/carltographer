@@ -665,6 +665,11 @@ class ControlPanel(ttk.Frame):
             row=row, column=0, columnspan=2, sticky="w", pady=2
         )
         row += 1
+        self.obj_hide_label = ttk.Label(right, text="")
+        self.obj_hide_label.grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=2
+        )
+        row += 1
 
     def _section(self, parent, row, title):
         ttk.Label(parent, text=title, font=("", 11, "bold")).grid(
@@ -1159,11 +1164,25 @@ class App:
                     )
                 else:
                     self.controls.dz_to_dz_vis_label.config(text="")
+
+                # Objective hidability
+                obj_hide = vis.get("objective_hidability")
+                if isinstance(obj_hide, dict) and obj_hide:
+                    parts = [
+                        f"{dz_id}: {data['value']}%"
+                        for dz_id, data in obj_hide.items()
+                    ]
+                    self.controls.obj_hide_label.config(
+                        text=f"Obj Hide: {', '.join(parts)}"
+                    )
+                else:
+                    self.controls.obj_hide_label.config(text="")
                 return
 
         self.controls.visibility_label.config(text="Visibility: --")
         self.controls.dz_vis_label.config(text="")
         self.controls.dz_to_dz_vis_label.config(text="")
+        self.controls.obj_hide_label.config(text="")
 
     def run(self):
         self.root.mainloop()
