@@ -260,6 +260,12 @@ def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     if not mission_match:
         diffs.extend(mission_diffs)
 
+    # Compare score
+    score1 = result1.get("score", 0.0)
+    score2 = result2.get("score", 0.0)
+    if abs(score1 - score2) > 0.01:
+        diffs.append(f"Score: {score1} vs {score2}")
+
     return len(diffs) == 0, diffs
 
 
@@ -585,6 +591,23 @@ TEST_SCENARIOS = [
         seed=99,
         num_steps=50,
         mission=Mission.from_dict(_require_mission("Dawn of War")),
+    ),
+    TestScenario(
+        "scoring_with_prefs",
+        seed=42,
+        num_steps=50,
+        feature_count_preferences=[
+            FeatureCountPreference(
+                feature_type="obstacle",
+                min=3,
+                max=8,
+            )
+        ],
+    ),
+    TestScenario(
+        "scoring_no_prefs",
+        seed=99,
+        num_steps=50,
     ),
 ]
 

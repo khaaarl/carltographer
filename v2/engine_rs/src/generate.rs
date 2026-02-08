@@ -5,9 +5,11 @@ use std::collections::HashMap;
 use crate::collision::is_valid_placement;
 use crate::prng::Pcg32;
 use crate::types::{
-    EngineParams, EngineResult, PlacedFeature, TerrainCatalog,
-    TerrainFeature, TerrainLayout, TerrainObject, Transform,
+    EngineParams, EngineResult, FeatureCountPreference, PlacedFeature,
+    TerrainCatalog, TerrainFeature, TerrainLayout, TerrainObject, Transform,
 };
+
+const PHASE2_BASE: f64 = 1000.0;
 
 fn build_object_index<'a>(
     catalog: &'a TerrainCatalog,
@@ -159,11 +161,53 @@ fn compute_delete_weights(
     weights
 }
 
+fn compute_score(
+    layout: &TerrainLayout,
+    preferences: &[FeatureCountPreference],
+    objects_by_id: &HashMap<String, &TerrainObject>,
+) -> f64 {
+    // Compute fitness score for hill-climbing.
+    // Phase 1 (score < PHASE2_BASE): gradient toward satisfying count preferences.
+    // Phase 2 (score >= PHASE2_BASE): optimize visibility (lower visibility = higher score).
+    let counts = count_features_by_type(
+        &layout.placed_features,
+        layout.rotationally_symmetric,
+    );
+    let mut total_deficit: u32 = 0;
+    for pref in preferences {
+        let current = counts
+            .get(&pref.feature_type)
+            .copied()
+            .unwrap_or(0);
+        if current < pref.min {
+            total_deficit += pref.min - current;
+        } else if let Some(max) = pref.max {
+            if current > max {
+                total_deficit += current - max;
+            }
+        }
+    }
+
+    if total_deficit > 0 {
+        return PHASE2_BASE / (1.0 + total_deficit as f64);
+    }
+
+    let vis = crate::visibility::compute_layout_visibility(
+        layout,
+        objects_by_id,
+        1.0,  // grid_spacing
+        0.5,  // grid_offset
+        4.0,  // min_blocking_height
+    );
+    let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
+    PHASE2_BASE + (100.0 - vis_pct)
+}
+
 pub fn generate(params: &EngineParams) -> EngineResult {
     let mut rng = Pcg32::new(params.seed, 0);
     let objects_by_id = build_object_index(&params.catalog);
 
-    let (mut placed_features, mut nid) =
+    let (initial_features, mut nid) =
         match &params.initial_layout {
             Some(initial) => {
                 let feats = initial.placed_features.clone();
@@ -181,17 +225,28 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         .collect();
     let has_catalog = !catalog_features.is_empty();
     let num_steps = params.steps();
+    let prefs = params.feature_count_preferences.as_deref().unwrap_or(&[]);
+
+    let mut layout = TerrainLayout {
+        table_width_inches: params.table_width_inches,
+        table_depth_inches: params.table_depth_inches,
+        placed_features: initial_features,
+        rotationally_symmetric: params.rotationally_symmetric,
+        visibility: None,
+        mission: params.mission.clone(),
+    };
+
+    let mut current_score = compute_score(&layout, prefs, &objects_by_id);
 
     for _ in 0..num_steps {
-        let has_features = !placed_features.is_empty();
-        let feature_counts = count_features_by_type(&placed_features, params.rotationally_symmetric);
+        let has_features = !layout.placed_features.is_empty();
+        let feature_counts = count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
 
         // Compute action weights with multiplicative biasing across all prefs
         let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
         let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
         let mut delete_weight: f64 = if has_features { 1.0 } else { 0.0 };
 
-        let prefs = params.feature_count_preferences.as_deref().unwrap_or(&[]);
         for pref in prefs {
             let current = feature_counts
                 .get(&pref.feature_type)
@@ -240,7 +295,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                         - params.table_depth_inches / 2.0
                 );
                 let rot = quantize_angle(rng.next_float() * 360.0);
-                placed_features.push(PlacedFeature {
+                layout.placed_features.push(PlacedFeature {
                     feature: new_feat,
                     transform: Transform {
                         x_inches: x,
@@ -249,9 +304,9 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                         rotation_deg: rot,
                     },
                 });
-                let idx = placed_features.len() - 1;
+                let idx = layout.placed_features.len() - 1;
                 if is_valid_placement(
-                    &placed_features,
+                    &layout.placed_features,
                     idx,
                     params.table_width_inches,
                     params.table_depth_inches,
@@ -260,17 +315,23 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    nid += 1;
+                    let new_score = compute_score(&layout, prefs, &objects_by_id);
+                    if new_score >= current_score {
+                        current_score = new_score;
+                        nid += 1;
+                    } else {
+                        layout.placed_features.pop();
+                    }
                 } else {
-                    placed_features.pop();
+                    layout.placed_features.pop();
                 }
             }
             1 => {
                 let idx = rng.next_int(
                     0,
-                    placed_features.len() as u32 - 1,
+                    layout.placed_features.len() as u32 - 1,
                 ) as usize;
-                let old = placed_features[idx].clone();
+                let old = layout.placed_features[idx].clone();
                 let x = quantize_position(
                     rng.next_float()
                         * params.table_width_inches
@@ -282,14 +343,14 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                         - params.table_depth_inches / 2.0
                 );
                 let rot = quantize_angle(rng.next_float() * 360.0);
-                placed_features[idx].transform = Transform {
+                layout.placed_features[idx].transform = Transform {
                     x_inches: x,
                     y_inches: 0.0,
                     z_inches: z,
                     rotation_deg: rot,
                 };
-                if !is_valid_placement(
-                    &placed_features,
+                if is_valid_placement(
+                    &layout.placed_features,
                     idx,
                     params.table_width_inches,
                     params.table_depth_inches,
@@ -298,12 +359,19 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    placed_features[idx] = old;
+                    let new_score = compute_score(&layout, prefs, &objects_by_id);
+                    if new_score >= current_score {
+                        current_score = new_score;
+                    } else {
+                        layout.placed_features[idx] = old;
+                    }
+                } else {
+                    layout.placed_features[idx] = old;
                 }
             }
             2 => {
                 let delete_weights = compute_delete_weights(
-                    &placed_features,
+                    &layout.placed_features,
                     &feature_counts,
                     prefs,
                 );
@@ -311,20 +379,17 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     Some(i) => i,
                     None => continue,
                 };
-                placed_features.remove(idx);
+                let saved = layout.placed_features.remove(idx);
+                let new_score = compute_score(&layout, prefs, &objects_by_id);
+                if new_score >= current_score {
+                    current_score = new_score;
+                } else {
+                    layout.placed_features.insert(idx, saved);
+                }
             }
             _ => unreachable!(),
         }
     }
-
-    let mut layout = TerrainLayout {
-        table_width_inches: params.table_width_inches,
-        table_depth_inches: params.table_depth_inches,
-        placed_features,
-        rotationally_symmetric: params.rotationally_symmetric,
-        visibility: None,
-        mission: params.mission.clone(),
-    };
 
     layout.visibility = Some(
         crate::visibility::compute_layout_visibility(
@@ -338,7 +403,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
 
     EngineResult {
         layout,
-        score: 0.0,
+        score: current_score,
         steps_completed: num_steps,
     }
 }

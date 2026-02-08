@@ -9,9 +9,18 @@ from engine.collision import (
     obb_to_table_edge_distance,
     obbs_overlap,
 )
-from engine.generate import generate, generate_json
+from engine.generate import (
+    PHASE2_BASE,
+    _compute_score,
+    generate,
+    generate_json,
+)
 from engine.prng import PCG32
-from engine.types import EngineParams
+from engine.types import (
+    EngineParams,
+    FeatureCountPreference,
+    TerrainLayout,
+)
 
 
 def _crate_catalog_dict():
@@ -409,3 +418,72 @@ class TestJSON:
             assert "x_inches" in t
             assert "z_inches" in t
             assert "rotation_deg" in t
+
+
+# -- Scoring ------------------------------------------------------------
+
+
+class TestScoring:
+    def test_score_nonzero(self):
+        """Score is > 0 after generation."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=50)
+        )
+        result = generate(params)
+        assert result.score > 0
+
+    def test_score_phase2_when_no_prefs(self):
+        """With no preferences, score >= PHASE2_BASE (straight to Phase 2)."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=50)
+        )
+        result = generate(params)
+        assert result.score >= PHASE2_BASE
+
+    def test_score_deterministic(self):
+        """Same seed produces same score."""
+        p1 = EngineParams.from_dict(_make_params_dict(seed=123, num_steps=100))
+        p2 = EngineParams.from_dict(_make_params_dict(seed=123, num_steps=100))
+        r1 = generate(p1)
+        r2 = generate(p2)
+        assert r1.score == r2.score
+
+    def test_score_increases_with_more_steps(self):
+        """Longer run score >= shorter run score (same seed)."""
+        p_short = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=10)
+        )
+        p_long = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=100)
+        )
+        r_short = generate(p_short)
+        r_long = generate(p_long)
+        assert r_long.score >= r_short.score
+
+    def test_score_phase1_with_zero_steps(self):
+        """Empty layout with min=5 preference -> score = PHASE2_BASE / 6."""
+        layout = TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+        )
+        prefs = [FeatureCountPreference(feature_type="obstacle", min=5)]
+        score = _compute_score(layout, prefs, {})
+        expected = PHASE2_BASE / (1.0 + 5)
+        assert abs(score - expected) < 1e-6
+
+    def test_delete_reversion(self):
+        """With min=5 preference and enough steps, count stays >= 5."""
+        pd = _make_params_dict(seed=42, num_steps=200)
+        pd["feature_count_preferences"] = [
+            {"feature_type": "obstacle", "min": 5}
+        ]
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        count = len(result.layout.placed_features)
+        assert count >= 5, f"Expected >= 5 features, got {count}"
+
+    def test_score_in_result_dict(self):
+        """Score appears in JSON output."""
+        result = generate_json(_make_params_dict(seed=42, num_steps=50))
+        assert "score" in result
+        assert result["score"] > 0

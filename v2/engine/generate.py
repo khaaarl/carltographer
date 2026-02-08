@@ -7,6 +7,7 @@ from .prng import PCG32
 from .types import (
     EngineParams,
     EngineResult,
+    FeatureCountPreference,
     PlacedFeature,
     TerrainCatalog,
     TerrainFeature,
@@ -15,6 +16,8 @@ from .types import (
     Transform,
 )
 from .visibility import compute_layout_visibility
+
+PHASE2_BASE = 1000.0
 
 
 def _quantize_position(value: float) -> float:
@@ -114,6 +117,33 @@ def _build_object_index(
     return {co.item.id: co.item for co in catalog.objects}
 
 
+def _compute_score(
+    layout: TerrainLayout,
+    feature_count_preferences: list[FeatureCountPreference],
+    objects_by_id: dict[str, TerrainObject],
+) -> float:
+    """Compute fitness score for hill-climbing.
+
+    Phase 1 (score < PHASE2_BASE): gradient toward satisfying count preferences.
+    Phase 2 (score >= PHASE2_BASE): optimize visibility (lower visibility = higher score).
+    """
+    counts = _count_features_by_type(layout)
+    total_deficit = 0
+    for pref in feature_count_preferences:
+        current = counts.get(pref.feature_type, 0)
+        if current < pref.min:
+            total_deficit += pref.min - current
+        elif pref.max is not None and current > pref.max:
+            total_deficit += current - pref.max
+
+    if total_deficit > 0:
+        return PHASE2_BASE / (1.0 + total_deficit)
+
+    vis = compute_layout_visibility(layout, objects_by_id)
+    vis_pct = vis["overall"]["value"]
+    return PHASE2_BASE + (100.0 - vis_pct)
+
+
 def _instantiate_feature(
     template: TerrainFeature, feature_id: int
 ) -> TerrainFeature:
@@ -158,6 +188,10 @@ def generate(params: EngineParams) -> EngineResult:
 
     catalog_features = [cf.item for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
+
+    current_score = _compute_score(
+        layout, params.feature_count_preferences, objects_by_id
+    )
 
     for _ in range(params.num_steps):
         features = layout.placed_features
@@ -216,7 +250,14 @@ def generate(params: EngineParams) -> EngineResult:
                 min_edge_gap=params.min_edge_gap_inches,
                 rotationally_symmetric=params.rotationally_symmetric,
             ):
-                next_id += 1
+                new_score = _compute_score(
+                    layout, params.feature_count_preferences, objects_by_id
+                )
+                if new_score >= current_score:
+                    current_score = new_score
+                    next_id += 1
+                else:
+                    features.pop()
             else:
                 features.pop()
 
@@ -231,7 +272,7 @@ def generate(params: EngineParams) -> EngineResult:
             )
             rot = _quantize_angle(rng.next_float() * 360.0)
             features[idx] = PlacedFeature(old.feature, Transform(x, z, rot))
-            if not is_valid_placement(
+            if is_valid_placement(
                 features,
                 idx,
                 params.table_width,
@@ -241,6 +282,14 @@ def generate(params: EngineParams) -> EngineResult:
                 min_edge_gap=params.min_edge_gap_inches,
                 rotationally_symmetric=params.rotationally_symmetric,
             ):
+                new_score = _compute_score(
+                    layout, params.feature_count_preferences, objects_by_id
+                )
+                if new_score >= current_score:
+                    current_score = new_score
+                else:
+                    features[idx] = old
+            else:
                 features[idx] = old
 
         elif action == 2:
@@ -250,12 +299,20 @@ def generate(params: EngineParams) -> EngineResult:
             idx = _weighted_choice(rng, delete_weights)
             if idx < 0:
                 continue
-            features.pop(idx)
+            saved = features.pop(idx)
+            new_score = _compute_score(
+                layout, params.feature_count_preferences, objects_by_id
+            )
+            if new_score >= current_score:
+                current_score = new_score
+            else:
+                features.insert(idx, saved)
 
     layout.visibility = compute_layout_visibility(layout, objects_by_id)
 
     return EngineResult(
         layout=layout,
+        score=current_score,
         steps_completed=params.num_steps,
     )
 
