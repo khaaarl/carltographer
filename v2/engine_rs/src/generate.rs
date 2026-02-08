@@ -323,6 +323,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         placed_features,
         rotationally_symmetric: params.rotationally_symmetric,
         visibility: None,
+        mission: params.mission.clone(),
     };
 
     layout.visibility = Some(

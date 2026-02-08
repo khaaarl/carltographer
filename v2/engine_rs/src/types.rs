@@ -63,6 +63,45 @@ pub struct PlacedFeature {
     pub transform: Transform,
 }
 
+// -- Mission / Deployment ------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Point2D {
+    pub x_inches: f64,
+    pub z_inches: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectiveMarker {
+    pub id: String,
+    pub position: Point2D,
+    #[serde(default = "default_range_inches")]
+    pub range_inches: f64,
+}
+
+fn default_range_inches() -> f64 {
+    3.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentZone {
+    pub id: String,
+    #[serde(default)]
+    pub polygons: Vec<Vec<Point2D>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mission {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub objectives: Vec<ObjectiveMarker>,
+    #[serde(default)]
+    pub deployment_zones: Vec<DeploymentZone>,
+    #[serde(default)]
+    pub rotationally_symmetric: bool,
+}
+
 // -- Layout --------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +114,8 @@ pub struct TerrainLayout {
     pub rotationally_symmetric: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission: Option<Mission>,
 }
 
 // -- Catalog -------------------------------------------------------
@@ -132,6 +173,8 @@ pub struct EngineParams {
     pub min_edge_gap_inches: Option<f64>,
     #[serde(default)]
     pub rotationally_symmetric: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission: Option<Mission>,
 }
 
 impl EngineParams {
@@ -206,6 +249,7 @@ mod tests {
                 placed_features: vec![],
                 rotationally_symmetric: false,
                 visibility: None,
+                mission: None,
             },
             score: 0.0,
             steps_completed: 50,

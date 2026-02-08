@@ -162,6 +162,12 @@
         },
         "position": {
           "$ref": "#/$defs/point_2d"
+        },
+        "range_inches": {
+          "type": "number",
+          "minimum": 0,
+          "default": 3.0,
+          "description": "Objective control range in inches. Default is 3 inches."
         }
       },
       "required": ["id", "position"],
@@ -170,20 +176,24 @@
 
     "deployment_zone": {
       "type": "object",
-      "description": "A deployment zone defined as a polygon on the table surface.",
+      "description": "A deployment zone defined as one or more polygons on the table surface.",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Identifier for this zone (e.g. 'attacker', 'defender', 'player_1', 'player_2')."
+          "description": "Identifier for this zone — typically a color name (e.g. 'red', 'green')."
         },
-        "vertices": {
+        "polygons": {
           "type": "array",
-          "items": { "$ref": "#/$defs/point_2d" },
-          "minItems": 3,
-          "description": "Vertices of the polygon in order (clockwise or counterclockwise). The polygon is implicitly closed (last vertex connects back to first)."
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/point_2d" },
+            "minItems": 3,
+            "description": "Vertices of a polygon in order (clockwise or counterclockwise). The polygon is implicitly closed."
+          },
+          "description": "Zero or more polygons that make up this deployment zone."
         }
       },
-      "required": ["id", "vertices"],
+      "required": ["id", "polygons"],
       "additionalProperties": false
     },
 
@@ -193,7 +203,12 @@
       "properties": {
         "name": {
           "type": "string",
-          "description": "Mission name (e.g. 'Sweeping Engagement', 'Search and Destroy')."
+          "description": "Mission name (e.g. 'Hammer and Anvil', 'Dawn of War')."
+        },
+        "rotationally_symmetric": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the deployment zones and objectives have 180-degree rotational symmetry around the table center."
         },
         "objectives": {
           "type": "array",

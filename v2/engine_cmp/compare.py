@@ -19,11 +19,13 @@ from engine.types import (
     EngineParams,
     FeatureComponent,
     FeatureCountPreference,
+    Mission,
     Shape,
     TerrainCatalog,
     TerrainFeature,
     TerrainObject,
 )
+from frontend.missions import get_mission
 
 from .hash_manifest import compute_engine_hashes, write_manifest
 
@@ -148,6 +150,47 @@ def compare_visibility(
     return len(diffs) == 0, diffs
 
 
+def compare_missions(
+    m1: dict | None, m2: dict | None
+) -> tuple[bool, list[str]]:
+    """Compare mission data between engines.
+
+    Returns (match: bool, diffs: list of error messages).
+    """
+    diffs = []
+
+    if m1 is None and m2 is None:
+        return True, []
+
+    if m1 is None or m2 is None:
+        diffs.append(
+            f"Mission: one is None, other is not (py={m1 is not None}, rs={m2 is not None})"
+        )
+        return False, diffs
+
+    if m1.get("name") != m2.get("name"):
+        diffs.append(f"Mission name: {m1.get('name')} vs {m2.get('name')}")
+
+    if m1.get("rotationally_symmetric") != m2.get("rotationally_symmetric"):
+        diffs.append(
+            f"Mission rotationally_symmetric: {m1.get('rotationally_symmetric')} vs {m2.get('rotationally_symmetric')}"
+        )
+
+    obj1 = m1.get("objectives", [])
+    obj2 = m2.get("objectives", [])
+    if len(obj1) != len(obj2):
+        diffs.append(f"Mission objectives count: {len(obj1)} vs {len(obj2)}")
+
+    dz1 = m1.get("deployment_zones", [])
+    dz2 = m2.get("deployment_zones", [])
+    if len(dz1) != len(dz2):
+        diffs.append(
+            f"Mission deployment_zones count: {len(dz1)} vs {len(dz2)}"
+        )
+
+    return len(diffs) == 0, diffs
+
+
 def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     """Compare full EngineResult objects.
 
@@ -167,6 +210,13 @@ def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     vis_match, vis_diffs = compare_visibility(vis1, vis2)
     if not vis_match:
         diffs.extend(vis_diffs)
+
+    # Compare mission
+    mission1 = layout1.get("mission")
+    mission2 = layout2.get("mission")
+    mission_match, mission_diffs = compare_missions(mission1, mission2)
+    if not mission_match:
+        diffs.extend(mission_diffs)
 
     return len(diffs) == 0, diffs
 
@@ -290,6 +340,7 @@ def make_test_params(
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None,
     catalog: Optional[TerrainCatalog] = None,
     rotationally_symmetric: bool = False,
+    mission: Optional[Mission] = None,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -303,6 +354,7 @@ def make_test_params(
         min_feature_gap_inches=min_feature_gap_inches,
         min_edge_gap_inches=min_edge_gap_inches,
         rotationally_symmetric=rotationally_symmetric,
+        mission=mission,
     )
 
 
@@ -320,6 +372,7 @@ class TestScenario:
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None
     catalog: Optional[TerrainCatalog] = None
     rotationally_symmetric: bool = False
+    mission: Optional[Mission] = None
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -333,10 +386,23 @@ class TestScenario:
             feature_count_preferences=self.feature_count_preferences,
             catalog=self.catalog,
             rotationally_symmetric=self.rotationally_symmetric,
+            mission=self.mission,
         )
 
 
-# 12 diverse test scenarios
+def _require_mission(deployment_name: str) -> dict:
+    """Look up a CA2025-26 mission by deployment name, raising if not found."""
+    m = get_mission(
+        "10th Edition",
+        "Matched Play: Chapter Approved 2025-26",
+        deployment_name,
+    )
+    if m is None:
+        raise ValueError(f"Mission {deployment_name!r} not found")
+    return m
+
+
+# Test scenarios
 TEST_SCENARIOS = [
     TestScenario("basic_10_steps", seed=42, num_steps=10),
     TestScenario("basic_50_steps", seed=42, num_steps=50),
@@ -465,6 +531,18 @@ TEST_SCENARIOS = [
             ),
         ],
         rotationally_symmetric=True,
+    ),
+    TestScenario(
+        "with_mission_hna",
+        seed=42,
+        num_steps=50,
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+    ),
+    TestScenario(
+        "with_mission_dow",
+        seed=99,
+        num_steps=50,
+        mission=Mission.from_dict(_require_mission("Dawn of War")),
     ),
 ]
 
@@ -606,6 +684,11 @@ def run_comparison(
             **(
                 {"rotationally_symmetric": True}
                 if params.rotationally_symmetric
+                else {}
+            ),
+            **(
+                {"mission": params.mission.to_dict()}
+                if params.mission is not None
                 else {}
             ),
         }

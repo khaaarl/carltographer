@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageTk
 from ..engine import generate_json
 from ..engine_cmp.hash_manifest import verify_engine_unchanged
 from .layout_io import load_layout, save_layout_png
+from .missions import EDITIONS, find_mission_path
 
 try:
     import engine_rs as _engine_rs
@@ -49,6 +50,20 @@ TABLE_GRID = "#264e22"  # subtle darker grid
 TABLE_BORDER = "#111111"
 CANVAS_BG = "#1e1e1e"
 DEFAULT_FILL = "#888888"
+
+# Mission rendering colors
+NO_MANS_LAND_BG = "#d4c5a0"  # cream/tan for no-man's land
+NO_MANS_LAND_GRID = "#c4b590"  # slightly darker grid for NML
+
+DZ_COLORS = {
+    "red": {"bg": "#5c2a2a", "grid": "#4c2020"},
+    "green": {"bg": "#2a4a2a", "grid": "#204020"},
+}
+
+OBJECTIVE_RADIUS_INCHES = 0.75  # 1.5" diameter marker
+OBJECTIVE_FILL = "#111111"
+OBJECTIVE_OUTLINE = "#000000"
+RANGE_DASH_COLOR = "#000000"
 
 # ---------------------------------------------------------------------------
 # Sample data (structured per carltographer.schema.json)
@@ -159,11 +174,14 @@ def _compose(outer, inner):
 class BattlefieldRenderer:
     """Renders a terrain layout to a Pillow image."""
 
-    def __init__(self, table_width, table_depth, ppi, objects_by_id):
+    def __init__(
+        self, table_width, table_depth, ppi, objects_by_id, mission=None
+    ):
         self.table_width = table_width
         self.table_depth = table_depth
         self.ppi = ppi
         self.objects_by_id = objects_by_id
+        self.mission = mission
 
     def _to_px(self, x_inches, z_inches):
         """Table coords (center origin) -> pixel coords (top-left origin)."""
@@ -171,20 +189,62 @@ class BattlefieldRenderer:
         py = (z_inches + self.table_depth / 2) * self.ppi
         return px, py
 
+    def _build_dz_rects_px(self):
+        """Build list of (x_min, z_min, x_max, z_max, color_id) rects in table inches."""
+        if not self.mission:
+            return []
+        rects = []
+        for dz in self.mission.get("deployment_zones", []):
+            color_id = dz["id"]
+            for poly in dz.get("polygons", []):
+                xs = [p["x_inches"] for p in poly]
+                zs = [p["z_inches"] for p in poly]
+                rects.append((min(xs), min(zs), max(xs), max(zs), color_id))
+        return rects
+
+    def _get_zone_color_at(self, x_inches, z_inches, dz_rects):
+        """Return zone color_id at a table-space point, or None for NML."""
+        for x_min, z_min, x_max, z_max, color_id in dz_rects:
+            if x_min <= x_inches <= x_max and z_min <= z_inches <= z_max:
+                return color_id
+        return None
+
     def render(self, layout):
         w = int(self.table_width * self.ppi)
         h = int(self.table_depth * self.ppi)
-        img = Image.new("RGB", (w, h), TABLE_BG)
+        has_mission = self.mission is not None
+
+        # 1. Background
+        bg = NO_MANS_LAND_BG if has_mission else TABLE_BG
+        img = Image.new("RGB", (w, h), bg)
         draw = ImageDraw.Draw(img)
 
-        # 1" grid
-        for ix in range(1, int(self.table_width)):
-            px = int(ix * self.ppi)
-            draw.line([(px, 0), (px, h - 1)], fill=TABLE_GRID)
-        for iz in range(1, int(self.table_depth)):
-            py = int(iz * self.ppi)
-            draw.line([(0, py), (w - 1, py)], fill=TABLE_GRID)
+        # 2. DZ backgrounds
+        dz_rects = []
+        mission = self.mission
+        if mission is not None:
+            dz_rects = self._build_dz_rects_px()
+            for dz in mission.get("deployment_zones", []):
+                color_id = dz["id"]
+                colors = DZ_COLORS.get(color_id, DZ_COLORS["red"])
+                for poly in dz.get("polygons", []):
+                    px_poly = [
+                        self._to_px(p["x_inches"], p["z_inches"]) for p in poly
+                    ]
+                    draw.polygon(px_poly, fill=colors["bg"])
 
+        # 3. Grid lines (zone-aware if mission)
+        if has_mission:
+            self._draw_zone_aware_grid(draw, w, h, dz_rects)
+        else:
+            for ix in range(1, int(self.table_width)):
+                px = int(ix * self.ppi)
+                draw.line([(px, 0), (px, h - 1)], fill=TABLE_GRID)
+            for iz in range(1, int(self.table_depth)):
+                py = int(iz * self.ppi)
+                draw.line([(0, py), (w - 1, py)], fill=TABLE_GRID)
+
+        # 4. Terrain features
         for pf in layout["placed_features"]:
             self._draw_placed_feature(draw, pf)
             if layout.get("rotationally_symmetric", False):
@@ -195,9 +255,138 @@ class BattlefieldRenderer:
                 ):
                     self._draw_placed_feature(draw, _mirror_pf_dict(pf))
 
-        # Table border
+        # 5. Objective markers (on top of terrain)
+        if mission is not None:
+            for obj in mission.get("objectives", []):
+                self._draw_objective(draw, obj)
+
+        # 6. Table border
         draw.rectangle([0, 0, w - 1, h - 1], outline=TABLE_BORDER, width=3)
         return img
+
+    def _draw_zone_aware_grid(self, draw, w, h, dz_rects):
+        """Draw grid lines with colors matching the zone they pass through."""
+        hw = self.table_width / 2
+        hd = self.table_depth / 2
+
+        # Collect zone boundary X and Z values (in table inches)
+        zone_x_boundaries = set()
+        zone_z_boundaries = set()
+        for x_min, z_min, x_max, z_max, _cid in dz_rects:
+            zone_x_boundaries.add(x_min)
+            zone_x_boundaries.add(x_max)
+            zone_z_boundaries.add(z_min)
+            zone_z_boundaries.add(z_max)
+
+        # Vertical grid lines
+        for ix in range(1, int(self.table_width)):
+            px = int(ix * self.ppi)
+            x_inches = ix - hw
+            # Build segments split at zone boundaries
+            z_breaks = sorted(zone_z_boundaries | {-hd, hd})
+            for i in range(len(z_breaks) - 1):
+                z_mid = (z_breaks[i] + z_breaks[i + 1]) / 2
+                zone = self._get_zone_color_at(x_inches, z_mid, dz_rects)
+                color = self._grid_color_for_zone(zone)
+                py0 = int((z_breaks[i] + hd) * self.ppi)
+                py1 = int((z_breaks[i + 1] + hd) * self.ppi)
+                draw.line([(px, py0), (px, py1)], fill=color)
+
+        # Horizontal grid lines
+        for iz in range(1, int(self.table_depth)):
+            py = int(iz * self.ppi)
+            z_inches = iz - hd
+            x_breaks = sorted(zone_x_boundaries | {-hw, hw})
+            for i in range(len(x_breaks) - 1):
+                x_mid = (x_breaks[i] + x_breaks[i + 1]) / 2
+                zone = self._get_zone_color_at(x_mid, z_inches, dz_rects)
+                color = self._grid_color_for_zone(zone)
+                px0 = int((x_breaks[i] + hw) * self.ppi)
+                px1 = int((x_breaks[i + 1] + hw) * self.ppi)
+                draw.line([(px0, py), (px1, py)], fill=color)
+
+    def _grid_color_for_zone(self, zone_color_id):
+        """Return the grid color for a given zone (or NML if None)."""
+        if zone_color_id is None:
+            return NO_MANS_LAND_GRID
+        colors = DZ_COLORS.get(zone_color_id, DZ_COLORS["red"])
+        return colors["grid"]
+
+    def _draw_objective(self, draw, objective):
+        """Draw an objective marker with skull icon and dashed range circle."""
+        pos = objective["position"]
+        cx, cy = self._to_px(pos["x_inches"], pos["z_inches"])
+        r_px = OBJECTIVE_RADIUS_INCHES * self.ppi
+
+        # Solid black circle (the marker)
+        draw.ellipse(
+            [cx - r_px, cy - r_px, cx + r_px, cy + r_px],
+            fill=OBJECTIVE_FILL,
+            outline=OBJECTIVE_OUTLINE,
+            width=2,
+        )
+
+        # White skull icon
+        self._draw_skull(draw, cx, cy, r_px)
+
+        # Dashed range circle (range is measured from marker edge, not center)
+        range_inches = objective.get("range_inches", 3.0)
+        total_radius_px = (OBJECTIVE_RADIUS_INCHES + range_inches) * self.ppi
+        self._draw_dashed_circle(draw, cx, cy, total_radius_px)
+
+    def _draw_skull(self, draw, cx, cy, marker_radius):
+        """Draw a simple skull icon inside the objective marker."""
+        s = marker_radius * 0.6  # scale factor
+        white = "#ffffff"
+
+        # Head (circle)
+        head_r = s * 0.55
+        draw.ellipse(
+            [
+                cx - head_r,
+                cy - s * 0.35 - head_r,
+                cx + head_r,
+                cy - s * 0.35 + head_r,
+            ],
+            fill=white,
+        )
+
+        # Eyes (two dark dots)
+        eye_r = s * 0.12
+        eye_y = cy - s * 0.4
+        for ex in [cx - s * 0.22, cx + s * 0.22]:
+            draw.ellipse(
+                [ex - eye_r, eye_y - eye_r, ex + eye_r, eye_y + eye_r],
+                fill=OBJECTIVE_FILL,
+            )
+
+        # Jaw / teeth area
+        jaw_w = s * 0.35
+        jaw_h = s * 0.2
+        jaw_y = cy + s * 0.1
+        draw.rectangle(
+            [cx - jaw_w, jaw_y, cx + jaw_w, jaw_y + jaw_h],
+            fill=white,
+        )
+        # Tooth gaps
+        gap = s * 0.12
+        for gx in [cx - gap, cx + gap]:
+            draw.line(
+                [(gx, jaw_y), (gx, jaw_y + jaw_h)],
+                fill=OBJECTIVE_FILL,
+                width=max(1, int(s * 0.06)),
+            )
+
+    def _draw_dashed_circle(self, draw, cx, cy, radius, dash_count=36):
+        """Draw a dashed circle as alternating arc segments."""
+        arc_angle = 360.0 / dash_count
+        for i in range(0, dash_count, 2):
+            start = i * arc_angle
+            end = start + arc_angle
+            bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
+            draw.arc(
+                bbox, start=start, end=end, fill=RANGE_DASH_COLOR, width=2
+            )
 
     def _draw_placed_feature(self, draw, placed_feature):
         feature = placed_feature["feature"]
@@ -272,7 +461,20 @@ class ControlPanel(ttk.Frame):
         self.min_ruins_var = tk.StringVar(value="")
         self.max_ruins_var = tk.StringVar(value="")
 
+        # Mission selection variables
+        self.edition_var = tk.StringVar(value="")
+        self.pack_var = tk.StringVar(value="")
+        self.deployment_var = tk.StringVar(value="None")
+        self.selected_mission = None  # current mission dict or None
+        self._initializing = True  # suppress callbacks during init
+
+        # Combo widgets (set during _build via _combo helper)
+        self.edition_combo: ttk.Combobox = None
+        self.pack_combo: ttk.Combobox = None
+        self.deployment_combo: ttk.Combobox = None
+
         self._build()
+        self._initializing = False
 
         # Re-render battlefield when table dims change.
         self.table_width_var.trace_add("write", self._dims_changed)
@@ -287,8 +489,21 @@ class ControlPanel(ttk.Frame):
         right = ttk.Frame(self)
         right.pack(side=tk.LEFT, fill=tk.Y)
 
-        # --- Left column: Table, Generation, Buttons ---
+        # --- Left column: Mission, Table, Generation, Buttons ---
         row = 0
+        row = self._section(left, row, "Mission")
+        row = self._combo(
+            left, row, "Edition:", self.edition_var, "edition_combo"
+        )
+        row = self._combo(left, row, "Pack:", self.pack_var, "pack_combo")
+        row = self._combo(
+            left, row, "Deployment:", self.deployment_var, "deployment_combo"
+        )
+
+        # Initialize mission dropdowns
+        self._init_mission_combos()
+
+        row = self._sep(left, row)
         row = self._section(left, row, "Table")
         row = self._field(left, row, "Width (in):", self.table_width_var)
         row = self._field(left, row, "Depth (in):", self.table_depth_var)
@@ -355,11 +570,69 @@ class ControlPanel(ttk.Frame):
         )
         return row + 1
 
+    def _combo(self, parent, row, label, var, attr_name):
+        ttk.Label(parent, text=label).grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        combo = ttk.Combobox(
+            parent, textvariable=var, width=28, state="readonly"
+        )
+        combo.grid(row=row, column=1, sticky="w", pady=2, padx=(5, 0))
+        setattr(self, attr_name, combo)
+        return row + 1
+
     def _sep(self, parent, row):
         ttk.Separator(parent, orient="horizontal").grid(
             row=row, column=0, columnspan=2, sticky="ew", pady=8
         )
         return row + 1
+
+    def _init_mission_combos(self):
+        """Set up cascading mission dropdowns."""
+        editions = list(EDITIONS.keys())
+        self.edition_combo["values"] = editions
+        if editions:
+            self.edition_var.set(editions[0])
+            self._on_edition_changed()
+
+        self.edition_var.trace_add(
+            "write", lambda *_: self._on_edition_changed()
+        )
+        self.pack_var.trace_add("write", lambda *_: self._on_pack_changed())
+        self.deployment_var.trace_add(
+            "write", lambda *_: self._on_deployment_changed()
+        )
+
+    def _on_edition_changed(self):
+        edition = self.edition_var.get()
+        packs = list(EDITIONS.get(edition, {}).keys())
+        self.pack_combo["values"] = packs
+        if packs:
+            self.pack_var.set(packs[0])
+        else:
+            self.pack_var.set("")
+        self._on_pack_changed()
+
+    def _on_pack_changed(self):
+        edition = self.edition_var.get()
+        pack = self.pack_var.get()
+        deployments = list(EDITIONS.get(edition, {}).get(pack, {}).keys())
+        self.deployment_combo["values"] = ["None"] + deployments
+        self.deployment_var.set("None")
+        self._on_deployment_changed()
+
+    def _on_deployment_changed(self):
+        dep = self.deployment_var.get()
+        if dep == "None" or dep == "":
+            self.selected_mission = None
+        else:
+            edition = self.edition_var.get()
+            pack = self.pack_var.get()
+            self.selected_mission = (
+                EDITIONS.get(edition, {}).get(pack, {}).get(dep)
+            )
+        if not self._initializing:
+            self.on_table_changed()
 
     def _dims_changed(self, *_args):
         try:
@@ -435,6 +708,10 @@ class ControlPanel(ttk.Frame):
                 params["min_feature_gap_inches"] = min_gap
             if min_edge_gap is not None:
                 params["min_edge_gap_inches"] = min_edge_gap
+
+            # Include mission if selected
+            if self.selected_mission is not None:
+                params["mission"] = self.selected_mission
 
             return params
         except (tk.TclError, ValueError):
@@ -614,7 +891,10 @@ class App:
         if ppi <= 0:
             return
 
-        renderer = BattlefieldRenderer(tw, td, ppi, self.objects_by_id)
+        mission = self.controls.selected_mission
+        renderer = BattlefieldRenderer(
+            tw, td, ppi, self.objects_by_id, mission
+        )
         img = renderer.render(self.layout)
 
         self._photo = ImageTk.PhotoImage(img)
@@ -656,7 +936,10 @@ class App:
         td = params["table_depth_inches"]
         ppi = 20
 
-        renderer = BattlefieldRenderer(tw, td, ppi, self.objects_by_id)
+        mission = self.controls.selected_mission
+        renderer = BattlefieldRenderer(
+            tw, td, ppi, self.objects_by_id, mission
+        )
         img = renderer.render(self.layout)
         save_layout_png(img, self.layout, path)
 
@@ -684,6 +967,21 @@ class App:
         self.controls.symmetric_var.set(
             layout.get("rotationally_symmetric", False)
         )
+        # Sync mission dropdowns
+        mission = layout.get("mission")
+        if mission and "name" in mission:
+            path = find_mission_path(mission["name"])
+            if path:
+                ed, pk, dep = path
+                self.controls.edition_var.set(ed)
+                self.controls._on_edition_changed()
+                self.controls.pack_var.set(pk)
+                self.controls._on_pack_changed()
+                self.controls.deployment_var.set(dep)
+            else:
+                self.controls.deployment_var.set("None")
+        else:
+            self.controls.deployment_var.set("None")
         self._update_visibility_display()
         self._render()
 

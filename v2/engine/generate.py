@@ -144,6 +144,7 @@ def generate(params: EngineParams) -> EngineResult:
             table_depth=params.table_depth,
             placed_features=list(params.initial_layout.placed_features),
             rotationally_symmetric=params.rotationally_symmetric,
+            mission=params.mission,
         )
         next_id = _next_feature_id(layout)
     else:
@@ -151,6 +152,7 @@ def generate(params: EngineParams) -> EngineResult:
             table_width=params.table_width,
             table_depth=params.table_depth,
             rotationally_symmetric=params.rotationally_symmetric,
+            mission=params.mission,
         )
         next_id = 1
 

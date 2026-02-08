@@ -157,9 +157,11 @@ class TerrainLayout:
     placed_features: list[PlacedFeature] = field(default_factory=list)
     rotationally_symmetric: bool = False
     visibility: dict | None = None
+    mission: Mission | None = None
 
     @staticmethod
     def from_dict(d: dict) -> TerrainLayout:
+        m = d.get("mission")
         return TerrainLayout(
             table_width=d["table_width_inches"],
             table_depth=d["table_depth_inches"],
@@ -169,6 +171,7 @@ class TerrainLayout:
             ],
             rotationally_symmetric=d.get("rotationally_symmetric", False),
             visibility=d.get("visibility"),
+            mission=Mission.from_dict(m) if m else None,
         )
 
     def to_dict(self) -> dict:
@@ -180,6 +183,8 @@ class TerrainLayout:
         }
         if self.visibility is not None:
             d["visibility"] = self.visibility
+        if self.mission is not None:
+            d["mission"] = self.mission.to_dict()
         return d
 
 
@@ -227,6 +232,92 @@ class TerrainCatalog:
 
 
 @dataclass
+class Point2D:
+    x: float
+    z: float
+
+    @staticmethod
+    def from_dict(d: dict) -> Point2D:
+        return Point2D(x=d["x_inches"], z=d["z_inches"])
+
+    def to_dict(self) -> dict:
+        return {"x_inches": self.x, "z_inches": self.z}
+
+
+@dataclass
+class ObjectiveMarker:
+    id: str
+    position: Point2D
+    range_inches: float = 3.0
+
+    @staticmethod
+    def from_dict(d: dict) -> ObjectiveMarker:
+        return ObjectiveMarker(
+            id=d["id"],
+            position=Point2D.from_dict(d["position"]),
+            range_inches=d.get("range_inches", 3.0),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "position": self.position.to_dict(),
+            "range_inches": self.range_inches,
+        }
+
+
+@dataclass
+class DeploymentZone:
+    id: str
+    polygons: list[list[Point2D]]
+
+    @staticmethod
+    def from_dict(d: dict) -> DeploymentZone:
+        polygons = []
+        for poly in d.get("polygons", []):
+            polygons.append([Point2D.from_dict(p) for p in poly])
+        return DeploymentZone(id=d["id"], polygons=polygons)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "polygons": [
+                [p.to_dict() for p in poly] for poly in self.polygons
+            ],
+        }
+
+
+@dataclass
+class Mission:
+    name: str
+    objectives: list[ObjectiveMarker]
+    deployment_zones: list[DeploymentZone]
+    rotationally_symmetric: bool = False
+
+    @staticmethod
+    def from_dict(d: dict) -> Mission:
+        return Mission(
+            name=d.get("name", ""),
+            objectives=[
+                ObjectiveMarker.from_dict(o) for o in d.get("objectives", [])
+            ],
+            deployment_zones=[
+                DeploymentZone.from_dict(dz)
+                for dz in d.get("deployment_zones", [])
+            ],
+            rotationally_symmetric=d.get("rotationally_symmetric", False),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "objectives": [o.to_dict() for o in self.objectives],
+            "deployment_zones": [dz.to_dict() for dz in self.deployment_zones],
+            "rotationally_symmetric": self.rotationally_symmetric,
+        }
+
+
+@dataclass
 class FeatureCountPreference:
     feature_type: str
     min: int = 0
@@ -255,10 +346,12 @@ class EngineParams:
     min_feature_gap_inches: float | None = None
     min_edge_gap_inches: float | None = None
     rotationally_symmetric: bool = False
+    mission: Mission | None = None
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
         il = d.get("initial_layout")
+        m = d.get("mission")
         prefs = [
             FeatureCountPreference.from_dict(p)
             for p in d.get("feature_count_preferences", [])
@@ -274,6 +367,7 @@ class EngineParams:
             min_feature_gap_inches=d.get("min_feature_gap_inches"),
             min_edge_gap_inches=d.get("min_edge_gap_inches"),
             rotationally_symmetric=d.get("rotationally_symmetric", False),
+            mission=Mission.from_dict(m) if m else None,
         )
 
 
