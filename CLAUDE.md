@@ -126,17 +126,20 @@ When the user asks to merge a feature branch to main, follow this procedure:
 # 1. Pull latest main
 git checkout main && git pull
 
-# 2. Squash feature branch into a single commit
-git checkout feature/my-branch
+# 2. Create a temporary branch for squashing (preserves the original feature branch)
+git checkout -b feature/my-branch-rebase feature/my-branch
+
+# 3. Squash into a single commit
 git reset --soft main
 git commit -m "Unified commit message describing the feature"
 
-# 3. Fast-forward merge into main
+# 4. Fast-forward merge into main
 git checkout main
-git merge feature/my-branch
+git merge feature/my-branch-rebase
 
-# 4. Push
+# 5. Push and clean up temporary branch
 git push
+git branch -d feature/my-branch-rebase
 ```
 
 The squashed commit message should summarize the entire feature, not repeat individual commit messages. Always ask the user before pushing to main.
