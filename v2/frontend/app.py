@@ -4,6 +4,7 @@ Displays a 2D top-down view of a Warhammer 40k terrain layout
 with a control panel for engine parameters.
 """
 
+import copy
 import json
 import math
 import random
@@ -50,6 +51,7 @@ TABLE_GRID = "#264e22"  # subtle darker grid
 TABLE_BORDER = "#111111"
 CANVAS_BG = "#1e1e1e"
 DEFAULT_FILL = "#888888"
+HIGHLIGHT_COLOR = "#FFD700"  # gold highlight for selected features
 
 # Mission rendering colors
 NO_MANS_LAND_BG = "#d4c5a0"  # cream/tan for no-man's land
@@ -310,7 +312,7 @@ class BattlefieldRenderer:
                 xs.append(x1 + t * (x2 - x1))
         return xs
 
-    def render(self, layout):
+    def render(self, layout, highlight_index=None):
         w = int(self.table_width * self.ppi)
         h = int(self.table_depth * self.ppi)
         has_mission = self.mission is not None
@@ -346,15 +348,31 @@ class BattlefieldRenderer:
                 draw.line([(0, py), (w - 1, py)], fill=NO_MANS_LAND_GRID)
 
         # 4. Terrain features
-        for pf in layout["placed_features"]:
+        placed = layout["placed_features"]
+        is_symmetric = layout.get("rotationally_symmetric", False)
+        for pf in placed:
             self._draw_placed_feature(draw, pf)
-            if layout.get("rotationally_symmetric", False):
+            if is_symmetric:
                 tf = pf.get("transform", {})
                 if (
                     tf.get("x_inches", 0.0) != 0.0
                     or tf.get("z_inches", 0.0) != 0.0
                 ):
                     self._draw_placed_feature(draw, _mirror_pf_dict(pf))
+
+        # 4b. Highlight selected feature
+        if highlight_index is not None and 0 <= highlight_index < len(placed):
+            pf = placed[highlight_index]
+            self._draw_placed_feature_highlight(draw, pf)
+            if is_symmetric:
+                tf = pf.get("transform", {})
+                if (
+                    tf.get("x_inches", 0.0) != 0.0
+                    or tf.get("z_inches", 0.0) != 0.0
+                ):
+                    self._draw_placed_feature_highlight(
+                        draw, _mirror_pf_dict(pf)
+                    )
 
         # 5. Objective markers (on top of terrain)
         if mission is not None:
@@ -506,6 +524,46 @@ class BattlefieldRenderer:
                 offset_tf = _get_tf(shape.get("offset"))
                 combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
                 self._draw_rect(draw, shape, combined, fill, outline)
+
+    def _draw_placed_feature_highlight(self, draw, placed_feature):
+        """Draw gold outline highlight for a placed feature (no fill)."""
+        feature = placed_feature["feature"]
+        feat_tf = _get_tf(placed_feature.get("transform"))
+
+        for comp in feature["components"]:
+            obj = self.objects_by_id.get(comp["object_id"])
+            if obj is None:
+                continue
+            comp_tf = _get_tf(comp.get("transform"))
+
+            for shape in obj["shapes"]:
+                offset_tf = _get_tf(shape.get("offset"))
+                combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
+                self._draw_highlight_rect(draw, shape, combined)
+
+    def _draw_highlight_rect(self, draw, shape, tf):
+        """Draw a gold outline rectangle (no fill) for highlight."""
+        cx, cz, rot_deg = tf
+        hw = shape["width_inches"] / 2
+        hd = shape["depth_inches"] / 2
+        corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+        rad = math.radians(rot_deg)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+
+        px_corners = []
+        for lx, lz in corners:
+            rx = cx + lx * cos_r - lz * sin_r
+            rz = cz + lx * sin_r + lz * cos_r
+            px_corners.append(self._to_px(rx, rz))
+
+        draw.polygon(
+            px_corners,
+            fill=None,
+            outline=HIGHLIGHT_COLOR,
+            width=3,
+        )
 
     def _draw_rect(self, draw, shape, tf, fill, outline):
         cx, cz, rot_deg = tf
@@ -873,7 +931,7 @@ class HistoryPanel(ttk.Frame):
     def add_to_history(self, layout):
         """Add a layout to the history with current timestamp."""
         timestamp = int(time.time())
-        self.layout_history.append((timestamp, layout))
+        self.layout_history.append((timestamp, copy.deepcopy(layout)))
 
         # Add to listbox display (limit to 50 recent)
         if len(self.layout_history) > 50:
@@ -961,8 +1019,21 @@ class App:
         }
         self.objects_by_id = _build_object_index(SAMPLE_CATALOG)
 
+        # Rendering context for coordinate conversion
+        self._render_ppi = None
+        self._render_tw = None
+        self._render_td = None
+        self._img_offset_x = None
+        self._img_offset_y = None
+
+        # Selection state
+        self._selected_feature_idx = None
+        self._popup_window_id = None
+        self._popup_frame = None
+
         self.root.after(50, self._render)
-        self.canvas.bind("<Configure>", lambda _e: self._render())
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind("<Button-1>", self._on_canvas_click)
 
         # Log which engine will be used
         self._log_engine_selection()
@@ -990,6 +1061,9 @@ class App:
     # -- rendering --
 
     def _render(self):
+        if hasattr(self, "_popup_window_id"):
+            self._dismiss_popup()
+
         params = self.controls.get_params()
         if params is None:
             return
@@ -1007,11 +1081,22 @@ class App:
         if ppi <= 0:
             return
 
+        # Save rendering context for coordinate conversion
+        self._render_ppi = ppi
+        self._render_tw = tw
+        self._render_td = td
+        img_w = int(tw * ppi)
+        img_h = int(td * ppi)
+        self._img_offset_x = cw / 2 - img_w / 2
+        self._img_offset_y = ch / 2 - img_h / 2
+
         mission = self.controls.selected_mission
         renderer = BattlefieldRenderer(
             tw, td, ppi, self.objects_by_id, mission
         )
-        img = renderer.render(self.layout)
+        img = renderer.render(
+            self.layout, highlight_index=self._selected_feature_idx
+        )
 
         self._photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
@@ -1019,14 +1104,248 @@ class App:
             cw / 2, ch / 2, image=self._photo, anchor="center"
         )
 
+    # -- coordinate conversion & hit testing --
+
+    def _canvas_to_table(self, canvas_x, canvas_y):
+        """Convert canvas pixel coords to table-space inches.
+
+        Returns (x_inches, z_inches) or None if outside the table image.
+        """
+        ppi = self._render_ppi
+        tw = self._render_tw
+        td = self._render_td
+        ox = self._img_offset_x
+        oy = self._img_offset_y
+        if ppi is None or tw is None or td is None or ox is None or oy is None:
+            return None
+        # Position relative to image top-left
+        rel_x = canvas_x - ox
+        rel_y = canvas_y - oy
+        img_w = tw * ppi
+        img_h = td * ppi
+        if rel_x < 0 or rel_y < 0 or rel_x >= img_w or rel_y >= img_h:
+            return None
+        # Reverse of _to_px: px = (x + tw/2) * ppi => x = px/ppi - tw/2
+        x_inches = rel_x / ppi - tw / 2
+        z_inches = rel_y / ppi - td / 2
+        return (x_inches, z_inches)
+
+    def _get_feature_polygons(self, placed_feature):
+        """Return list of table-space polygon corner lists for a placed feature."""
+        feature = placed_feature["feature"]
+        feat_tf = _get_tf(placed_feature.get("transform"))
+        polygons = []
+
+        for comp in feature["components"]:
+            obj = self.objects_by_id.get(comp["object_id"])
+            if obj is None:
+                continue
+            comp_tf = _get_tf(comp.get("transform"))
+
+            for shape in obj["shapes"]:
+                offset_tf = _get_tf(shape.get("offset"))
+                combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
+                cx, cz, rot_deg = combined
+                hw = shape["width_inches"] / 2
+                hd = shape["depth_inches"] / 2
+                corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+                rad = math.radians(rot_deg)
+                cos_r = math.cos(rad)
+                sin_r = math.sin(rad)
+
+                world_corners = []
+                for lx, lz in corners:
+                    rx = cx + lx * cos_r - lz * sin_r
+                    rz = cz + lx * sin_r + lz * cos_r
+                    world_corners.append((rx, rz))
+                polygons.append(world_corners)
+        return polygons
+
+    def _hit_test(self, x_inches, z_inches):
+        """Test if point hits a placed feature.
+
+        Returns (feature_index, is_mirror) or None.
+        Iterates in reverse order so topmost features are tested first.
+        """
+        placed = list(self.layout.get("placed_features", []))  # type: ignore[arg-type]
+        is_symmetric = self.layout.get("rotationally_symmetric", False)
+
+        for idx in range(len(placed) - 1, -1, -1):
+            pf = placed[idx]
+
+            # Test canonical placement
+            for poly in self._get_feature_polygons(pf):
+                if BattlefieldRenderer._point_in_polygon(
+                    x_inches, z_inches, poly
+                ):
+                    return (idx, False)
+
+            # Test mirror if symmetric
+            if is_symmetric:
+                tf = pf.get("transform", {})
+                if (
+                    tf.get("x_inches", 0.0) != 0.0
+                    or tf.get("z_inches", 0.0) != 0.0
+                ):
+                    mirror = _mirror_pf_dict(pf)
+                    for poly in self._get_feature_polygons(mirror):
+                        if BattlefieldRenderer._point_in_polygon(
+                            x_inches, z_inches, poly
+                        ):
+                            return (idx, True)
+
+        return None
+
+    # -- selection & popup --
+
+    def _on_canvas_click(self, event):
+        """Handle click on canvas: select/deselect features."""
+        self._dismiss_popup()
+
+        table_coords = self._canvas_to_table(event.x, event.y)
+        if table_coords is None:
+            self._deselect()
+            return
+
+        hit = self._hit_test(*table_coords)
+        if hit is None:
+            self._deselect()
+            return
+
+        idx, _is_mirror = hit
+        self._select_feature(idx, event.x, event.y)
+
+    def _select_feature(self, idx, canvas_x, canvas_y):
+        """Select a feature and show popup."""
+        self._selected_feature_idx = idx
+        self._render()
+        self._show_popup(canvas_x, canvas_y)
+
+    def _deselect(self):
+        """Clear selection and re-render if needed."""
+        if self._selected_feature_idx is not None:
+            self._selected_feature_idx = None
+            self._render()
+
+    def _show_popup(self, canvas_x, canvas_y):
+        """Show Delete/Cancel popup at the given canvas position."""
+        self._dismiss_popup()
+
+        frame = tk.Frame(
+            self.canvas, bg="#333333", relief="raised", borderwidth=2
+        )
+        delete_btn = tk.Button(
+            frame,
+            text="Delete",
+            command=self._on_delete_selected,
+            bg="#cc3333",
+            fg="white",
+            activebackground="#ff4444",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        delete_btn.pack(side=tk.LEFT, padx=(4, 2), pady=4)
+        cancel_btn = tk.Button(
+            frame,
+            text="Cancel",
+            command=self._dismiss_popup_and_deselect,
+            bg="#555555",
+            fg="white",
+            activebackground="#777777",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=(2, 4), pady=4)
+
+        # Clamp popup position to stay within canvas bounds
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        popup_w = 160  # approximate width
+        popup_h = 40  # approximate height
+        x = min(canvas_x, cw - popup_w)
+        y = min(canvas_y, ch - popup_h)
+        x = max(x, 0)
+        y = max(y, 0)
+
+        win_id = self.canvas.create_window(x, y, window=frame, anchor="nw")
+        self._popup_window_id = win_id
+        self._popup_frame = frame
+
+    def _dismiss_popup(self):
+        """Remove popup widget and canvas window item if present."""
+        if self._popup_window_id is not None:
+            self.canvas.delete(self._popup_window_id)
+            self._popup_window_id = None
+        if self._popup_frame is not None:
+            self._popup_frame.destroy()
+            self._popup_frame = None
+
+    def _dismiss_popup_and_deselect(self):
+        """Cancel button handler."""
+        self._dismiss_popup()
+        self._deselect()
+
+    # -- delete action --
+
+    def _on_delete_selected(self):
+        """Delete the selected feature and re-run engine with zero steps."""
+        idx = self._selected_feature_idx
+        if idx is None:
+            return
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        if idx < 0 or idx >= len(placed):
+            return
+
+        # Remove the feature (mirror is implicit)
+        placed.pop(idx)
+
+        # Clear selection and popup
+        self._selected_feature_idx = None
+        self._dismiss_popup()
+
+        # Re-run engine with zero steps to recompute visibility
+        params = self.controls.get_params()
+        if params:
+            params["num_steps"] = 0
+            if params["seed"] is None:
+                params["seed"] = random.randint(0, 2**32 - 1)
+            params["initial_layout"] = self.layout
+
+            if _should_use_rust_engine():
+                result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
+                result = json.loads(result_json)
+            else:
+                result = generate_json(params)
+
+            self.layout = result["layout"]
+            self._update_visibility_display()
+            self.history.add_to_history(self.layout)
+
+        self._render()
+
+    # -- canvas resize --
+
+    def _on_canvas_configure(self, _event):
+        """Handle canvas resize: dismiss popup and re-render."""
+        self._dismiss_popup()
+        self._selected_feature_idx = None
+        self._render()
+
     # -- actions --
 
     def _load_layout(self, layout):
         """Load a layout from history and display it."""
-        self.layout = layout
+        self.layout = copy.deepcopy(layout)
+        self._deselect()
         self._render()
 
     def _on_clear(self):
+        self._dismiss_popup()
+        self._selected_feature_idx = None
         self.layout = {
             "table_width_inches": self.controls.table_width_var.get(),
             "table_depth_inches": self.controls.table_depth_var.get(),
@@ -1060,6 +1379,8 @@ class App:
         save_layout_png(img, self.layout, path)
 
     def _on_load(self):
+        self._dismiss_popup()
+        self._selected_feature_idx = None
         path = filedialog.askopenfilename(
             filetypes=[
                 ("Layout files", "*.png *.json"),
@@ -1102,6 +1423,8 @@ class App:
         self._render()
 
     def _on_generate(self):
+        self._dismiss_popup()
+        self._selected_feature_idx = None
         params = self.controls.get_params()
         if not params:
             return
