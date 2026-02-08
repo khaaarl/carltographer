@@ -126,21 +126,28 @@ When the user asks to merge a feature branch to main, follow this procedure:
 # 1. Pull latest main
 git checkout main && git pull
 
-# 2. Create a temporary branch for squashing (preserves the original feature branch)
+# 2. Rebase feature branch onto latest main (CRITICAL: conflict detection happens here)
+git checkout feature/my-branch
+git rebase main
+# If conflicts arise, resolve them manually, then: git rebase --continue
+
+# 3. Create a temporary branch for squashing (preserves the original feature branch)
 git checkout -b feature/my-branch-rebase feature/my-branch
 
-# 3. Squash into a single commit
+# 4. Squash into a single commit
 git reset --soft main
 git commit -m "Unified commit message describing the feature"
 
-# 4. Fast-forward merge into main
+# 5. Fast-forward merge into main
 git checkout main
 git merge feature/my-branch-rebase
 
-# 5. Push and clean up temporary branch
+# 6. Push and clean up temporary branch
 git push
 git branch -d feature/my-branch-rebase
 ```
+
+**WARNING: Never skip step 2 (rebase).** `git reset --soft` does NOT detect conflicts. Without the rebase, it silently reverts any changes made to main after the feature branch was created. The rebase step ensures proper 3-way merge conflict detection before squashing.
 
 The squashed commit message should summarize the entire feature, not repeat individual commit messages. Always ask the user before pushing to main.
 
