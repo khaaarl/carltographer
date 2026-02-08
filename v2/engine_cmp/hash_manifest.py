@@ -7,6 +7,7 @@ to the Rust engine. The frontend uses this to auto-select which engine to use.
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 PYTHON_ENGINE_DIR = Path(__file__).parent.parent / "engine"
@@ -95,8 +96,9 @@ def verify_engine_unchanged() -> bool:
     """Check if Python engine source matches the certified hashes.
 
     Returns True if:
-    1. Manifest file exists, AND
-    2. All discovered Python engine files match their certified hashes
+    1. Running inside a PyInstaller bundle (parity was certified at build time), OR
+    2. Manifest file exists, AND
+    3. All discovered Python engine files match their certified hashes
 
     Returns False if:
     1. Manifest file doesn't exist, OR
@@ -104,6 +106,13 @@ def verify_engine_unchanged() -> bool:
     3. Any discovered file is missing from manifest, OR
     4. Any manifest file is no longer in engine directory
     """
+    # In a PyInstaller bundle, source files are compiled to bytecode — rglob
+    # finds nothing, verification fails. The packaging script runs
+    # build-rust-engine.sh (which certifies parity) before packaging, so the
+    # Rust engine is guaranteed correct.
+    if getattr(sys, "frozen", False):
+        return True
+
     manifest_hashes = read_manifest()
     if manifest_hashes is None:
         return False

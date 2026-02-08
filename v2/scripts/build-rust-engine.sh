@@ -125,13 +125,13 @@ build_rust_engine() {
 
     # Attempt normal maturin develop
     local maturin_output
-    if maturin_output=$("$VENV_PYTHON" -m maturin develop 2>&1); then
+    if maturin_output=$("$VENV_PYTHON" -m maturin develop --release 2>&1); then
         # Success
         :
     elif echo "$maturin_output" | grep -q "Failed to find pip"; then
         # Try with --uv flag for uv-based venvs
         log_info "Standard pip not available, trying with --uv flag..."
-        if ! "$VENV_PYTHON" -m maturin develop --uv; then
+        if ! "$VENV_PYTHON" -m maturin develop --release --uv; then
             log_error "maturin develop failed with --uv flag"
             if [[ -z "$QUIET" ]]; then
                 echo "$maturin_output" >&2
