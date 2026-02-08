@@ -620,6 +620,16 @@ class ControlPanel(ttk.Frame):
         self.min_ruins_var = tk.StringVar(value="")
         self.max_ruins_var = tk.StringVar(value="")
 
+        # Scoring target variables
+        self.overall_vis_target_var = tk.StringVar(value="30")
+        self.overall_vis_weight_var = tk.StringVar(value="1.0")
+        self.dz_vis_target_var = tk.StringVar(value="20")
+        self.dz_vis_weight_var = tk.StringVar(value="1.0")
+        self.dz_hidden_target_var = tk.StringVar(value="40")
+        self.dz_hidden_weight_var = tk.StringVar(value="1.0")
+        self.obj_hide_target_var = tk.StringVar(value="40")
+        self.obj_hide_weight_var = tk.StringVar(value="1.0")
+
         # Mission selection variables
         self.edition_var = tk.StringVar(value="")
         self.pack_var = tk.StringVar(value="")
@@ -705,6 +715,21 @@ class ControlPanel(ttk.Frame):
         row = self._field(right, row, "Max obstacles:", self.max_crates_var)
         row = self._field(right, row, "Min ruins:", self.min_ruins_var)
         row = self._field(right, row, "Max ruins:", self.max_ruins_var)
+
+        row = self._sep(right, row)
+        row = self._section(right, row, "Scoring Targets")
+        row = self._field(
+            right, row, "Overall vis %:", self.overall_vis_target_var
+        )
+        row = self._field(right, row, "  weight:", self.overall_vis_weight_var)
+        row = self._field(right, row, "DZ vis %:", self.dz_vis_target_var)
+        row = self._field(right, row, "  weight:", self.dz_vis_weight_var)
+        row = self._field(
+            right, row, "DZ hidden %:", self.dz_hidden_target_var
+        )
+        row = self._field(right, row, "  weight:", self.dz_hidden_weight_var)
+        row = self._field(right, row, "Obj hide %:", self.obj_hide_target_var)
+        row = self._field(right, row, "  weight:", self.obj_hide_weight_var)
 
         row = self._sep(right, row)
         row = self._section(right, row, "Results")
@@ -886,6 +911,46 @@ class ControlPanel(ttk.Frame):
             # Include mission if selected
             if self.selected_mission is not None:
                 params["mission"] = self.selected_mission
+
+            # Build scoring targets if any target is set
+            overall_vis_t = parse_float(self.overall_vis_target_var.get())
+            overall_vis_w = parse_float(self.overall_vis_weight_var.get())
+            dz_vis_t = parse_float(self.dz_vis_target_var.get())
+            dz_vis_w = parse_float(self.dz_vis_weight_var.get())
+            dz_hidden_t = parse_float(self.dz_hidden_target_var.get())
+            dz_hidden_w = parse_float(self.dz_hidden_weight_var.get())
+            obj_hide_t = parse_float(self.obj_hide_target_var.get())
+            obj_hide_w = parse_float(self.obj_hide_weight_var.get())
+
+            has_any_target = any(
+                t is not None
+                for t in [overall_vis_t, dz_vis_t, dz_hidden_t, obj_hide_t]
+            )
+            if has_any_target:
+                scoring_targets = {}
+                if overall_vis_t is not None:
+                    scoring_targets["overall_visibility_target"] = (
+                        overall_vis_t
+                    )
+                    if overall_vis_w is not None:
+                        scoring_targets["overall_visibility_weight"] = (
+                            overall_vis_w
+                        )
+                if dz_vis_t is not None:
+                    scoring_targets["dz_visibility_target"] = dz_vis_t
+                    if dz_vis_w is not None:
+                        scoring_targets["dz_visibility_weight"] = dz_vis_w
+                if dz_hidden_t is not None:
+                    scoring_targets["dz_hidden_target"] = dz_hidden_t
+                    if dz_hidden_w is not None:
+                        scoring_targets["dz_hidden_weight"] = dz_hidden_w
+                if obj_hide_t is not None:
+                    scoring_targets["objective_hidability_target"] = obj_hide_t
+                    if obj_hide_w is not None:
+                        scoring_targets["objective_hidability_weight"] = (
+                            obj_hide_w
+                        )
+                params["scoring_targets"] = scoring_targets
 
             return params
         except (tk.TclError, ValueError):

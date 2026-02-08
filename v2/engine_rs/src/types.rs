@@ -155,6 +155,30 @@ pub struct FeatureCountPreference {
     pub max: Option<u32>,
 }
 
+fn default_weight() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoringTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overall_visibility_target: Option<f64>,
+    #[serde(default = "default_weight")]
+    pub overall_visibility_weight: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dz_visibility_target: Option<f64>,
+    #[serde(default = "default_weight")]
+    pub dz_visibility_weight: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dz_hidden_target: Option<f64>,
+    #[serde(default = "default_weight")]
+    pub dz_hidden_weight: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_hidability_target: Option<f64>,
+    #[serde(default = "default_weight")]
+    pub objective_hidability_weight: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineParams {
     pub seed: u64,
@@ -177,6 +201,8 @@ pub struct EngineParams {
     pub mission: Option<Mission>,
     #[serde(default)]
     pub skip_visibility: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoring_targets: Option<ScoringTargets>,
 }
 
 impl EngineParams {

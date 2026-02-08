@@ -333,6 +333,49 @@ class FeatureCountPreference:
 
 
 @dataclass
+class ScoringTargets:
+    overall_visibility_target: float | None = None
+    overall_visibility_weight: float = 1.0
+    dz_visibility_target: float | None = None
+    dz_visibility_weight: float = 1.0
+    dz_hidden_target: float | None = None
+    dz_hidden_weight: float = 1.0
+    objective_hidability_target: float | None = None
+    objective_hidability_weight: float = 1.0
+
+    @staticmethod
+    def from_dict(d: dict) -> ScoringTargets:
+        return ScoringTargets(
+            overall_visibility_target=d.get("overall_visibility_target"),
+            overall_visibility_weight=d.get("overall_visibility_weight", 1.0),
+            dz_visibility_target=d.get("dz_visibility_target"),
+            dz_visibility_weight=d.get("dz_visibility_weight", 1.0),
+            dz_hidden_target=d.get("dz_hidden_target"),
+            dz_hidden_weight=d.get("dz_hidden_weight", 1.0),
+            objective_hidability_target=d.get("objective_hidability_target"),
+            objective_hidability_weight=d.get(
+                "objective_hidability_weight", 1.0
+            ),
+        )
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.overall_visibility_target is not None:
+            d["overall_visibility_target"] = self.overall_visibility_target
+            d["overall_visibility_weight"] = self.overall_visibility_weight
+        if self.dz_visibility_target is not None:
+            d["dz_visibility_target"] = self.dz_visibility_target
+            d["dz_visibility_weight"] = self.dz_visibility_weight
+        if self.dz_hidden_target is not None:
+            d["dz_hidden_target"] = self.dz_hidden_target
+            d["dz_hidden_weight"] = self.dz_hidden_weight
+        if self.objective_hidability_target is not None:
+            d["objective_hidability_target"] = self.objective_hidability_target
+            d["objective_hidability_weight"] = self.objective_hidability_weight
+        return d
+
+
+@dataclass
 class EngineParams:
     seed: int
     table_width: float
@@ -348,11 +391,13 @@ class EngineParams:
     rotationally_symmetric: bool = False
     mission: Mission | None = None
     skip_visibility: bool = False
+    scoring_targets: ScoringTargets | None = None
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
         il = d.get("initial_layout")
         m = d.get("mission")
+        st = d.get("scoring_targets")
         prefs = [
             FeatureCountPreference.from_dict(p)
             for p in d.get("feature_count_preferences", [])
@@ -370,6 +415,7 @@ class EngineParams:
             rotationally_symmetric=d.get("rotationally_symmetric", False),
             mission=Mission.from_dict(m) if m else None,
             skip_visibility=d.get("skip_visibility", False),
+            scoring_targets=(ScoringTargets.from_dict(st) if st else None),
         )
 
 

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::collision::is_valid_placement;
 use crate::prng::Pcg32;
 use crate::types::{
-    EngineParams, EngineResult, FeatureCountPreference, PlacedFeature,
+    EngineParams, EngineResult, FeatureCountPreference, PlacedFeature, ScoringTargets,
     TerrainCatalog, TerrainFeature, TerrainLayout, TerrainObject, Transform,
 };
 
@@ -161,15 +161,33 @@ fn compute_delete_weights(
     weights
 }
 
+fn avg_metric_value(obj: &serde_json::Map<String, serde_json::Value>) -> Option<f64> {
+    if obj.is_empty() {
+        return None;
+    }
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for v in obj.values() {
+        if let Some(val) = v.get("value").and_then(|x| x.as_f64()) {
+            sum += val;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(sum / count as f64)
+    }
+}
+
 fn compute_score(
     layout: &TerrainLayout,
     preferences: &[FeatureCountPreference],
     objects_by_id: &HashMap<String, &TerrainObject>,
     skip_visibility: bool,
+    scoring_targets: Option<&ScoringTargets>,
 ) -> f64 {
-    // Compute fitness score for hill-climbing.
-    // Phase 1 (score < PHASE2_BASE): gradient toward satisfying count preferences.
-    // Phase 2 (score >= PHASE2_BASE): optimize visibility (lower visibility = higher score).
+    // Phase 1: gradient toward satisfying count preferences.
     let counts = count_features_by_type(
         &layout.placed_features,
         layout.rotationally_symmetric,
@@ -197,13 +215,72 @@ fn compute_score(
         return PHASE2_BASE;
     }
 
+    // Phase 2: optimize visibility toward targets.
     let vis = crate::visibility::compute_layout_visibility(
         layout,
         objects_by_id,
         4.0,  // min_blocking_height
     );
-    let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
-    PHASE2_BASE + (100.0 - vis_pct)
+
+    let targets = match scoring_targets {
+        None => {
+            let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
+            return PHASE2_BASE + (100.0 - vis_pct);
+        }
+        Some(t) => t,
+    };
+
+    let mut total_weight: f64 = 0.0;
+    let mut total_weighted_error: f64 = 0.0;
+
+    // 1. Overall visibility
+    if let Some(target) = targets.overall_visibility_target {
+        let actual = vis["overall"]["value"].as_f64().unwrap_or(100.0);
+        let error = (actual - target).abs();
+        total_weighted_error += targets.overall_visibility_weight * error;
+        total_weight += targets.overall_visibility_weight;
+    }
+
+    // 2. DZ visibility (average across all DZs)
+    if let Some(target) = targets.dz_visibility_target {
+        if let Some(dz_vis) = vis.get("dz_visibility").and_then(|v| v.as_object()) {
+            if let Some(avg) = avg_metric_value(dz_vis) {
+                let error = (avg - target).abs();
+                total_weighted_error += targets.dz_visibility_weight * error;
+                total_weight += targets.dz_visibility_weight;
+            }
+        }
+    }
+
+    // 3. DZ hidden from opponent (average across all cross-DZ pairs)
+    if let Some(target) = targets.dz_hidden_target {
+        if let Some(dz_cross) = vis.get("dz_to_dz_visibility").and_then(|v| v.as_object()) {
+            if let Some(avg) = avg_metric_value(dz_cross) {
+                let error = (avg - target).abs();
+                total_weighted_error += targets.dz_hidden_weight * error;
+                total_weight += targets.dz_hidden_weight;
+            }
+        }
+    }
+
+    // 4. Objective hidability (average across all DZs)
+    if let Some(target) = targets.objective_hidability_target {
+        if let Some(obj_hide) = vis.get("objective_hidability").and_then(|v| v.as_object()) {
+            if let Some(avg) = avg_metric_value(obj_hide) {
+                let error = (avg - target).abs();
+                total_weighted_error += targets.objective_hidability_weight * error;
+                total_weight += targets.objective_hidability_weight;
+            }
+        }
+    }
+
+    if total_weight <= 0.0 {
+        let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
+        return PHASE2_BASE + (100.0 - vis_pct);
+    }
+
+    let weighted_avg_error = total_weighted_error / total_weight;
+    PHASE2_BASE + (100.0 - weighted_avg_error)
 }
 
 pub fn generate(params: &EngineParams) -> EngineResult {
@@ -239,7 +316,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         mission: params.mission.clone(),
     };
 
-    let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
+    let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
 
     for _ in 0..num_steps {
         let has_features = !layout.placed_features.is_empty();
@@ -318,7 +395,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
+                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
                     if new_score >= current_score {
                         current_score = new_score;
                         nid += 1;
@@ -362,7 +439,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
+                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
                     if new_score >= current_score {
                         current_score = new_score;
                     } else {
@@ -383,7 +460,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     None => continue,
                 };
                 let saved = layout.placed_features.remove(idx);
-                let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility);
+                let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
                 if new_score >= current_score {
                     current_score = new_score;
                 } else {
@@ -470,6 +547,7 @@ mod tests {
             rotationally_symmetric: false,
             mission: None,
             skip_visibility: false,
+            scoring_targets: None,
         }
     }
 
@@ -552,6 +630,7 @@ mod tests {
             rotationally_symmetric: false,
             mission: None,
             skip_visibility: false,
+            scoring_targets: None,
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());

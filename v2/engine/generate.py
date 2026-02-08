@@ -9,6 +9,7 @@ from .types import (
     EngineResult,
     FeatureCountPreference,
     PlacedFeature,
+    ScoringTargets,
     TerrainCatalog,
     TerrainFeature,
     TerrainLayout,
@@ -122,11 +123,12 @@ def _compute_score(
     feature_count_preferences: list[FeatureCountPreference],
     objects_by_id: dict[str, TerrainObject],
     skip_visibility: bool = False,
+    scoring_targets: ScoringTargets | None = None,
 ) -> float:
     """Compute fitness score for hill-climbing.
 
     Phase 1 (score < PHASE2_BASE): gradient toward satisfying count preferences.
-    Phase 2 (score >= PHASE2_BASE): optimize visibility (lower visibility = higher score).
+    Phase 2 (score >= PHASE2_BASE): optimize visibility toward targets.
     """
     counts = _count_features_by_type(layout)
     total_deficit = 0
@@ -144,8 +146,54 @@ def _compute_score(
         return PHASE2_BASE
 
     vis = compute_layout_visibility(layout, objects_by_id)
-    vis_pct = vis["overall"]["value"]
-    return PHASE2_BASE + (100.0 - vis_pct)
+
+    if scoring_targets is None:
+        vis_pct = vis["overall"]["value"]
+        return PHASE2_BASE + (100.0 - vis_pct)
+
+    total_weight = 0.0
+    total_weighted_error = 0.0
+
+    if scoring_targets.overall_visibility_target is not None:
+        actual = vis["overall"]["value"]
+        error = abs(actual - scoring_targets.overall_visibility_target)
+        w = scoring_targets.overall_visibility_weight
+        total_weighted_error += w * error
+        total_weight += w
+
+    if scoring_targets.dz_visibility_target is not None:
+        dz_vis = vis.get("dz_visibility")
+        if dz_vis and len(dz_vis) > 0:
+            avg = sum(d["value"] for d in dz_vis.values()) / len(dz_vis)
+            error = abs(avg - scoring_targets.dz_visibility_target)
+            w = scoring_targets.dz_visibility_weight
+            total_weighted_error += w * error
+            total_weight += w
+
+    if scoring_targets.dz_hidden_target is not None:
+        dz_cross = vis.get("dz_to_dz_visibility")
+        if dz_cross and len(dz_cross) > 0:
+            avg = sum(d["value"] for d in dz_cross.values()) / len(dz_cross)
+            error = abs(avg - scoring_targets.dz_hidden_target)
+            w = scoring_targets.dz_hidden_weight
+            total_weighted_error += w * error
+            total_weight += w
+
+    if scoring_targets.objective_hidability_target is not None:
+        obj_hide = vis.get("objective_hidability")
+        if obj_hide and len(obj_hide) > 0:
+            avg = sum(d["value"] for d in obj_hide.values()) / len(obj_hide)
+            error = abs(avg - scoring_targets.objective_hidability_target)
+            w = scoring_targets.objective_hidability_weight
+            total_weighted_error += w * error
+            total_weight += w
+
+    if total_weight <= 0:
+        vis_pct = vis["overall"]["value"]
+        return PHASE2_BASE + (100.0 - vis_pct)
+
+    weighted_avg_error = total_weighted_error / total_weight
+    return PHASE2_BASE + (100.0 - weighted_avg_error)
 
 
 def _instantiate_feature(
@@ -198,6 +246,7 @@ def generate(params: EngineParams) -> EngineResult:
         params.feature_count_preferences,
         objects_by_id,
         params.skip_visibility,
+        params.scoring_targets,
     )
 
     for _ in range(params.num_steps):
@@ -262,6 +311,7 @@ def generate(params: EngineParams) -> EngineResult:
                     params.feature_count_preferences,
                     objects_by_id,
                     params.skip_visibility,
+                    params.scoring_targets,
                 )
                 if new_score >= current_score:
                     current_score = new_score
@@ -297,6 +347,7 @@ def generate(params: EngineParams) -> EngineResult:
                     params.feature_count_preferences,
                     objects_by_id,
                     params.skip_visibility,
+                    params.scoring_targets,
                 )
                 if new_score >= current_score:
                     current_score = new_score
@@ -318,6 +369,7 @@ def generate(params: EngineParams) -> EngineResult:
                 params.feature_count_preferences,
                 objects_by_id,
                 params.skip_visibility,
+                params.scoring_targets,
             )
             if new_score >= current_score:
                 current_score = new_score

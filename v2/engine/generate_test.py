@@ -19,6 +19,7 @@ from engine.prng import PCG32
 from engine.types import (
     EngineParams,
     FeatureCountPreference,
+    ScoringTargets,
     TerrainLayout,
 )
 
@@ -502,3 +503,88 @@ class TestScoring:
         result = generate_json(_make_params_dict(seed=42, num_steps=50))
         assert "score" in result
         assert result["score"] > 0
+
+
+# -- Scoring Targets ---------------------------------------------------
+
+
+class TestScoringTargets:
+    def test_legacy_behavior_no_targets(self):
+        """Without scoring_targets, uses old behavior (minimize overall vis)."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=50)
+        )
+        assert params.scoring_targets is None
+        result = generate(params)
+        assert result.score >= PHASE2_BASE
+
+    def test_overall_only_target(self):
+        """Setting only overall target scores based on distance to target."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=50)
+        )
+        params.scoring_targets = ScoringTargets(
+            overall_visibility_target=30.0,
+        )
+        result = generate(params)
+        assert result.score >= PHASE2_BASE
+
+    def test_scoring_targets_deterministic(self):
+        """Same seed + same targets = same score and layout."""
+        pd = _make_params_dict(seed=123, num_steps=100)
+        pd["scoring_targets"] = {
+            "overall_visibility_target": 30.0,
+            "overall_visibility_weight": 1.0,
+        }
+        p1 = EngineParams.from_dict(pd)
+        p2 = EngineParams.from_dict(pd)
+        r1 = generate(p1)
+        r2 = generate(p2)
+        assert r1.score == r2.score
+        assert r1.layout.to_dict() == r2.layout.to_dict()
+
+    def test_all_none_targets_fallback(self):
+        """ScoringTargets with all None targets uses legacy fallback."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=50)
+        )
+        params.scoring_targets = ScoringTargets()
+        result = generate(params)
+        assert result.score >= PHASE2_BASE
+
+    def test_scoring_targets_from_dict(self):
+        """ScoringTargets round-trips through dict."""
+        pd = _make_params_dict(seed=42, num_steps=50)
+        pd["scoring_targets"] = {
+            "overall_visibility_target": 30.0,
+            "overall_visibility_weight": 2.0,
+            "dz_hidden_target": 40.0,
+        }
+        params = EngineParams.from_dict(pd)
+        assert params.scoring_targets is not None
+        assert params.scoring_targets.overall_visibility_target == 30.0
+        assert params.scoring_targets.overall_visibility_weight == 2.0
+        assert params.scoring_targets.dz_visibility_target is None
+        assert params.scoring_targets.dz_hidden_target == 40.0
+        assert params.scoring_targets.dz_hidden_weight == 1.0
+
+    def test_scoring_targets_to_dict(self):
+        """to_dict only includes set targets."""
+        st = ScoringTargets(
+            overall_visibility_target=30.0,
+            overall_visibility_weight=2.0,
+        )
+        d = st.to_dict()
+        assert d["overall_visibility_target"] == 30.0
+        assert d["overall_visibility_weight"] == 2.0
+        assert "dz_visibility_target" not in d
+        assert "dz_hidden_target" not in d
+
+    def test_phase1_unaffected_by_targets(self):
+        """Phase 1 scoring is unchanged by scoring targets."""
+        layout = TerrainLayout(table_width=60.0, table_depth=44.0)
+        prefs = [FeatureCountPreference(feature_type="obstacle", min=5)]
+        targets = ScoringTargets(overall_visibility_target=30.0)
+        score = _compute_score(layout, prefs, {}, scoring_targets=targets)
+        expected = PHASE2_BASE / (1.0 + 5)
+        assert abs(score - expected) < 1e-6

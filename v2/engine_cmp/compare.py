@@ -20,6 +20,7 @@ from engine.types import (
     FeatureComponent,
     FeatureCountPreference,
     Mission,
+    ScoringTargets,
     Shape,
     TerrainCatalog,
     TerrainFeature,
@@ -418,6 +419,7 @@ def make_test_params(
     rotationally_symmetric: bool = False,
     mission: Optional[Mission] = None,
     skip_visibility: bool = False,
+    scoring_targets: Optional[ScoringTargets] = None,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -433,6 +435,7 @@ def make_test_params(
         rotationally_symmetric=rotationally_symmetric,
         mission=mission,
         skip_visibility=skip_visibility,
+        scoring_targets=scoring_targets,
     )
 
 
@@ -452,6 +455,7 @@ class TestScenario:
     rotationally_symmetric: bool = False
     mission: Optional[Mission] = None
     skip_visibility: bool = False
+    scoring_targets: Optional[ScoringTargets] = None
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -467,6 +471,7 @@ class TestScenario:
             rotationally_symmetric=self.rotationally_symmetric,
             mission=self.mission,
             skip_visibility=self.skip_visibility,
+            scoring_targets=self.scoring_targets,
         )
 
 
@@ -663,6 +668,26 @@ TEST_SCENARIOS = [
         seed=99,
         num_steps=50,
     ),
+    TestScenario(
+        "scoring_targets_overall_only",
+        seed=42,
+        num_steps=50,
+        scoring_targets=ScoringTargets(
+            overall_visibility_target=30.0,
+        ),
+    ),
+    TestScenario(
+        "scoring_targets_with_mission",
+        seed=42,
+        num_steps=50,
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+        scoring_targets=ScoringTargets(
+            overall_visibility_target=30.0,
+            dz_visibility_target=20.0,
+            dz_hidden_target=40.0,
+            objective_hidability_target=40.0,
+        ),
+    ),
 ]
 
 
@@ -811,6 +836,11 @@ def run_comparison(
                 else {}
             ),
             **({"skip_visibility": True} if params.skip_visibility else {}),
+            **(
+                {"scoring_targets": params.scoring_targets.to_dict()}
+                if params.scoring_targets is not None
+                else {}
+            ),
         }
 
         # Call Rust engine via PyO3
