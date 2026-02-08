@@ -113,15 +113,64 @@ RUINS_FEATURE = {
     "components": [{"object_id": "ruins"}],
 }
 
+WTC_THREE_STOREY_WALLS = {
+    "id": "wtc_three_storey_walls",
+    "name": "WTC Three Storey Walls",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 9.0,
+            "depth_inches": 0.1,
+            "height_inches": 9.0,
+            "offset": {"x_inches": -0.65, "z_inches": -2.15},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.1,
+            "depth_inches": 5.0,
+            "height_inches": 9.0,
+            "offset": {"x_inches": -5.15, "z_inches": 0.35},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.6,
+            "depth_inches": 0.1,
+            "height_inches": 3.0,
+            "offset": {"x_inches": -5.5, "z_inches": -2.15},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.1,
+            "depth_inches": 0.6,
+            "height_inches": 3.0,
+            "offset": {"x_inches": -5.15, "z_inches": -2.5},
+        },
+    ],
+    "tags": ["ruins", "wtc"],
+    "fill_color": "#111111",
+    "outline_color": "#000000",
+}
+
+WTC_THREE_STOREY_FEATURE = {
+    "id": "wtc_three_storey",
+    "feature_type": "obscuring",
+    "components": [
+        {"object_id": "ruins"},
+        {"object_id": "wtc_three_storey_walls"},
+    ],
+}
+
 SAMPLE_CATALOG = {
     "name": "Sample terrain",
     "objects": [
         {"item": CRATE_OBJECT, "quantity": None},
         {"item": RUINS_OBJECT, "quantity": None},
+        {"item": WTC_THREE_STOREY_WALLS, "quantity": None},
     ],
     "features": [
         {"item": CRATE_FEATURE, "quantity": None},
         {"item": RUINS_FEATURE, "quantity": None},
+        {"item": WTC_THREE_STOREY_FEATURE, "quantity": None},
     ],
 }
 
