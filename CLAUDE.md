@@ -118,6 +118,29 @@ The repository is configured with:
 
 When ready to commit, inform the user of the changes and ask approval. The validation pipeline (formatting + pre-commit checks) should run automatically, but the actual `git commit` requires explicit user permission.
 
+## Merging to Main
+
+When the user asks to merge a feature branch to main, follow this procedure:
+
+```bash
+# 1. Pull latest main
+git checkout main && git pull
+
+# 2. Squash feature branch into a single commit
+git checkout feature/my-branch
+git reset --soft main
+git commit -m "Unified commit message describing the feature"
+
+# 3. Fast-forward merge into main
+git checkout main
+git merge feature/my-branch
+
+# 4. Push
+git push
+```
+
+The squashed commit message should summarize the entire feature, not repeat individual commit messages. Always ask the user before pushing to main.
+
 ## Key Constraints
 
 - **Determinism**: The engine must produce identical results given the same seed. No hash-order dependence, no set iteration, no stdlib PRNG (use a portable PRNG like PCG/xoshiro implemented from scratch). This enables cross-language verification between Python and Rust implementations.
