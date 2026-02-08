@@ -16,3 +16,14 @@ known_first_party = ["v2"]
 [tool.pytest.ini_options]
 testpaths = ["engine", "frontend"]
 python_files = ["*_test.py"]
+
+[tool.coverage.run]
+source = ["engine", "frontend"]
+omit = ["*_test.py", "engine_cmp/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+[tool.coverage.html]
+directory = "htmlcov"
