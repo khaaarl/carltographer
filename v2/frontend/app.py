@@ -55,13 +55,13 @@ DEFAULT_FILL = "#888888"
 
 CRATE_OBJECT = {
     "id": "crate",
-    "name": "Crate",
+    "name": "Crate (double-stack)",
     "shapes": [
         {
             "shape_type": "rectangular_prism",
             "width_inches": 5.0,
             "depth_inches": 2.5,
-            "height_inches": 2.5,
+            "height_inches": 5.0,
         }
     ],
     "tags": ["container"],
