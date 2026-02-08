@@ -23,7 +23,7 @@ EDITIONS: dict[str, dict[str, dict[str, dict[str, Any]]]] = {
                 "rotationally_symmetric": True,
                 "deployment_zones": [
                     {
-                        "id": "red",
+                        "id": "green",
                         "polygons": [
                             [
                                 {"x_inches": -_HW, "z_inches": -_HD},
@@ -34,7 +34,7 @@ EDITIONS: dict[str, dict[str, dict[str, dict[str, Any]]]] = {
                         ],
                     },
                     {
-                        "id": "green",
+                        "id": "red",
                         "polygons": [
                             [
                                 {"x_inches": _HW - 18, "z_inches": -_HD},
@@ -53,22 +53,22 @@ EDITIONS: dict[str, dict[str, dict[str, dict[str, Any]]]] = {
                     },
                     {
                         "id": "2",
-                        "position": {"x_inches": 0.0, "z_inches": -11.0},
+                        "position": {"x_inches": 0.0, "z_inches": -16.0},
                         "range_inches": 3.0,
                     },
                     {
                         "id": "3",
-                        "position": {"x_inches": 0.0, "z_inches": 11.0},
+                        "position": {"x_inches": 0.0, "z_inches": 16.0},
                         "range_inches": 3.0,
                     },
                     {
                         "id": "4",
-                        "position": {"x_inches": -24.0, "z_inches": 0.0},
+                        "position": {"x_inches": -20.0, "z_inches": 0.0},
                         "range_inches": 3.0,
                     },
                     {
                         "id": "5",
-                        "position": {"x_inches": 24.0, "z_inches": 0.0},
+                        "position": {"x_inches": 20.0, "z_inches": 0.0},
                         "range_inches": 3.0,
                     },
                 ],
@@ -108,22 +108,264 @@ EDITIONS: dict[str, dict[str, dict[str, dict[str, Any]]]] = {
                     },
                     {
                         "id": "2",
-                        "position": {"x_inches": -15.0, "z_inches": 0.0},
+                        "position": {"x_inches": -20.0, "z_inches": 0.0},
                         "range_inches": 3.0,
                     },
                     {
                         "id": "3",
-                        "position": {"x_inches": 15.0, "z_inches": 0.0},
+                        "position": {"x_inches": 20.0, "z_inches": 0.0},
                         "range_inches": 3.0,
                     },
                     {
                         "id": "4",
-                        "position": {"x_inches": 0.0, "z_inches": -17.0},
+                        "position": {"x_inches": 0.0, "z_inches": -16.0},
                         "range_inches": 3.0,
                     },
                     {
                         "id": "5",
-                        "position": {"x_inches": 0.0, "z_inches": 17.0},
+                        "position": {"x_inches": 0.0, "z_inches": 16.0},
+                        "range_inches": 3.0,
+                    },
+                ],
+            },
+            # L-shaped zones along short edges
+            "Tipping Point": {
+                "name": "Tipping Point",
+                "rotationally_symmetric": True,
+                "deployment_zones": [
+                    {
+                        "id": "green",
+                        "polygons": [
+                            [
+                                {"x_inches": -_HW, "z_inches": _HD},
+                                {"x_inches": -10.0, "z_inches": _HD},
+                                {"x_inches": -10.0, "z_inches": 0.0},
+                                {"x_inches": -18.0, "z_inches": 0.0},
+                                {"x_inches": -18.0, "z_inches": -_HD},
+                                {"x_inches": -_HW, "z_inches": -_HD},
+                            ]
+                        ],
+                    },
+                    {
+                        "id": "red",
+                        "polygons": [
+                            [
+                                {"x_inches": _HW, "z_inches": -_HD},
+                                {"x_inches": 10.0, "z_inches": -_HD},
+                                {"x_inches": 10.0, "z_inches": 0.0},
+                                {"x_inches": 18.0, "z_inches": 0.0},
+                                {"x_inches": 18.0, "z_inches": _HD},
+                                {"x_inches": _HW, "z_inches": _HD},
+                            ]
+                        ],
+                    },
+                ],
+                "objectives": [
+                    {
+                        "id": "1",
+                        "position": {"x_inches": 0.0, "z_inches": 0.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "2",
+                        "position": {"x_inches": -16.0, "z_inches": 12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "3",
+                        "position": {"x_inches": 16.0, "z_inches": -12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "4",
+                        "position": {"x_inches": 8.0, "z_inches": 14.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "5",
+                        "position": {"x_inches": -8.0, "z_inches": -14.0},
+                        "range_inches": 3.0,
+                    },
+                ],
+            },
+            # L-shaped zones along long edges
+            "Sweeping Engagement": {
+                "name": "Sweeping Engagement",
+                "rotationally_symmetric": True,
+                "deployment_zones": [
+                    {
+                        "id": "green",
+                        "polygons": [
+                            [
+                                {"x_inches": -_HW, "z_inches": _HD},
+                                {"x_inches": _HW, "z_inches": _HD},
+                                {"x_inches": _HW, "z_inches": 14.0},
+                                {"x_inches": 0.0, "z_inches": 14.0},
+                                {"x_inches": 0.0, "z_inches": 8.0},
+                                {"x_inches": -_HW, "z_inches": 8.0},
+                            ]
+                        ],
+                    },
+                    {
+                        "id": "red",
+                        "polygons": [
+                            [
+                                {"x_inches": _HW, "z_inches": -_HD},
+                                {"x_inches": -_HW, "z_inches": -_HD},
+                                {"x_inches": -_HW, "z_inches": -14.0},
+                                {"x_inches": 0.0, "z_inches": -14.0},
+                                {"x_inches": 0.0, "z_inches": -8.0},
+                                {"x_inches": _HW, "z_inches": -8.0},
+                            ]
+                        ],
+                    },
+                ],
+                "objectives": [
+                    {
+                        "id": "1",
+                        "position": {"x_inches": 0.0, "z_inches": 0.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "2",
+                        "position": {"x_inches": -12.0, "z_inches": 16.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "3",
+                        "position": {"x_inches": 12.0, "z_inches": -16.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "4",
+                        "position": {"x_inches": 20.0, "z_inches": 4.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "5",
+                        "position": {"x_inches": -20.0, "z_inches": -4.0},
+                        "range_inches": 3.0,
+                    },
+                ],
+            },
+            # Diagonal triangle zones
+            "Crucible of Battle": {
+                "name": "Crucible of Battle",
+                "rotationally_symmetric": True,
+                "deployment_zones": [
+                    {
+                        "id": "green",
+                        "polygons": [
+                            [
+                                {"x_inches": -_HW, "z_inches": -_HD},
+                                {"x_inches": -_HW, "z_inches": _HD},
+                                {"x_inches": 0.0, "z_inches": _HD},
+                            ]
+                        ],
+                    },
+                    {
+                        "id": "red",
+                        "polygons": [
+                            [
+                                {"x_inches": _HW, "z_inches": _HD},
+                                {"x_inches": _HW, "z_inches": -_HD},
+                                {"x_inches": 0.0, "z_inches": -_HD},
+                            ]
+                        ],
+                    },
+                ],
+                "objectives": [
+                    {
+                        "id": "1",
+                        "position": {"x_inches": 0.0, "z_inches": 0.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "2",
+                        "position": {"x_inches": -16.0, "z_inches": 12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "3",
+                        "position": {"x_inches": 16.0, "z_inches": -12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "4",
+                        "position": {"x_inches": 10.0, "z_inches": 14.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "5",
+                        "position": {"x_inches": -10.0, "z_inches": -14.0},
+                        "range_inches": 3.0,
+                    },
+                ],
+            },
+            # Quarter-table zones with 9" arc cutout (approximated)
+            "Search and Destroy": {
+                "name": "Search and Destroy",
+                "rotationally_symmetric": True,
+                "deployment_zones": [
+                    {
+                        "id": "green",
+                        "polygons": [
+                            [
+                                {"x_inches": -_HW, "z_inches": _HD},
+                                {"x_inches": 0.0, "z_inches": _HD},
+                                {"x_inches": 0.0, "z_inches": 9.0},
+                                {"x_inches": -2.33, "z_inches": 8.69},
+                                {"x_inches": -4.5, "z_inches": 7.79},
+                                {"x_inches": -6.36, "z_inches": 6.36},
+                                {"x_inches": -7.79, "z_inches": 4.5},
+                                {"x_inches": -8.69, "z_inches": 2.33},
+                                {"x_inches": -9.0, "z_inches": 0.0},
+                                {"x_inches": -_HW, "z_inches": 0.0},
+                            ]
+                        ],
+                    },
+                    {
+                        "id": "red",
+                        "polygons": [
+                            [
+                                {"x_inches": _HW, "z_inches": -_HD},
+                                {"x_inches": 0.0, "z_inches": -_HD},
+                                {"x_inches": 0.0, "z_inches": -9.0},
+                                {"x_inches": 2.33, "z_inches": -8.69},
+                                {"x_inches": 4.5, "z_inches": -7.79},
+                                {"x_inches": 6.36, "z_inches": -6.36},
+                                {"x_inches": 7.79, "z_inches": -4.5},
+                                {"x_inches": 8.69, "z_inches": -2.33},
+                                {"x_inches": 9.0, "z_inches": 0.0},
+                                {"x_inches": _HW, "z_inches": 0.0},
+                            ]
+                        ],
+                    },
+                ],
+                "objectives": [
+                    {
+                        "id": "1",
+                        "position": {"x_inches": 0.0, "z_inches": 0.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "2",
+                        "position": {"x_inches": -16.0, "z_inches": 12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "3",
+                        "position": {"x_inches": 16.0, "z_inches": -12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "4",
+                        "position": {"x_inches": 16.0, "z_inches": 12.0},
+                        "range_inches": 3.0,
+                    },
+                    {
+                        "id": "5",
+                        "position": {"x_inches": -16.0, "z_inches": -12.0},
                         "range_inches": 3.0,
                     },
                 ],

@@ -189,25 +189,77 @@ class BattlefieldRenderer:
         py = (z_inches + self.table_depth / 2) * self.ppi
         return px, py
 
-    def _build_dz_rects_px(self):
-        """Build list of (x_min, z_min, x_max, z_max, color_id) rects in table inches."""
+    def _build_dz_polys(self):
+        """Build list of (polygon_points, color_id) for all DZ polygons.
+
+        Each polygon_points is a list of (x, z) tuples in table inches.
+        """
         if not self.mission:
             return []
-        rects = []
+        polys = []
         for dz in self.mission.get("deployment_zones", []):
             color_id = dz["id"]
             for poly in dz.get("polygons", []):
-                xs = [p["x_inches"] for p in poly]
-                zs = [p["z_inches"] for p in poly]
-                rects.append((min(xs), min(zs), max(xs), max(zs), color_id))
-        return rects
+                pts = [(p["x_inches"], p["z_inches"]) for p in poly]
+                polys.append((pts, color_id))
+        return polys
 
-    def _get_zone_color_at(self, x_inches, z_inches, dz_rects):
+    @staticmethod
+    def _point_in_polygon(x, z, poly):
+        """Ray-casting point-in-polygon test. poly is list of (x,z) tuples."""
+        n = len(poly)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, zi = poly[i]
+            xj, zj = poly[j]
+            if (zi > z) != (zj > z) and x < (xj - xi) * (z - zi) / (
+                zj - zi
+            ) + xi:
+                inside = not inside
+            j = i
+        return inside
+
+    def _get_zone_color_at(self, x_inches, z_inches, dz_polys):
         """Return zone color_id at a table-space point, or None for NML."""
-        for x_min, z_min, x_max, z_max, color_id in dz_rects:
-            if x_min <= x_inches <= x_max and z_min <= z_inches <= z_max:
+        for poly, color_id in dz_polys:
+            if self._point_in_polygon(x_inches, z_inches, poly):
                 return color_id
         return None
+
+    @staticmethod
+    def _line_polygon_intersections_z(x_val, poly):
+        """Find all z values where the vertical line x=x_val intersects polygon edges."""
+        zs = []
+        n = len(poly)
+        for i in range(n):
+            x1, z1 = poly[i]
+            x2, z2 = poly[(i + 1) % n]
+            if x1 == x2:
+                continue  # edge is vertical, parallel to our line
+            if (x_val - x1) * (x_val - x2) > 0:
+                continue  # x_val not between x1 and x2
+            t = (x_val - x1) / (x2 - x1)
+            if 0.0 <= t <= 1.0:
+                zs.append(z1 + t * (z2 - z1))
+        return zs
+
+    @staticmethod
+    def _line_polygon_intersections_x(z_val, poly):
+        """Find all x values where the horizontal line z=z_val intersects polygon edges."""
+        xs = []
+        n = len(poly)
+        for i in range(n):
+            x1, z1 = poly[i]
+            x2, z2 = poly[(i + 1) % n]
+            if z1 == z2:
+                continue  # edge is horizontal, parallel to our line
+            if (z_val - z1) * (z_val - z2) > 0:
+                continue  # z_val not between z1 and z2
+            t = (z_val - z1) / (z2 - z1)
+            if 0.0 <= t <= 1.0:
+                xs.append(x1 + t * (x2 - x1))
+        return xs
 
     def render(self, layout):
         w = int(self.table_width * self.ppi)
@@ -215,15 +267,15 @@ class BattlefieldRenderer:
         has_mission = self.mission is not None
 
         # 1. Background
-        bg = NO_MANS_LAND_BG if has_mission else TABLE_BG
+        bg = NO_MANS_LAND_BG
         img = Image.new("RGB", (w, h), bg)
         draw = ImageDraw.Draw(img)
 
         # 2. DZ backgrounds
-        dz_rects = []
+        dz_polys = []
         mission = self.mission
         if mission is not None:
-            dz_rects = self._build_dz_rects_px()
+            dz_polys = self._build_dz_polys()
             for dz in mission.get("deployment_zones", []):
                 color_id = dz["id"]
                 colors = DZ_COLORS.get(color_id, DZ_COLORS["red"])
@@ -235,14 +287,14 @@ class BattlefieldRenderer:
 
         # 3. Grid lines (zone-aware if mission)
         if has_mission:
-            self._draw_zone_aware_grid(draw, w, h, dz_rects)
+            self._draw_zone_aware_grid(draw, w, h, dz_polys)
         else:
             for ix in range(1, int(self.table_width)):
                 px = int(ix * self.ppi)
-                draw.line([(px, 0), (px, h - 1)], fill=TABLE_GRID)
+                draw.line([(px, 0), (px, h - 1)], fill=NO_MANS_LAND_GRID)
             for iz in range(1, int(self.table_depth)):
                 py = int(iz * self.ppi)
-                draw.line([(0, py), (w - 1, py)], fill=TABLE_GRID)
+                draw.line([(0, py), (w - 1, py)], fill=NO_MANS_LAND_GRID)
 
         # 4. Terrain features
         for pf in layout["placed_features"]:
@@ -264,45 +316,45 @@ class BattlefieldRenderer:
         draw.rectangle([0, 0, w - 1, h - 1], outline=TABLE_BORDER, width=3)
         return img
 
-    def _draw_zone_aware_grid(self, draw, w, h, dz_rects):
+    def _draw_zone_aware_grid(self, draw, w, h, dz_polys):
         """Draw grid lines with colors matching the zone they pass through."""
         hw = self.table_width / 2
         hd = self.table_depth / 2
-
-        # Collect zone boundary X and Z values (in table inches)
-        zone_x_boundaries = set()
-        zone_z_boundaries = set()
-        for x_min, z_min, x_max, z_max, _cid in dz_rects:
-            zone_x_boundaries.add(x_min)
-            zone_x_boundaries.add(x_max)
-            zone_z_boundaries.add(z_min)
-            zone_z_boundaries.add(z_max)
 
         # Vertical grid lines
         for ix in range(1, int(self.table_width)):
             px = int(ix * self.ppi)
             x_inches = ix - hw
-            # Build segments split at zone boundaries
-            z_breaks = sorted(zone_z_boundaries | {-hd, hd})
-            for i in range(len(z_breaks) - 1):
-                z_mid = (z_breaks[i] + z_breaks[i + 1]) / 2
-                zone = self._get_zone_color_at(x_inches, z_mid, dz_rects)
+            # Find all z-intersections with polygon edges
+            z_breaks = {-hd, hd}
+            for poly, _cid in dz_polys:
+                for z in self._line_polygon_intersections_z(x_inches, poly):
+                    z_breaks.add(z)
+            z_breaks_sorted = sorted(z_breaks)
+            for i in range(len(z_breaks_sorted) - 1):
+                z_mid = (z_breaks_sorted[i] + z_breaks_sorted[i + 1]) / 2
+                zone = self._get_zone_color_at(x_inches, z_mid, dz_polys)
                 color = self._grid_color_for_zone(zone)
-                py0 = int((z_breaks[i] + hd) * self.ppi)
-                py1 = int((z_breaks[i + 1] + hd) * self.ppi)
+                py0 = int((z_breaks_sorted[i] + hd) * self.ppi)
+                py1 = int((z_breaks_sorted[i + 1] + hd) * self.ppi)
                 draw.line([(px, py0), (px, py1)], fill=color)
 
         # Horizontal grid lines
         for iz in range(1, int(self.table_depth)):
             py = int(iz * self.ppi)
             z_inches = iz - hd
-            x_breaks = sorted(zone_x_boundaries | {-hw, hw})
-            for i in range(len(x_breaks) - 1):
-                x_mid = (x_breaks[i] + x_breaks[i + 1]) / 2
-                zone = self._get_zone_color_at(x_mid, z_inches, dz_rects)
+            # Find all x-intersections with polygon edges
+            x_breaks = {-hw, hw}
+            for poly, _cid in dz_polys:
+                for x in self._line_polygon_intersections_x(z_inches, poly):
+                    x_breaks.add(x)
+            x_breaks_sorted = sorted(x_breaks)
+            for i in range(len(x_breaks_sorted) - 1):
+                x_mid = (x_breaks_sorted[i] + x_breaks_sorted[i + 1]) / 2
+                zone = self._get_zone_color_at(x_mid, z_inches, dz_polys)
                 color = self._grid_color_for_zone(zone)
-                px0 = int((x_breaks[i] + hw) * self.ppi)
-                px1 = int((x_breaks[i + 1] + hw) * self.ppi)
+                px0 = int((x_breaks_sorted[i] + hw) * self.ppi)
+                px1 = int((x_breaks_sorted[i + 1] + hw) * self.ppi)
                 draw.line([(px0, py), (px1, py)], fill=color)
 
     def _grid_color_for_zone(self, zone_color_id):
