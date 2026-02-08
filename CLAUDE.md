@@ -51,7 +51,8 @@ source .env/bin/activate
 
 Toolchain (always run from v2/):
 - **Run UI**: `./scripts/run-ui.sh` (works from any directory)
-- **Build Rust engine**: `./scripts/build-rust-engine.sh` (works from any directory)
+- **Build Rust engine**: `python scripts/build_rust_engine.py` (cross-platform, works from v2/)
+- **Package executable**: `python scripts/package_executable.py` (cross-platform, works from v2/)
 - **pytest** for tests: `python -m pytest engine/`
 - **ruff format**: `ruff format .` (auto-fixes)
 - **isort** for import sorting: `isort .` (auto-fixes)
@@ -136,18 +137,17 @@ When ready to commit, inform the user of the changes and ask approval. The valid
 
 4. **Run comparison tests**: After implementing in Rust, MUST verify parity using the build script:
    ```bash
-   # Automated: builds engine, runs tests, validates manifest
-   v2/scripts/build-rust-engine.sh
+   # Automated: builds engine, runs tests, validates manifest (from v2/)
+   python scripts/build_rust_engine.py
 
    # Or manually:
    cd v2/engine_rs && maturin develop
    python -m pytest engine_cmp/ -v
    ```
-   - All tests must pass (12 scenarios currently, more if you added new ones)
-   - Look for "12 passed, 0 failed" in output
+   - All tests must pass (18 scenarios currently, more if you added new ones)
+   - Look for "18 passed, 0 failed" in output
    - If any test fails, inspect the diff output to find where engines diverge
    - Common issues: floating-point order, randomness, quantization rounding
-   - The build script can be run from any directory: `/path/to/v2/scripts/build-rust-engine.sh`
 
 5. **Update unit tests**: Ensure new Rust tests are added to cover the new feature:
    - Add to `v2/engine_rs/src/collision.rs` tests if collision-related
@@ -157,28 +157,33 @@ When ready to commit, inform the user of the changes and ask approval. The valid
 6. **Verify no regressions**:
    - Python: `python -m pytest v2/engine/ -v` (should still have 44+ tests)
    - Rust: `cargo test` (should still have 28+ tests)
-   - Comparison: `python -m engine_cmp.compare` (12+ tests, all passing)
+   - Comparison: `python -m engine_cmp.compare` (18+ tests, all passing)
 
 **Do NOT commit Rust engine changes without confirming parity.** The comparison tool is your verification that the engines are in sync.
 
-## Build and Verification Script
+## Build and Verification Scripts
 
-**After any changes to Rust engine code or verification code, ALWAYS run:**
+**After any changes to Rust engine code or verification code, ALWAYS run (from v2/):**
 
 ```bash
-v2/scripts/build-rust-engine.sh
+python scripts/build_rust_engine.py
 ```
 
 **What this script does:**
 1. Validates Python venv and Rust toolchain are available
 2. Compiles Rust engine with `maturin develop`
-3. Runs all 12 engine parity comparison tests
+3. Runs all 18 engine parity comparison tests
 4. Verifies hash manifest was written to `.engine_parity_manifest.json`
 5. Exits with code 0 (success) or 1 (failure)
 
 **Usage:**
-- **Default (verbose)**: `v2/scripts/build-rust-engine.sh` - shows all build output and test results
-- **Quiet mode**: `v2/scripts/build-rust-engine.sh --quiet` - minimal output, good for CI/CD
-- **From any directory**: Script automatically locates the repo, works from `/tmp`, home dir, anywhere
+- **Default (verbose)**: `python scripts/build_rust_engine.py`
+- **Quiet mode**: `python scripts/build_rust_engine.py --quiet`
 
-**See `v2/scripts/README.md` for troubleshooting and detailed documentation.**
+**Packaging (from v2/):**
+```bash
+python scripts/package_executable.py                   # full build
+python scripts/package_executable.py --skip-rust-build # skip Rust rebuild
+```
+
+Auto-detects OS and architecture, names output accordingly (e.g. `carltographer-linux-x86_64`, `carltographer-windows-x86_64.exe`, `carltographer-mac-arm64`). Both scripts are cross-platform (Linux, macOS, Windows).
