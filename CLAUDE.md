@@ -71,6 +71,8 @@ ruff format .
 
 ## Committing Code
 
+ALWAYS ASK FOR PERMISSION BEFORE COMMITTING TO MAIN/MASTER, BUT COMMITTING TO FEATURE BRANCHES DOES NOT REQUIRE PERMISSION.
+
 Before committing, run the full validation pipeline (from repo root):
 
 ```bash
