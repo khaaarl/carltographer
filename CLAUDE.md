@@ -154,6 +154,7 @@ git branch -d feature/my-branch-rebase
 3. Resolve by editing to keep the correct version of each section
 4. `git add <resolved-files> && git rebase --continue`
 5. After rebase completes, verify the code still works (run tests)
+6. **If conflicts required non-trivial edits** (e.g., integrating two features that touch the same code), ask the user for permission before completing the merge. Truly trivial conflicts (e.g., both sides added adjacent lines with no semantic interaction) can be resolved and merged without asking.
 
 The squashed commit message should summarize the entire feature, not repeat individual commit messages. Always ask the user before pushing to main.
 
