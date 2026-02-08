@@ -69,6 +69,18 @@ ruff format .
 
 **Do NOT ask for permission.** This must happen automatically after every Python file edit/write. Ensures code stays clean and pre-commit checks pass on first try.
 
+## Branching (CRITICAL — DO THIS FIRST)
+
+**NEVER make code changes directly on `main`.** Before writing ANY code, you MUST:
+
+1. Create a feature branch: `git checkout -b <descriptive-branch-name>`
+2. Verify you are on the feature branch: `git branch --show-current`
+3. ONLY THEN start making changes
+
+**This is non-negotiable.** If you realize you are on `main` and have already made changes, STOP immediately and ask the user how to proceed — do NOT commit to `main`.
+
+The only exception is editing `CLAUDE.md` itself, which can be done on `main` if explicitly requested.
+
 ## Committing Code
 
 ALWAYS ASK FOR PERMISSION BEFORE COMMITTING TO MAIN/MASTER, BUT COMMITTING TO FEATURE BRANCHES DOES NOT REQUIRE PERMISSION.
