@@ -1340,6 +1340,7 @@ class App:
     def _load_layout(self, layout):
         """Load a layout from history and display it."""
         self.layout = copy.deepcopy(layout)
+        self._update_visibility_display()
         self._deselect()
         self._render()
 
