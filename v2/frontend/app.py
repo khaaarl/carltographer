@@ -279,80 +279,78 @@ class ControlPanel(ttk.Frame):
     # -- layout --
 
     def _build(self):
+        left = ttk.Frame(self)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+
+        right = ttk.Frame(self)
+        right.pack(side=tk.LEFT, fill=tk.Y)
+
+        # --- Left column: Table, Generation, Buttons ---
         row = 0
+        row = self._section(left, row, "Table")
+        row = self._field(left, row, "Width (in):", self.table_width_var)
+        row = self._field(left, row, "Depth (in):", self.table_depth_var)
 
-        ttk.Label(self, text="Engine Parameters", font=("", 14, "bold")).grid(
-            row=row, column=0, columnspan=2, pady=(0, 12), sticky="w"
-        )
-        row += 1
-
-        # Table
-        row = self._section(row, "Table")
-        row = self._field(row, "Width (in):", self.table_width_var)
-        row = self._field(row, "Depth (in):", self.table_depth_var)
-
-        # Generation
-        row = self._sep(row)
-        row = self._section(row, "Generation")
-        row = self._field(row, "Seed:", self.seed_var)
-        row = self._field(row, "Steps:", self.num_steps_var)
+        row = self._sep(left, row)
+        row = self._section(left, row, "Generation")
+        row = self._field(left, row, "Seed:", self.seed_var)
+        row = self._field(left, row, "Steps:", self.num_steps_var)
         ttk.Checkbutton(
-            self, text="Rotationally symmetric", variable=self.symmetric_var
+            left, text="Rotationally symmetric", variable=self.symmetric_var
         ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
         row += 1
 
-        # Spacing
-        row = self._sep(row)
-        row = self._section(row, "Spacing")
-        row = self._field(row, "Feature gap (in):", self.min_gap_var)
-        row = self._field(row, "Edge gap (in):", self.min_edge_gap_var)
+        row = self._sep(left, row)
+        ttk.Button(left, text="Generate", command=self.on_generate).grid(
+            row=row, column=0, columnspan=2, pady=(10, 2), sticky="ew"
+        )
+        row += 1
+        ttk.Button(left, text="Clear Layout", command=self.on_clear).grid(
+            row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
+        )
+        row += 1
+        ttk.Button(left, text="Save Image", command=self.on_save).grid(
+            row=row, column=0, columnspan=2, pady=(2, 10), sticky="ew"
+        )
 
-        # Feature counts
-        row = self._sep(row)
-        row = self._section(row, "Feature Counts")
-        row = self._field(row, "Min obstacles:", self.min_crates_var)
-        row = self._field(row, "Max obstacles:", self.max_crates_var)
-        row = self._field(row, "Min ruins:", self.min_ruins_var)
-        row = self._field(row, "Max ruins:", self.max_ruins_var)
+        # --- Right column: Spacing, Feature Counts, Results ---
+        row = 0
+        row = self._section(right, row, "Spacing")
+        row = self._field(right, row, "Feature gap (in):", self.min_gap_var)
+        row = self._field(right, row, "Edge gap (in):", self.min_edge_gap_var)
 
-        # Results
-        row = self._sep(row)
-        row = self._section(row, "Results")
-        self.visibility_label = ttk.Label(self, text="Visibility: --")
+        row = self._sep(right, row)
+        row = self._section(right, row, "Feature Counts")
+        row = self._field(right, row, "Min obstacles:", self.min_crates_var)
+        row = self._field(right, row, "Max obstacles:", self.max_crates_var)
+        row = self._field(right, row, "Min ruins:", self.min_ruins_var)
+        row = self._field(right, row, "Max ruins:", self.max_ruins_var)
+
+        row = self._sep(right, row)
+        row = self._section(right, row, "Results")
+        self.visibility_label = ttk.Label(right, text="Visibility: --")
         self.visibility_label.grid(
             row=row, column=0, columnspan=2, sticky="w", pady=2
         )
         row += 1
 
-        # Buttons
-        row = self._sep(row)
-        ttk.Button(self, text="Generate", command=self.on_generate).grid(
-            row=row, column=0, columnspan=2, pady=(10, 2), sticky="ew"
-        )
-        row += 1
-        ttk.Button(self, text="Clear Layout", command=self.on_clear).grid(
-            row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
-        )
-        row += 1
-        ttk.Button(self, text="Save Image", command=self.on_save).grid(
-            row=row, column=0, columnspan=2, pady=(2, 10), sticky="ew"
-        )
-
-    def _section(self, row, title):
-        ttk.Label(self, text=title, font=("", 11, "bold")).grid(
+    def _section(self, parent, row, title):
+        ttk.Label(parent, text=title, font=("", 11, "bold")).grid(
             row=row, column=0, columnspan=2, pady=(8, 4), sticky="w"
         )
         return row + 1
 
-    def _field(self, row, label, var):
-        ttk.Label(self, text=label).grid(row=row, column=0, sticky="w", pady=2)
-        ttk.Entry(self, textvariable=var, width=10).grid(
+    def _field(self, parent, row, label, var):
+        ttk.Label(parent, text=label).grid(
+            row=row, column=0, sticky="w", pady=2
+        )
+        ttk.Entry(parent, textvariable=var, width=10).grid(
             row=row, column=1, sticky="w", pady=2, padx=(5, 0)
         )
         return row + 1
 
-    def _sep(self, row):
-        ttk.Separator(self, orient="horizontal").grid(
+    def _sep(self, parent, row):
+        ttk.Separator(parent, orient="horizontal").grid(
             row=row, column=0, columnspan=2, sticky="ew", pady=8
         )
         return row + 1
