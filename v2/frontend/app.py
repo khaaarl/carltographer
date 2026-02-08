@@ -9,12 +9,13 @@ import math
 import random
 import time
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
 from ..engine import generate_json
 from ..engine_cmp.hash_manifest import verify_engine_unchanged
+from .layout_io import load_layout, save_layout_png
 
 try:
     import engine_rs as _engine_rs
@@ -249,13 +250,14 @@ class ControlPanel(ttk.Frame):
     """Sidebar with engine parameter controls."""
 
     def __init__(
-        self, parent, on_table_changed, on_generate, on_clear, on_save
+        self, parent, on_table_changed, on_generate, on_clear, on_save, on_load
     ):
         super().__init__(parent, padding=10)
         self.on_table_changed = on_table_changed
         self.on_generate = on_generate
         self.on_clear = on_clear
         self.on_save = on_save
+        self.on_load = on_load
 
         # -- tk variables --
         self.table_width_var = tk.DoubleVar(value=60.0)
@@ -309,7 +311,11 @@ class ControlPanel(ttk.Frame):
             row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
         )
         row += 1
-        ttk.Button(left, text="Save Image", command=self.on_save).grid(
+        ttk.Button(left, text="Save Layout", command=self.on_save).grid(
+            row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
+        )
+        row += 1
+        ttk.Button(left, text="Load Layout", command=self.on_load).grid(
             row=row, column=0, columnspan=2, pady=(2, 10), sticky="ew"
         )
 
@@ -544,6 +550,7 @@ class App:
             on_generate=self._on_generate,
             on_clear=self._on_clear,
             on_save=self._on_save,
+            on_load=self._on_load,
         )
         self.controls.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
@@ -636,6 +643,7 @@ class App:
         path = filedialog.asksaveasfilename(
             defaultextension=".png",
             filetypes=[("PNG files", "*.png")],
+            initialfile=f"layout_{time.strftime('%Y-%m-%d_%H-%M-%S')}.png",
         )
         if not path:
             return
@@ -650,7 +658,34 @@ class App:
 
         renderer = BattlefieldRenderer(tw, td, ppi, self.objects_by_id)
         img = renderer.render(self.layout)
-        img.save(path)
+        save_layout_png(img, self.layout, path)
+
+    def _on_load(self):
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Layout files", "*.png *.json"),
+                ("PNG files", "*.png"),
+                ("JSON files", "*.json"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            layout = load_layout(path)
+        except (ValueError, Exception) as e:
+            messagebox.showerror("Load Error", str(e))
+            return
+        self.layout = layout
+        # Sync UI controls to match the loaded layout so Generate continues from it
+        if "table_width_inches" in layout:
+            self.controls.table_width_var.set(layout["table_width_inches"])
+        if "table_depth_inches" in layout:
+            self.controls.table_depth_var.set(layout["table_depth_inches"])
+        self.controls.symmetric_var.set(
+            layout.get("rotationally_symmetric", False)
+        )
+        self._update_visibility_display()
+        self._render()
 
     def _on_generate(self):
         params = self.controls.get_params()
