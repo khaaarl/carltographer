@@ -79,7 +79,7 @@ ruff format .
 
 **This is non-negotiable.** If you realize you are on `main` and have already made changes, STOP immediately and ask the user how to proceed — do NOT commit to `main`.
 
-The only exception is editing `CLAUDE.md` itself, which can be done on `main` if explicitly requested.
+The only exception is editing `CLAUDE.md` itself, which can be done on `main` if explicitly requested. However, do NOT commit or push CLAUDE.md changes until the user explicitly says to — they may want to review or iterate first.
 
 ## Committing Code
 
