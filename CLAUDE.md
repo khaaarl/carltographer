@@ -126,28 +126,30 @@ When the user asks to merge a feature branch to main, follow this procedure:
 # 1. Pull latest main
 git checkout main && git pull
 
-# 2. Rebase feature branch onto latest main (CRITICAL: conflict detection happens here)
+# 2. Rebase feature branch onto latest main (conflict detection happens here)
 git checkout feature/my-branch
 git rebase main
-# If conflicts arise, resolve them manually, then: git rebase --continue
+# If conflicts arise, resolve them carefully, then: git add <files> && git rebase --continue
+# NEVER use git rebase --skip (that drops commits)
 
-# 3. Create a temporary branch for squashing (preserves the original feature branch)
-git checkout -b feature/my-branch-rebase feature/my-branch
-
-# 4. Squash into a single commit
-git reset --soft main
-git commit -m "Unified commit message describing the feature"
-
-# 5. Fast-forward merge into main
+# 3. Squash-merge into main
 git checkout main
-git merge feature/my-branch-rebase
+git merge --squash feature/my-branch
 
-# 6. Push and clean up temporary branch
+# 4. Commit and push
+git commit -m "Unified commit message describing the feature"
 git push
-git branch -d feature/my-branch-rebase
 ```
 
-**WARNING: Never skip step 2 (rebase).** `git reset --soft` does NOT detect conflicts. Without the rebase, it silently reverts any changes made to main after the feature branch was created. The rebase step ensures proper 3-way merge conflict detection before squashing.
+**Why rebase then merge --squash?** The rebase in step 2 does proper 3-way conflict detection — if main changed files the branch also touched, you'll see and resolve conflicts explicitly. After rebasing, `merge --squash` collapses all feature commits into a single staged changeset on main, which is then committed as one clean commit. Never use `git reset --soft` for squashing — it silently drops changes made to main.
+
+**Handling rebase conflicts:** When `git rebase main` reports conflicts:
+1. Run `git status` to see which files conflict
+2. Read the conflicting files — look for `<<<<<<<`, `=======`, `>>>>>>>` markers
+3. Resolve by editing to keep the correct version of each section
+4. `git add <resolved-files> && git rebase --continue`
+5. Repeat if more commits have conflicts
+6. After rebase completes, verify the code still works (run tests)
 
 The squashed commit message should summarize the entire feature, not repeat individual commit messages. Always ask the user before pushing to main.
 
