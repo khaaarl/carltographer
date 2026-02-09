@@ -16,6 +16,9 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageDraw, ImageTk
 
 from ..engine import generate_json
+from ..engine.collision import is_valid_placement
+from ..engine.types import PlacedFeature as TypedPlacedFeature
+from ..engine.types import TerrainObject as TypedTerrainObject
 from ..engine_cmp.hash_manifest import verify_engine_unchanged
 from .layout_io import load_layout, save_layout_png
 from .missions import EDITIONS, find_mission_path
@@ -53,6 +56,8 @@ TABLE_BORDER = "#111111"
 CANVAS_BG = "#1e1e1e"
 DEFAULT_FILL = "#888888"
 HIGHLIGHT_COLOR = "#FFD700"  # gold highlight for selected features
+MOVE_VALID_OUTLINE = "#00FF00"  # green outline during valid move
+MOVE_INVALID_OUTLINE = "#FF4444"  # red outline during invalid move/copy
 
 # Mission rendering colors
 NO_MANS_LAND_BG = "#d4c5a0"  # cream/tan for no-man's land
@@ -1092,8 +1097,22 @@ class App:
 
         # Selection state
         self._selected_feature_idx = None
+        self._selected_is_mirror = False
         self._popup_window_id = None
         self._popup_frame = None
+
+        # Move/copy mode state
+        self._move_mode = False
+        self._move_is_copy = False
+        self._move_feature_idx = None
+        self._move_original_pf_dict = None
+        self._move_last_valid_pos = None
+        self._move_current_rotation = 0.0
+        self._move_overlay_ids: list[int] = []
+        self._move_mirror_overlay_ids: list[int] = []
+        self._move_base_photo = None
+        self._move_typed_features = None
+        self._move_typed_objects = None
 
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
@@ -1125,6 +1144,9 @@ class App:
     # -- rendering --
 
     def _render(self):
+        if self._move_mode:
+            return
+
         if hasattr(self, "_popup_window_id"):
             self._dismiss_popup()
 
@@ -1261,10 +1283,136 @@ class App:
 
         return None
 
+    # -- coordinate helpers --
+
+    def _table_to_canvas(self, x_inches, z_inches):
+        """Convert table-space inches to canvas pixel coords.
+
+        Returns (canvas_x, canvas_y) or None if render context unavailable.
+        """
+        ppi = self._render_ppi
+        tw = self._render_tw
+        td = self._render_td
+        ox = self._img_offset_x
+        oy = self._img_offset_y
+        if ppi is None or tw is None or td is None or ox is None or oy is None:
+            return None
+        px = (x_inches + tw / 2) * ppi + ox
+        py = (z_inches + td / 2) * ppi + oy
+        return (px, py)
+
+    def _get_feature_canvas_polygons(self, placed_feature):
+        """Return list of (flat_coords, fill_color, outline_color) for canvas polygons."""
+        feature = placed_feature["feature"]
+        feat_tf = _get_tf(placed_feature.get("transform"))
+        results = []
+
+        for comp in feature["components"]:
+            obj = self.objects_by_id.get(comp["object_id"])
+            if obj is None:
+                continue
+            comp_tf = _get_tf(comp.get("transform"))
+            fill = obj.get("fill_color") or DEFAULT_FILL
+            outline = obj.get("outline_color") or ""
+
+            for shape in obj["shapes"]:
+                offset_tf = _get_tf(shape.get("offset"))
+                combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
+                cx, cz, rot_deg = combined
+                hw = shape["width_inches"] / 2
+                hd = shape["depth_inches"] / 2
+                corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+                rad = math.radians(rot_deg)
+                cos_r = math.cos(rad)
+                sin_r = math.sin(rad)
+
+                canvas_coords = []
+                for lx, lz in corners:
+                    rx = cx + lx * cos_r - lz * sin_r
+                    rz = cz + lx * sin_r + lz * cos_r
+                    cp = self._table_to_canvas(rx, rz)
+                    if cp is None:
+                        return []
+                    canvas_coords.extend(cp)
+                results.append((canvas_coords, fill, outline))
+        return results
+
+    # -- move mode validation --
+
+    def _build_typed_validation_context(self, exclude_idx):
+        """Build typed PlacedFeature list and objects_by_id for engine validation.
+
+        Excludes the feature at exclude_idx from placed_features.
+        """
+        placed = list(self.layout.get("placed_features", []))  # type: ignore[arg-type]
+        typed_features = []
+        for i, pf_dict in enumerate(placed):
+            if i == exclude_idx:
+                continue
+            typed_features.append(TypedPlacedFeature.from_dict(pf_dict))
+
+        typed_objects = {}
+        for obj_id, obj_dict in self.objects_by_id.items():
+            typed_objects[obj_id] = TypedTerrainObject.from_dict(obj_dict)
+
+        return typed_features, typed_objects
+
+    def _validate_move_position(self, x_inches, z_inches):
+        """Check if placing the moving feature at (x, z) is valid."""
+        if self._move_feature_idx is None:
+            return False
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        pf_dict = placed[self._move_feature_idx]
+
+        candidate = TypedPlacedFeature.from_dict(
+            {
+                "feature": pf_dict["feature"],
+                "transform": {
+                    "x_inches": x_inches,
+                    "z_inches": z_inches,
+                    "rotation_deg": self._move_current_rotation,
+                },
+            }
+        )
+
+        if (
+            self._move_typed_features is None
+            or self._move_typed_objects is None
+        ):
+            return False
+
+        check_list = list(self._move_typed_features) + [candidate]
+        check_idx = len(check_list) - 1
+
+        params = self.controls.get_params()
+        if params is None:
+            return False
+
+        tw = params["table_width_inches"]
+        td = params["table_depth_inches"]
+        min_gap = params.get("min_feature_gap_inches")
+        min_edge_gap = params.get("min_edge_gap_inches")
+        symmetric = bool(self.layout.get("rotationally_symmetric", False))
+
+        return is_valid_placement(
+            check_list,
+            check_idx,
+            tw,
+            td,
+            self._move_typed_objects,
+            min_feature_gap=min_gap,
+            min_edge_gap=min_edge_gap,
+            rotationally_symmetric=symmetric,
+        )
+
     # -- selection & popup --
 
     def _on_canvas_click(self, event):
         """Handle click on canvas: select/deselect features."""
+        if self._move_mode:
+            return
         self._dismiss_popup()
 
         table_coords = self._canvas_to_table(event.x, event.y)
@@ -1277,12 +1425,13 @@ class App:
             self._deselect()
             return
 
-        idx, _is_mirror = hit
-        self._select_feature(idx, event.x, event.y)
+        idx, is_mirror = hit
+        self._select_feature(idx, is_mirror, event.x, event.y)
 
-    def _select_feature(self, idx, canvas_x, canvas_y):
+    def _select_feature(self, idx, is_mirror, canvas_x, canvas_y):
         """Select a feature and show popup."""
         self._selected_feature_idx = idx
+        self._selected_is_mirror = is_mirror
         self._render()
         self._show_popup(canvas_x, canvas_y)
 
@@ -1290,15 +1439,40 @@ class App:
         """Clear selection and re-render if needed."""
         if self._selected_feature_idx is not None:
             self._selected_feature_idx = None
+            self._selected_is_mirror = False
             self._render()
 
     def _show_popup(self, canvas_x, canvas_y):
-        """Show Delete/Cancel popup at the given canvas position."""
+        """Show Move/Copy/Delete/Cancel popup at the given canvas position."""
         self._dismiss_popup()
 
         frame = tk.Frame(
             self.canvas, bg="#333333", relief="raised", borderwidth=2
         )
+        move_btn = tk.Button(
+            frame,
+            text="Move",
+            command=self._on_move_selected,
+            bg="#336699",
+            fg="white",
+            activebackground="#4488bb",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        move_btn.pack(side=tk.LEFT, padx=(4, 2), pady=4)
+        copy_btn = tk.Button(
+            frame,
+            text="Copy",
+            command=self._on_copy_selected,
+            bg="#996633",
+            fg="white",
+            activebackground="#bb8844",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        copy_btn.pack(side=tk.LEFT, padx=(2, 2), pady=4)
         delete_btn = tk.Button(
             frame,
             text="Delete",
@@ -1310,7 +1484,7 @@ class App:
             padx=8,
             pady=2,
         )
-        delete_btn.pack(side=tk.LEFT, padx=(4, 2), pady=4)
+        delete_btn.pack(side=tk.LEFT, padx=(2, 2), pady=4)
         cancel_btn = tk.Button(
             frame,
             text="Cancel",
@@ -1327,7 +1501,7 @@ class App:
         # Clamp popup position to stay within canvas bounds
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
-        popup_w = 160  # approximate width
+        popup_w = 300  # approximate width
         popup_h = 40  # approximate height
         x = min(canvas_x, cw - popup_w)
         y = min(canvas_y, ch - popup_h)
@@ -1352,26 +1526,10 @@ class App:
         self._dismiss_popup()
         self._deselect()
 
-    # -- delete action --
+    # -- shared engine helper --
 
-    def _on_delete_selected(self):
-        """Delete the selected feature and re-run engine with zero steps."""
-        idx = self._selected_feature_idx
-        if idx is None:
-            return
-
-        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
-        if idx < 0 or idx >= len(placed):
-            return
-
-        # Remove the feature (mirror is implicit)
-        placed.pop(idx)
-
-        # Clear selection and popup
-        self._selected_feature_idx = None
-        self._dismiss_popup()
-
-        # Re-run engine with zero steps to recompute visibility
+    def _rerun_engine_zero_steps(self):
+        """Re-run engine with zero steps to recompute visibility, then render."""
         params = self.controls.get_params()
         if params:
             params["num_steps"] = 0
@@ -1391,10 +1549,495 @@ class App:
 
         self._render()
 
+    # -- delete action --
+
+    def _on_delete_selected(self):
+        """Delete the selected feature and re-run engine with zero steps."""
+        idx = self._selected_feature_idx
+        if idx is None:
+            return
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        if idx < 0 or idx >= len(placed):
+            return
+
+        placed.pop(idx)
+        self._selected_feature_idx = None
+        self._dismiss_popup()
+        self._rerun_engine_zero_steps()
+
+    # -- move action --
+
+    def _on_move_selected(self):
+        """Enter move mode for the selected feature."""
+        idx = self._selected_feature_idx
+        if idx is None:
+            return
+
+        placed = list(self.layout.get("placed_features", []))  # type: ignore[arg-type]
+        if idx < 0 or idx >= len(placed):
+            return
+
+        self._move_original_pf_dict = copy.deepcopy(placed[idx])
+        self._move_feature_idx = idx
+        self._move_mode = True
+
+        pf_tf = placed[idx].get("transform", {})
+        feat_x = pf_tf.get("x_inches", 0.0)
+        feat_z = pf_tf.get("z_inches", 0.0)
+        feat_rot = pf_tf.get("rotation_deg", 0.0)
+
+        # If user clicked on the mirror, start from the mirror's transform
+        if self._selected_is_mirror:
+            feat_x = -feat_x
+            feat_z = -feat_z
+            feat_rot = feat_rot + 180.0
+
+        self._move_last_valid_pos = (feat_x, feat_z)
+        self._move_current_rotation = feat_rot
+
+        self._dismiss_popup()
+        self._selected_feature_idx = None
+        self._selected_is_mirror = False
+
+        self._move_typed_features, self._move_typed_objects = (
+            self._build_typed_validation_context(idx)
+        )
+
+        self._render_move_base()
+        self._create_move_overlay()
+        self._bind_move_events()
+
+    # -- copy action --
+
+    def _on_copy_selected(self):
+        """Enter copy mode: duplicate the selected feature and place the copy."""
+        idx = self._selected_feature_idx
+        if idx is None:
+            return
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        if idx < 0 or idx >= len(placed):
+            return
+
+        # Append a deep copy to placed_features
+        new_pf = copy.deepcopy(placed[idx])
+        placed.append(new_pf)
+        new_idx = len(placed) - 1
+
+        self._move_original_pf_dict = None  # no original to revert to
+        self._move_feature_idx = new_idx
+        self._move_mode = True
+        self._move_is_copy = True
+
+        pf_tf = new_pf.get("transform", {})
+        feat_rot = pf_tf.get("rotation_deg", 0.0)
+
+        # If user clicked on the mirror, start with the mirror's rotation
+        if self._selected_is_mirror:
+            feat_rot = feat_rot + 180.0
+
+        # Start with no valid position (copy starts on top of original)
+        self._move_last_valid_pos = None
+        self._move_current_rotation = feat_rot
+
+        self._dismiss_popup()
+        self._selected_is_mirror = False
+        self._selected_feature_idx = None
+
+        self._move_typed_features, self._move_typed_objects = (
+            self._build_typed_validation_context(new_idx)
+        )
+
+        self._render_move_base()
+        self._create_move_overlay()
+        self._bind_move_events()
+
+    def _bind_move_events(self):
+        """Bind canvas/root events for move/copy mode."""
+        # Steal focus from any text entry so keyboard bindings work
+        self.canvas.focus_set()
+
+        self.canvas.bind("<Motion>", self._on_move_motion)
+        self.canvas.bind("<Button-1>", self._on_move_click)
+        self.canvas.bind("<Button-3>", self._on_move_cancel)
+        self.canvas.bind("<MouseWheel>", self._on_move_scroll)
+        self.canvas.bind("<Button-4>", self._on_move_scroll_up)
+        self.canvas.bind("<Button-5>", self._on_move_scroll_down)
+        self.root.bind("<Escape>", self._on_move_cancel)
+        self.root.bind("<q>", self._on_move_rotate_ccw)
+        self.root.bind("<e>", self._on_move_rotate_cw)
+        self.root.bind("<r>", self._on_move_rotate_cw)
+        self.root.bind("<R>", self._on_move_rotate_ccw)
+        self.root.bind("<Left>", self._on_move_rotate_ccw)
+        self.root.bind("<Right>", self._on_move_rotate_cw)
+
+    def _render_move_base(self):
+        """Render layout without the moving feature as the base image."""
+        if self._move_feature_idx is None:
+            return
+        params = self.controls.get_params()
+        if params is None:
+            return
+
+        tw = params["table_width_inches"]
+        td = params["table_depth_inches"]
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if cw < 20 or ch < 20:
+            return
+
+        margin = 20
+        ppi = min((cw - 2 * margin) / tw, (ch - 2 * margin) / td)
+        if ppi <= 0:
+            return
+
+        self._render_ppi = ppi
+        self._render_tw = tw
+        self._render_td = td
+        img_w = int(tw * ppi)
+        img_h = int(td * ppi)
+        self._img_offset_x = cw / 2 - img_w / 2
+        self._img_offset_y = ch / 2 - img_h / 2
+
+        temp_layout = copy.deepcopy(self.layout)
+        temp_placed: list = temp_layout["placed_features"]  # type: ignore[assignment]
+        temp_placed.pop(self._move_feature_idx)
+
+        mission = self.controls.selected_mission
+        renderer = BattlefieldRenderer(
+            tw, td, ppi, self.objects_by_id, mission
+        )
+        img = renderer.render(temp_layout)
+
+        self._move_base_photo = ImageTk.PhotoImage(img)
+        self.canvas.delete("all")
+        self.canvas.create_image(
+            cw / 2, ch / 2, image=self._move_base_photo, anchor="center"
+        )
+
+    def _create_move_overlay(self):
+        """Create canvas polygon items for the feature being moved."""
+        self._clear_move_overlay()
+
+        idx = self._move_feature_idx
+        if idx is None:
+            return
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        pf_dict = placed[idx]
+        polys = self._get_feature_canvas_polygons(pf_dict)
+
+        for coords, fill, _outline in polys:
+            item_id = self.canvas.create_polygon(
+                coords,
+                fill=fill,
+                outline=MOVE_VALID_OUTLINE,
+                width=2,
+            )
+            self._move_overlay_ids.append(item_id)
+
+        is_symmetric = self.layout.get("rotationally_symmetric", False)
+        if is_symmetric:
+            tf = pf_dict.get("transform", {})
+            if (
+                tf.get("x_inches", 0.0) != 0.0
+                or tf.get("z_inches", 0.0) != 0.0
+            ):
+                mirror_pf = _mirror_pf_dict(pf_dict)
+                mirror_polys = self._get_feature_canvas_polygons(mirror_pf)
+                for coords, fill, _outline in mirror_polys:
+                    item_id = self.canvas.create_polygon(
+                        coords,
+                        fill=fill,
+                        outline=MOVE_VALID_OUTLINE,
+                        width=2,
+                        stipple="gray50",
+                    )
+                    self._move_mirror_overlay_ids.append(item_id)
+
+    def _update_move_overlay(self, new_x, new_z, is_valid):
+        """Update the canvas polygon overlay to reflect new position."""
+        idx = self._move_feature_idx
+        if idx is None:
+            return
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        pf_dict = placed[idx]
+        old_tf = pf_dict.get("transform", {})
+
+        temp_pf = {
+            **pf_dict,
+            "transform": {
+                **old_tf,
+                "x_inches": new_x,
+                "z_inches": new_z,
+                "rotation_deg": self._move_current_rotation,
+            },
+        }
+
+        outline_color = (
+            MOVE_VALID_OUTLINE if is_valid else MOVE_INVALID_OUTLINE
+        )
+
+        polys = self._get_feature_canvas_polygons(temp_pf)
+        for i, (coords, _fill, _outline) in enumerate(polys):
+            if i < len(self._move_overlay_ids):
+                self.canvas.coords(self._move_overlay_ids[i], *coords)
+                self.canvas.itemconfig(
+                    self._move_overlay_ids[i],
+                    outline=outline_color,
+                )
+
+        is_symmetric = self.layout.get("rotationally_symmetric", False)
+        if is_symmetric and (new_x != 0.0 or new_z != 0.0):
+            mirror_pf = _mirror_pf_dict(temp_pf)
+            mirror_polys = self._get_feature_canvas_polygons(mirror_pf)
+            for i, (coords, _fill, _outline) in enumerate(mirror_polys):
+                if i < len(self._move_mirror_overlay_ids):
+                    self.canvas.coords(
+                        self._move_mirror_overlay_ids[i], *coords
+                    )
+                    self.canvas.itemconfig(
+                        self._move_mirror_overlay_ids[i],
+                        outline=outline_color,
+                    )
+            for item_id in self._move_mirror_overlay_ids:
+                self.canvas.itemconfig(item_id, state="normal")
+        elif is_symmetric:
+            for item_id in self._move_mirror_overlay_ids:
+                self.canvas.itemconfig(item_id, state="hidden")
+
+    def _clear_move_overlay(self):
+        """Remove all move overlay canvas items."""
+        for item_id in self._move_overlay_ids:
+            self.canvas.delete(item_id)
+        self._move_overlay_ids = []
+        for item_id in self._move_mirror_overlay_ids:
+            self.canvas.delete(item_id)
+        self._move_mirror_overlay_ids = []
+
+    def _on_move_motion(self, event):
+        """Track cursor during move mode, updating overlay position."""
+        if not self._move_mode:
+            return
+
+        table_coords = self._canvas_to_table(event.x, event.y)
+        if table_coords is None:
+            return
+
+        raw_x, raw_z = table_coords
+        qx = round(raw_x / 0.1) * 0.1
+        qz = round(raw_z / 0.1) * 0.1
+
+        is_valid = self._validate_move_position(qx, qz)
+
+        if is_valid:
+            self._move_last_valid_pos = (qx, qz)
+            self._update_move_overlay(qx, qz, True)
+        elif self._move_last_valid_pos:
+            # Have a prior valid position: held back there
+            lx, lz = self._move_last_valid_pos
+            self._update_move_overlay(lx, lz, False)
+        else:
+            # No valid position yet (copy mode start): follow cursor, red
+            self._update_move_overlay(qx, qz, False)
+
+    def _rotate_move_feature(self, delta_deg):
+        """Rotate the moving feature by delta_deg and revalidate."""
+        if not self._move_mode:
+            return
+
+        new_rot = (self._move_current_rotation + delta_deg) % 360.0
+        old_rot = self._move_current_rotation
+        self._move_current_rotation = new_rot
+
+        if self._move_last_valid_pos is not None:
+            lx, lz = self._move_last_valid_pos
+            is_valid = self._validate_move_position(lx, lz)
+
+            if is_valid:
+                self._update_move_overlay(lx, lz, True)
+            else:
+                # Revert rotation if invalid at current held position
+                self._move_current_rotation = old_rot
+                self._update_move_overlay(lx, lz, False)
+
+    def _on_move_rotate_cw(self, event=None):
+        self._rotate_move_feature(15.0)
+
+    def _on_move_rotate_ccw(self, event=None):
+        self._rotate_move_feature(-15.0)
+
+    def _on_move_scroll(self, event):
+        """Handle mouse wheel rotation (Windows/macOS)."""
+        if not self._move_mode:
+            return
+        if event.delta > 0:
+            self._rotate_move_feature(15.0)
+        elif event.delta < 0:
+            self._rotate_move_feature(-15.0)
+
+    def _on_move_scroll_up(self, event):
+        """Handle scroll up (Linux Button-4)."""
+        self._rotate_move_feature(15.0)
+
+    def _on_move_scroll_down(self, event):
+        """Handle scroll down (Linux Button-5)."""
+        self._rotate_move_feature(-15.0)
+
+    def _on_move_click(self, event):
+        """Place feature at current position and show confirm/cancel popup."""
+        if not self._move_mode:
+            return
+
+        if self._move_last_valid_pos is None:
+            if self._move_is_copy:
+                # Copy mode: clicking while invalid cancels the copy
+                self._on_move_cancel()
+            return
+
+        # Stop tracking cursor
+        self.canvas.bind("<Motion>", lambda e: None)
+
+        # Show confirm/cancel popup near the feature
+        new_x, new_z = self._move_last_valid_pos
+        cp = self._table_to_canvas(new_x, new_z)
+        if cp is None:
+            return
+
+        canvas_x, canvas_y = cp
+        self._show_move_confirm_popup(canvas_x, canvas_y)
+
+    def _show_move_confirm_popup(self, canvas_x, canvas_y):
+        """Show Confirm/Cancel popup for move placement."""
+        self._dismiss_popup()
+
+        frame = tk.Frame(
+            self.canvas, bg="#333333", relief="raised", borderwidth=2
+        )
+        confirm_btn = tk.Button(
+            frame,
+            text="Confirm",
+            command=self._on_move_confirm,
+            bg="#339933",
+            fg="white",
+            activebackground="#44bb44",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        confirm_btn.pack(side=tk.LEFT, padx=(4, 2), pady=4)
+        cancel_btn = tk.Button(
+            frame,
+            text="Cancel",
+            command=self._on_move_resume,
+            bg="#555555",
+            fg="white",
+            activebackground="#777777",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        cancel_btn.pack(side=tk.LEFT, padx=(2, 4), pady=4)
+
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        popup_w = 180
+        popup_h = 40
+        x = min(canvas_x, cw - popup_w)
+        y = min(canvas_y - popup_h - 10, ch - popup_h)
+        x = max(x, 0)
+        y = max(y, 0)
+
+        win_id = self.canvas.create_window(x, y, window=frame, anchor="nw")
+        self._popup_window_id = win_id
+        self._popup_frame = frame
+
+    def _on_move_confirm(self):
+        """Commit the move to the new position."""
+        if self._move_last_valid_pos is None or self._move_feature_idx is None:
+            return
+
+        new_x, new_z = self._move_last_valid_pos
+        idx = self._move_feature_idx
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        pf = placed[idx]
+        old_tf = pf.get("transform", {})
+        pf["transform"] = {
+            **old_tf,
+            "x_inches": new_x,
+            "z_inches": new_z,
+            "rotation_deg": self._move_current_rotation,
+        }
+
+        self._dismiss_popup()
+        self._exit_move_mode()
+        self._rerun_engine_zero_steps()
+
+    def _on_move_resume(self):
+        """Cancel placement and revert to original position."""
+        self._on_move_cancel()
+
+    def _on_move_cancel(self, event=None):
+        """Cancel move/copy: revert to original state."""
+        if not self._move_mode:
+            return
+
+        idx = self._move_feature_idx
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        if self._move_is_copy:
+            # Copy mode: remove the appended copy
+            if idx is not None and idx < len(placed):
+                placed.pop(idx)
+        else:
+            # Move mode: restore original feature
+            if idx is not None and self._move_original_pf_dict is not None:
+                placed[idx] = self._move_original_pf_dict
+
+        self._dismiss_popup()
+        self._exit_move_mode()
+        self._render()
+
+    def _exit_move_mode(self):
+        """Clean up move/copy mode state and restore normal event bindings."""
+        self._move_mode = False
+        self._move_is_copy = False
+        self._move_feature_idx = None
+        self._move_original_pf_dict = None
+        self._move_last_valid_pos = None
+        self._move_current_rotation = 0.0
+        self._move_typed_features = None
+        self._move_typed_objects = None
+        # NOTE: do NOT clear _move_base_photo here. It backs the canvas
+        # image; clearing it before _render() creates a replacement causes
+        # a black screen if _render() returns early (e.g. get_params()=None).
+        # It will be naturally replaced by the next _render() call.
+
+        self._clear_move_overlay()
+
+        self.canvas.bind("<Motion>", lambda e: None)
+        self.canvas.bind("<Button-1>", self._on_canvas_click)
+        self.canvas.bind("<Button-3>", lambda e: None)
+        self.canvas.bind("<MouseWheel>", lambda e: None)
+        self.canvas.bind("<Button-4>", lambda e: None)
+        self.canvas.bind("<Button-5>", lambda e: None)
+        self.root.unbind("<Escape>")
+        self.root.unbind("<q>")
+        self.root.unbind("<e>")
+        self.root.unbind("<r>")
+        self.root.unbind("<R>")
+        self.root.unbind("<Left>")
+        self.root.unbind("<Right>")
+
     # -- canvas resize --
 
     def _on_canvas_configure(self, _event):
         """Handle canvas resize: dismiss popup and re-render."""
+        if self._move_mode:
+            self._on_move_cancel()
+            return
         self._dismiss_popup()
         self._selected_feature_idx = None
         self._render()
