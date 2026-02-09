@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 pub mod collision;
 pub mod generate;
 pub mod prng;
+pub mod tempering;
 pub mod types;
 pub mod visibility;
 
