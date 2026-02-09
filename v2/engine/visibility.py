@@ -1,8 +1,63 @@
-"""Visibility score computation for terrain layouts.
+"""Visibility scoring for terrain layouts.
 
-Measures what percentage of the battlefield has clear line of sight
-by sampling observer positions on a grid and computing visibility
-polygons via angular sweep.
+This module answers the question: how much of the table can a model standing
+at position X see? It does this for hundreds of positions across the table,
+then aggregates the results into several metrics that the generation engine
+(generate.py) uses as its fitness signal during phase-2 optimization.
+
+The core algorithm is an angular sweep visibility polygon. For each observer
+position, we cast rays toward every vertex of every blocking segment (plus
+epsilon-offset rays to see around corners). Each ray finds the nearest
+segment intersection, and the resulting hit points form a visibility polygon.
+The area of that polygon, divided by total table area, gives that observer's
+visibility ratio.
+
+Terrain blocks line of sight in two ways, depending on feature_type:
+- Tall physical shapes (e.g. a stack of crates, a windowless wall section):
+  all edges of shapes taller than min_blocking_height (default 4") always
+  block regardless of observer position. These become "static segments"
+  computed once per layout. This includes opaque walls inside ruins.
+- Obscuring features (e.g. ruins in 40k): only the back-facing edges of the
+  feature's outer footprint block, meaning an observer inside the ruin can
+  see out. For each observer, we check which edges face away from them using
+  precomputed outward normals and add only those to the segment list.
+
+The module computes four metrics, all in the range 0-100%:
+
+  overall         Average visibility ratio across all observer positions.
+                  Lower means more terrain is blocking sightlines.
+
+  dz_visibility   Per-deployment-zone: average fraction of a DZ's sample
+                  points visible from observers OUTSIDE that DZ. Measures
+                  how exposed each DZ is to the rest of the table.
+
+  dz_to_dz        Cross-zone: fraction of target DZ sample points that at
+                  least one observer in the source DZ's threat zone (DZ +
+                  6" expansion) can see. Reported as hidden %, so higher
+                  means more of the target DZ is concealed.
+
+  objective_hidability
+                  Per-DZ: fraction of objectives where at least one sample
+                  point within the objective's range circle is hidden from
+                  every observer in the opposing DZ's threat zone. Higher
+                  means more objectives have safe approach angles.
+
+Observer positions are laid out on an integer grid across the table, using
+2" spacing (even coordinates) everywhere, with 1" spacing near objective
+markers for finer resolution where it matters most. Points that fall inside
+tall terrain footprints (height >= 1") are excluded — models will rarely be
+on top of these features (and in many cases it's an illegal placement), so
+we measure visibility from ground level only.
+
+Performance notes:
+- Segment data is precomputed once per layout (_precompute_segments), then
+  per-observer work is just selecting obscuring back-faces + the ray sweep.
+- VisibilityCache provides incremental updates: when a single feature is
+  added/moved/removed during mutation, only that feature's blocked-point
+  mask is recomputed rather than re-testing all ~600 observers against all
+  footprints. This uses NumPy vectorized point-in-polygon for batch testing.
+- The Rust engine (engine_rs) reimplements this module for ~10x throughput.
+  Both produce identical scores for the same layout.
 """
 
 from __future__ import annotations
