@@ -317,6 +317,10 @@ def _compute_visibility_polygon(
     """Compute visibility polygon from observer (ox, oz) via angular sweep.
 
     Returns polygon vertices sorted by angle.
+
+    Uses numpy-vectorized intersection testing: all rays are tested against
+    all segments in a single (R x S) matrix operation, replacing the O(R*S)
+    Python inner loop with C-level numpy batch computation.
     """
     # Table boundary segments
     tw, td = table_half_w, table_half_d
@@ -327,61 +331,88 @@ def _compute_visibility_polygon(
         (-tw, td, -tw, -td),  # left
     ]
 
-    # Collect unique endpoints from both segment lists (no copy)
+    # Build segment array: (S, 4) for all blocking + boundary segments
+    all_segs = np.array(
+        list(itertools.chain(segments, table_boundary)), dtype=np.float64
+    )
+    # Precompute per-segment values (S,)
+    seg_dx = all_segs[:, 2] - all_segs[:, 0]
+    seg_dz = all_segs[:, 3] - all_segs[:, 1]
+    d_x1 = all_segs[:, 0] - ox  # x1 - ox for each segment
+    d_z1 = all_segs[:, 1] - oz  # z1 - oz for each segment
+    # t numerator is observer-independent: same for all rays
+    num_t = d_x1 * seg_dz - d_z1 * seg_dx  # (S,)
+
+    # Collect unique endpoints from segments
     endpoints: set[tuple[float, float]] = set()
     for x1, z1, x2, z2 in itertools.chain(segments, table_boundary):
         endpoints.add((x1, z1))
         endpoints.add((x2, z2))
 
-    # For each endpoint, cast rays at angle and angle +/- epsilon
-    EPS = 1e-5
-    rays: list[tuple[float, float, float]] = []  # (angle, dx, dz)
-    _atan2 = math.atan2
-    _cos = math.cos
-    _sin = math.sin
+    eps_arr = np.array(list(endpoints), dtype=np.float64)  # (P, 2)
+    dx_arr = eps_arr[:, 0] - ox
+    dz_arr = eps_arr[:, 1] - oz
+    angles = np.arctan2(dz_arr, dx_arr)  # (P,)
+    dist = np.sqrt(dx_arr * dx_arr + dz_arr * dz_arr)  # (P,)
+    # Normalized direction for direct ray
+    safe_dist = np.where(dist > 1e-12, dist, 1.0)
+    ndx = np.where(dist > 1e-12, dx_arr / safe_dist, np.cos(angles))
+    ndz = np.where(dist > 1e-12, dz_arr / safe_dist, np.sin(angles))
 
-    for ex, ez in endpoints:
-        dx = ex - ox
-        dz = ez - oz
-        angle = _atan2(dz, dx)
-        # Epsilon-shifted rays need trig, but direct ray reuses normalized vector
-        dist = math.sqrt(dx * dx + dz * dz)
-        if dist > 1e-12:
-            ndx = dx / dist
-            ndz = dz / dist
-        else:
-            ndx = _cos(angle)
-            ndz = _sin(angle)
-        a_minus = angle - EPS
-        a_plus = angle + EPS
-        rays.append((a_minus, _cos(a_minus), _sin(a_minus)))
-        rays.append((angle, ndx, ndz))
-        rays.append((a_plus, _cos(a_plus), _sin(a_plus)))
+    EPS = 1e-5
+    a_minus = angles - EPS
+    a_plus = angles + EPS
+
+    # Build rays array: interleave (minus, direct, plus) per endpoint
+    n_pts = len(endpoints)
+    ray_angles = np.empty(n_pts * 3, dtype=np.float64)
+    ray_dx = np.empty(n_pts * 3, dtype=np.float64)
+    ray_dz = np.empty(n_pts * 3, dtype=np.float64)
+    ray_angles[0::3] = a_minus
+    ray_angles[1::3] = angles
+    ray_angles[2::3] = a_plus
+    ray_dx[0::3] = np.cos(a_minus)
+    ray_dx[1::3] = ndx
+    ray_dx[2::3] = np.cos(a_plus)
+    ray_dz[0::3] = np.sin(a_minus)
+    ray_dz[1::3] = ndz
+    ray_dz[2::3] = np.sin(a_plus)
 
     # Sort rays by angle
-    rays.sort(key=lambda r: r[0])
+    sort_idx = np.argsort(ray_angles)
+    ray_dx = ray_dx[sort_idx]
+    ray_dz = ray_dz[sort_idx]
 
-    # Cast each ray, find nearest intersection
-    polygon: list[tuple[float, float]] = []
+    # --- Vectorized intersection: (R, S) matrix computation ---
+    # denom[r, s] = ray_dx[r] * seg_dz[s] - ray_dz[r] * seg_dx[s]
+    denom = (
+        ray_dx[:, None] * seg_dz[None, :] - ray_dz[:, None] * seg_dx[None, :]
+    )
 
-    for _angle, dx, dz in rays:
-        min_t = float("inf")
-        for x1, z1, x2, z2 in itertools.chain(segments, table_boundary):
-            # Inlined _ray_segment_intersection to avoid function call overhead
-            sx = x2 - x1
-            sz = z2 - z1
-            denom = dx * sz - dz * sx
-            if abs(denom) < 1e-12:
-                continue
-            t = ((x1 - ox) * sz - (z1 - oz) * sx) / denom
-            u = ((x1 - ox) * dz - (z1 - oz) * dx) / denom
-            if t >= 0 and 0 <= u <= 1 and t < min_t:
-                min_t = t
+    # Mask degenerate (parallel) cases
+    valid_denom = np.abs(denom) >= 1e-12
+    safe_denom = np.where(valid_denom, denom, 1.0)
 
-        if min_t < float("inf"):
-            polygon.append((ox + min_t * dx, oz + min_t * dz))
+    # t[r, s] = num_t[s] / denom[r, s]  (num_t is ray-independent)
+    t = num_t[None, :] / safe_denom
 
-    return polygon
+    # u[r, s] = (d_x1[s] * ray_dz[r] - d_z1[s] * ray_dx[r]) / denom[r, s]
+    num_u = d_x1[None, :] * ray_dz[:, None] - d_z1[None, :] * ray_dx[:, None]
+    u = num_u / safe_denom
+
+    # Valid intersections: non-degenerate, t >= 0, 0 <= u <= 1
+    valid = valid_denom & (t >= 0) & (u >= 0) & (u <= 1)
+    t_valid = np.where(valid, t, np.inf)
+
+    # Find nearest intersection per ray
+    min_t = np.min(t_valid, axis=1)  # (R,)
+
+    # Build polygon from finite intersections
+    finite = np.isfinite(min_t)
+    px = ox + min_t[finite] * ray_dx[finite]
+    pz = oz + min_t[finite] * ray_dz[finite]
+
+    return list(zip(px.tolist(), pz.tolist()))
 
 
 def _sample_points_in_polygon(
