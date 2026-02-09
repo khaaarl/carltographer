@@ -235,6 +235,16 @@ fn bench_with_visibility(c: &mut Criterion) {
     });
 }
 
+fn bench_with_visibility_100(c: &mut Criterion) {
+    // Same as VISIBILITY_50 but with 100 steps — more terrain accumulates,
+    // making later visibility computations progressively heavier.
+    let json = VISIBILITY_50_JSON.replace("\"num_steps\": 50", "\"num_steps\": 100");
+    let params: EngineParams = serde_json::from_str(&json).unwrap();
+    c.bench_function("generate_with_visibility_100", |b| {
+        b.iter(|| generate(&params));
+    });
+}
+
 fn bench_with_mission(c: &mut Criterion) {
     let params: EngineParams = serde_json::from_str(MISSION_HNA_JSON).unwrap();
     c.bench_function("generate_with_mission_hna", |b| {
@@ -247,6 +257,7 @@ criterion_group!(
     bench_basic_100,
     bench_all_features,
     bench_with_visibility,
+    bench_with_visibility_100,
     bench_with_mission
 );
 criterion_main!(benches);

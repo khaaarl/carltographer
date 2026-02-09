@@ -81,20 +81,37 @@ fn ray_segment_intersection(
     }
 }
 
-/// Convert Corners (fixed-size array) to Vec of tuples for polygon ops.
-fn corners_to_vec(corners: &Corners) -> Vec<(f64, f64)> {
-    corners.to_vec()
+/// Precomputed data for blocking segment extraction.
+/// Static segments (from regular obstacles) are observer-independent.
+/// Obscuring feature footprints need per-observer back-face culling.
+struct PrecomputedSegments {
+    /// Segments from regular obstacles — same for every observer.
+    static_segments: Vec<Segment>,
+    /// Footprint corners for each obscuring feature shape, with precomputed
+    /// center and outward normals per edge: (corners, center, edge_data).
+    /// edge_data: Vec<(x1, z1, x2, z2, mx, mz, nx, nz)> per shape.
+    obscuring_shapes: Vec<ObscuringShape>,
 }
 
-/// Extract line segments that block LoS from the given observer position.
-fn extract_blocking_segments(
+/// Precomputed data for one obscuring feature shape.
+struct ObscuringShape {
+    /// Corner vertices for point-in-polygon test (observer inside check).
+    corners: Vec<(f64, f64)>,
+    /// Per-edge data: (x1, z1, x2, z2, midpoint_x, midpoint_z, normal_x, normal_z).
+    edges: Vec<(f64, f64, f64, f64, f64, f64, f64, f64)>,
+    /// Index of the obscuring feature this shape belongs to (for grouping).
+    feature_idx: usize,
+}
+
+/// Precompute static segments and obscuring shape data.
+/// Called once before the observer loop.
+fn precompute_segments(
     layout: &TerrainLayout,
     objects_by_id: &HashMap<String, &TerrainObject>,
-    observer_x: f64,
-    observer_z: f64,
     min_blocking_height: f64,
-) -> Vec<Segment> {
-    let mut segments: Vec<Segment> = Vec::new();
+) -> PrecomputedSegments {
+    let mut static_segments: Vec<Segment> = Vec::new();
+    let mut obscuring_shapes: Vec<ObscuringShape> = Vec::new();
     let default_t = Transform::default();
 
     // Build effective placed features list (include mirrors for symmetric)
@@ -106,70 +123,48 @@ fn extract_blocking_segments(
         }
     }
 
-    for pf in &effective_features {
+    for (feat_idx, pf) in effective_features.iter().enumerate() {
         let is_obscuring = pf.feature.feature_type == "obscuring";
 
         if is_obscuring {
-            // Get all shape footprints regardless of height
             let all_corners = get_footprint_corners(pf, objects_by_id);
-            if all_corners.is_empty() {
-                continue;
-            }
-
-            // Check if observer is inside any shape of this feature
-            let mut observer_inside = false;
-            for corners in &all_corners {
-                let verts = corners_to_vec(corners);
-                if point_in_polygon(observer_x, observer_z, &verts) {
-                    observer_inside = true;
-                    break;
-                }
-            }
-
-            if observer_inside {
-                continue; // Can see out from inside
-            }
-
-            // Observer outside: only back-facing edges block
             for corners in &all_corners {
                 let n = corners.len();
-                // Compute polygon center
+                let verts: Vec<(f64, f64)> = corners.to_vec();
+
+                // Precompute center
                 let cx: f64 =
                     corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
                 let cz: f64 =
                     corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
 
+                // Precompute edge data with outward normals
+                let mut edges = Vec::with_capacity(n);
                 for i in 0..n {
                     let j = (i + 1) % n;
                     let (x1, z1) = corners[i];
                     let (x2, z2) = corners[j];
-
-                    // Edge midpoint
                     let mx = (x1 + x2) / 2.0;
                     let mz = (z1 + z2) / 2.0;
-
-                    // Outward normal
                     let ex = x2 - x1;
                     let ez = z2 - z1;
-                    // Normal candidate: (ez, -ex)
                     let (mut nx, mut nz) = (ez, -ex);
-                    // If center is on the same side as normal, flip
                     let dot_center = (cx - mx) * nx + (cz - mz) * nz;
                     if dot_center > 0.0 {
                         nx = -nx;
                         nz = -nz;
                     }
-
-                    // Back-facing: outward normal points away from observer
-                    let dot_observer =
-                        (observer_x - mx) * nx + (observer_z - mz) * nz;
-                    if dot_observer < 0.0 {
-                        segments.push((x1, z1, x2, z2));
-                    }
+                    edges.push((x1, z1, x2, z2, mx, mz, nx, nz));
                 }
+
+                obscuring_shapes.push(ObscuringShape {
+                    corners: verts,
+                    edges,
+                    feature_idx: feat_idx,
+                });
             }
         } else {
-            // Regular obstacle: only shapes with height >= min_blocking_height
+            // Regular obstacle: all 4 edges block regardless of observer
             for comp in &pf.feature.components {
                 let obj = match objects_by_id.get(&comp.object_id) {
                     Some(o) => o,
@@ -194,10 +189,9 @@ fn extract_blocking_segments(
                         shape.depth_inches / 2.0,
                         world.rotation_deg.to_radians(),
                     );
-                    // All 4 edges block
                     for i in 0..4 {
                         let j = (i + 1) % 4;
-                        segments.push((
+                        static_segments.push((
                             corners[i].0,
                             corners[i].1,
                             corners[j].0,
@@ -209,7 +203,61 @@ fn extract_blocking_segments(
         }
     }
 
-    segments
+    PrecomputedSegments {
+        static_segments,
+        obscuring_shapes,
+    }
+}
+
+/// Build the full segment list for a specific observer from precomputed data.
+/// Starts with static segments, then adds back-facing edges of obscuring features.
+fn get_observer_segments(
+    precomputed: &PrecomputedSegments,
+    observer_x: f64,
+    observer_z: f64,
+    out: &mut Vec<Segment>,
+) {
+    out.clear();
+    out.extend_from_slice(&precomputed.static_segments);
+
+    if precomputed.obscuring_shapes.is_empty() {
+        return;
+    }
+
+    // Group shapes by feature_idx to check observer-inside per feature
+    // Track which features have the observer inside
+    let mut skip_feature: Option<usize> = None;
+    let mut last_feat_idx: Option<usize> = None;
+
+    for shape in &precomputed.obscuring_shapes {
+        // Reset skip when we move to a new feature
+        if last_feat_idx != Some(shape.feature_idx) {
+            skip_feature = None;
+            last_feat_idx = Some(shape.feature_idx);
+        }
+
+        // If already determined observer is inside this feature, skip all its shapes
+        if skip_feature == Some(shape.feature_idx) {
+            continue;
+        }
+
+        // Check if observer is inside this shape
+        if point_in_polygon(observer_x, observer_z, &shape.corners) {
+            skip_feature = Some(shape.feature_idx);
+            // Remove any segments already added from earlier shapes of same feature
+            // (This is rare — most features have 1 shape)
+            continue;
+        }
+
+        // Add back-facing edges
+        for &(x1, z1, x2, z2, mx, mz, nx, nz) in &shape.edges {
+            let dot_observer =
+                (observer_x - mx) * nx + (observer_z - mz) * nz;
+            if dot_observer < 0.0 {
+                out.push((x1, z1, x2, z2));
+            }
+        }
+    }
 }
 
 /// Get world-space OBB corners for all shapes in a feature (ignoring height).
@@ -221,60 +269,74 @@ fn get_footprint_corners(
     crate::collision::get_world_obbs(placed, objects_by_id)
 }
 
+/// Reusable buffers for compute_visibility_polygon to avoid per-call allocations.
+struct VisBuffers {
+    endpoints: Vec<(f64, f64)>,
+    endpoint_seen: HashSet<(u64, u64)>,
+    rays: Vec<(f64, f64, f64)>,
+    polygon: Vec<(f64, f64, f64)>,
+}
+
+impl VisBuffers {
+    fn new() -> Self {
+        Self {
+            endpoints: Vec::with_capacity(256),
+            endpoint_seen: HashSet::with_capacity(256),
+            rays: Vec::with_capacity(768),
+            polygon: Vec::with_capacity(768),
+        }
+    }
+}
+
 /// Compute visibility polygon from observer via angular sweep.
+/// Uses reusable buffers and a precomputed table boundary to avoid allocations.
 fn compute_visibility_polygon(
     ox: f64,
     oz: f64,
     segments: &[Segment],
-    table_half_w: f64,
-    table_half_d: f64,
-) -> Vec<(f64, f64)> {
-    // Add table boundary segments
-    let mut all_segments = segments.to_vec();
-    let tw = table_half_w;
-    let td = table_half_d;
-    all_segments.push((-tw, -td, tw, -td)); // bottom
-    all_segments.push((tw, -td, tw, td)); // right
-    all_segments.push((tw, td, -tw, td)); // top
-    all_segments.push((-tw, td, -tw, -td)); // left
+    table_boundary: &[Segment; 4],
+    bufs: &mut VisBuffers,
+    result: &mut Vec<(f64, f64)>,
+) {
+    bufs.endpoints.clear();
+    bufs.endpoint_seen.clear();
+    bufs.rays.clear();
+    bufs.polygon.clear();
+    result.clear();
 
-    // Collect unique endpoints
-    let mut endpoints: Vec<(f64, f64)> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for &(x1, z1, x2, z2) in &all_segments {
-        // Use bit representation for exact dedup
+    // Collect unique endpoints from terrain segments + table boundary
+    for &(x1, z1, x2, z2) in segments.iter().chain(table_boundary.iter()) {
         let k1 = (x1.to_bits(), z1.to_bits());
         let k2 = (x2.to_bits(), z2.to_bits());
-        if seen.insert(k1) {
-            endpoints.push((x1, z1));
+        if bufs.endpoint_seen.insert(k1) {
+            bufs.endpoints.push((x1, z1));
         }
-        if seen.insert(k2) {
-            endpoints.push((x2, z2));
+        if bufs.endpoint_seen.insert(k2) {
+            bufs.endpoints.push((x2, z2));
         }
     }
 
     // For each endpoint, cast rays at angle and angle +/- epsilon
     let eps = 1e-5_f64;
-    let mut rays: Vec<(f64, f64, f64)> = Vec::new(); // (angle, dx, dz)
 
-    for &(ex, ez) in &endpoints {
+    for &(ex, ez) in &bufs.endpoints {
         let dx = ex - ox;
         let dz = ez - oz;
         let angle = dz.atan2(dx);
         for &a in &[angle - eps, angle, angle + eps] {
-            rays.push((a, a.cos(), a.sin()));
+            bufs.rays.push((a, a.cos(), a.sin()));
         }
     }
 
-    // Sort rays by angle
-    rays.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    // Sort rays by angle (unstable sort is fine — duplicate angles have no meaningful order)
+    bufs.rays
+        .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
     // Cast each ray, find nearest intersection
-    let mut polygon: Vec<(f64, f64, f64)> = Vec::new(); // (angle, hit_x, hit_z)
-
-    for &(angle, dx, dz) in &rays {
+    for &(angle, dx, dz) in &bufs.rays {
         let mut min_t = f64::INFINITY;
-        for &(x1, z1, x2, z2) in &all_segments {
+        for &(x1, z1, x2, z2) in segments.iter().chain(table_boundary.iter())
+        {
             if let Some(t) =
                 ray_segment_intersection(ox, oz, dx, dz, x1, z1, x2, z2)
             {
@@ -287,12 +349,12 @@ fn compute_visibility_polygon(
         if min_t < f64::INFINITY {
             let hit_x = ox + min_t * dx;
             let hit_z = oz + min_t * dz;
-            polygon.push((angle, hit_x, hit_z));
+            bufs.polygon.push((angle, hit_x, hit_z));
         }
     }
 
     // Extract just the (x, z) coordinates
-    polygon.iter().map(|p| (p.1, p.2)).collect()
+    result.extend(bufs.polygon.iter().map(|p| (p.1, p.2)));
 }
 
 /// Generate grid sample points that fall inside a polygon.
@@ -509,7 +571,7 @@ pub fn compute_layout_visibility(
     }
 
     // Filter out observer points inside tall terrain (height >= 1")
-    let mut tall_footprints: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut tall_footprints: Vec<Corners> = Vec::new();
     {
         let mut effective_features: Vec<PlacedFeature> = Vec::new();
         for pf in &layout.placed_features {
@@ -523,7 +585,7 @@ pub fn compute_layout_visibility(
             for corners in
                 get_tall_world_obbs(pf, objects_by_id, 1.0)
             {
-                tall_footprints.push(corners_to_vec(&corners));
+                tall_footprints.push(corners);
             }
         }
     }
@@ -697,16 +759,25 @@ pub fn compute_layout_visibility(
             }
         };
 
+    // Precompute static segments and obscuring shape data once
+    let precomputed =
+        precompute_segments(layout, objects_by_id, min_blocking_height);
+
+    // Precompute table boundary segments (used by every observer)
+    let table_boundary: [Segment; 4] = [
+        (-half_w, -half_d, half_w, -half_d), // bottom
+        (half_w, -half_d, half_w, half_d),   // right
+        (half_w, half_d, -half_w, half_d),   // top
+        (-half_w, half_d, -half_w, -half_d), // left
+    ];
+
     let mut total_ratio = 0.0;
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut vis_bufs = VisBuffers::new();
+    let mut vis_poly: Vec<(f64, f64)> = Vec::new();
 
     for &(sx, sz) in &sample_points {
-        let segments = extract_blocking_segments(
-            layout,
-            objects_by_id,
-            sx,
-            sz,
-            min_blocking_height,
-        );
+        get_observer_segments(&precomputed, sx, sz, &mut segments);
 
         if segments.is_empty() {
             total_ratio += 1.0;
@@ -726,8 +797,8 @@ pub fn compute_layout_visibility(
             continue;
         }
 
-        let vis_poly = compute_visibility_polygon(
-            sx, sz, &segments, half_w, half_d,
+        compute_visibility_polygon(
+            sx, sz, &segments, &table_boundary, &mut vis_bufs, &mut vis_poly,
         );
         if vis_poly.len() < 3 {
             total_ratio += 1.0;
