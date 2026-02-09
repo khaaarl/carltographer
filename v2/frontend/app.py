@@ -939,17 +939,17 @@ class ControlPanel(ttk.Frame):
         self.table_width_var = tk.DoubleVar(value=60.0)
         self.table_depth_var = tk.DoubleVar(value=44.0)
         self.seed_var = tk.StringVar(value="")
-        self.num_steps_var = tk.IntVar(value=1)
+        self.num_steps_var = tk.IntVar(value=10)
         self.symmetric_var = tk.BooleanVar(value=False)
         self.rotation_granularity_var = tk.StringVar(value="15")
-        self.min_gap_var = tk.StringVar(value="")
-        self.min_edge_gap_var = tk.StringVar(value="")
-        self.min_all_gap_var = tk.StringVar(value="")
-        self.min_all_edge_gap_var = tk.StringVar(value="")
-        self.min_crates_var = tk.StringVar(value="")
-        self.max_crates_var = tk.StringVar(value="")
-        self.min_ruins_var = tk.StringVar(value="")
-        self.max_ruins_var = tk.StringVar(value="")
+        self.min_gap_var = tk.DoubleVar(value=5.2)
+        self.min_edge_gap_var = tk.DoubleVar(value=0.0)
+        self.min_all_gap_var = tk.DoubleVar(value=0.0)
+        self.min_all_edge_gap_var = tk.DoubleVar(value=0.0)
+        self.min_crates_var = tk.IntVar(value=0)
+        self.max_crates_var = tk.IntVar(value=99)
+        self.min_ruins_var = tk.IntVar(value=0)
+        self.max_ruins_var = tk.IntVar(value=99)
 
         # Scoring target variables
         self.overall_vis_target_var = tk.StringVar(value="30")
@@ -957,9 +957,9 @@ class ControlPanel(ttk.Frame):
         self.dz_vis_target_var = tk.StringVar(value="20")
         self.dz_vis_weight_var = tk.StringVar(value="1.0")
         self.dz_hidden_target_var = tk.StringVar(value="70")
-        self.dz_hidden_weight_var = tk.StringVar(value="1.0")
-        self.obj_hide_target_var = tk.StringVar(value="40")
-        self.obj_hide_weight_var = tk.StringVar(value="1.0")
+        self.dz_hidden_weight_var = tk.StringVar(value="5.0")
+        self.obj_hide_target_var = tk.StringVar(value="50")
+        self.obj_hide_weight_var = tk.StringVar(value="5.0")
 
         # Catalog selection variable
         self.catalog_var = tk.StringVar(value="Omnium Gatherum")
@@ -1219,44 +1219,34 @@ class ControlPanel(ttk.Frame):
             seed = None
 
         try:
-            # Parse optional integer fields
-            def parse_int(s):
-                s = s.strip()
-                return int(s) if s else None
-
             # Parse optional float fields
             def parse_float(s):
                 s = s.strip()
                 return float(s) if s else None
 
-            min_crates = parse_int(self.min_crates_var.get())
-            max_crates = parse_int(self.max_crates_var.get())
-            min_ruins = parse_int(self.min_ruins_var.get())
-            max_ruins = parse_int(self.max_ruins_var.get())
-            min_gap = parse_float(self.min_gap_var.get())
-            min_edge_gap = parse_float(self.min_edge_gap_var.get())
-            min_all_gap = parse_float(self.min_all_gap_var.get())
-            min_all_edge_gap = parse_float(self.min_all_edge_gap_var.get())
+            min_crates = self.min_crates_var.get()
+            max_crates = self.max_crates_var.get()
+            min_ruins = self.min_ruins_var.get()
+            max_ruins = self.max_ruins_var.get()
+            min_gap = self.min_gap_var.get()
+            min_edge_gap = self.min_edge_gap_var.get()
+            min_all_gap = self.min_all_gap_var.get()
+            min_all_edge_gap = self.min_all_edge_gap_var.get()
             rotation_granularity = float(self.rotation_granularity_var.get())
 
-            # Build feature count preferences only if values are set
-            feature_count_prefs = []
-            if min_crates is not None or max_crates is not None:
-                feature_count_prefs.append(
-                    {
-                        "feature_type": "obstacle",
-                        "min": min_crates if min_crates is not None else 0,
-                        "max": max_crates,
-                    }
-                )
-            if min_ruins is not None or max_ruins is not None:
-                feature_count_prefs.append(
-                    {
-                        "feature_type": "obscuring",
-                        "min": min_ruins if min_ruins is not None else 0,
-                        "max": max_ruins,
-                    }
-                )
+            # Build feature count preferences
+            feature_count_prefs = [
+                {
+                    "feature_type": "obstacle",
+                    "min": min_crates,
+                    "max": max_crates,
+                },
+                {
+                    "feature_type": "obscuring",
+                    "min": min_ruins,
+                    "max": max_ruins,
+                },
+            ]
 
             # Auto-detect replica count from CPU cores
             cpu_count = os.cpu_count() or 2
@@ -1275,14 +1265,14 @@ class ControlPanel(ttk.Frame):
                 "rotation_granularity_deg": rotation_granularity,
             }
 
-            # Only include gap parameters if they're set
-            if min_gap is not None:
+            # Only include gap parameters if > 0
+            if min_gap > 0:
                 params["min_feature_gap_inches"] = min_gap
-            if min_edge_gap is not None:
+            if min_edge_gap > 0:
                 params["min_edge_gap_inches"] = min_edge_gap
-            if min_all_gap is not None:
+            if min_all_gap > 0:
                 params["min_all_feature_gap_inches"] = min_all_gap
-            if min_all_edge_gap is not None:
+            if min_all_edge_gap > 0:
                 params["min_all_edge_gap_inches"] = min_all_edge_gap
 
             # Include mission if selected
