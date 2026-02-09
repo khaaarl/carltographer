@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 
 pub mod collision;
 pub mod generate;
+mod mutation;
 pub mod prng;
 pub mod tempering;
 pub mod types;
