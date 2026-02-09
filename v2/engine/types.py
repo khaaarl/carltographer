@@ -392,6 +392,9 @@ class EngineParams:
     mission: Mission | None = None
     skip_visibility: bool = False
     scoring_targets: ScoringTargets | None = None
+    num_replicas: int | None = None
+    swap_interval: int = 20
+    max_temperature: float = 50.0
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
@@ -416,6 +419,9 @@ class EngineParams:
             mission=Mission.from_dict(m) if m else None,
             skip_visibility=d.get("skip_visibility", False),
             scoring_targets=(ScoringTargets.from_dict(st) if st else None),
+            num_replicas=d.get("num_replicas"),
+            swap_interval=d.get("swap_interval", 20),
+            max_temperature=d.get("max_temperature", 50.0),
         )
 
 

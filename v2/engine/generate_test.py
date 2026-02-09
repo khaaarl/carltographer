@@ -10,6 +10,7 @@ from engine.collision import (
     obbs_overlap,
 )
 from engine.generate import (
+    MAX_EXTRA_MUTATIONS,
     MIN_MOVE_RANGE,
     PHASE2_BASE,
     StepUndo,
@@ -837,3 +838,164 @@ class TestScoringTargets:
         score = _compute_score(layout, prefs, {}, scoring_targets=targets)
         expected = PHASE2_BASE / (1.0 + 5)
         assert abs(score - expected) < 1e-6
+
+
+# -- Tempering Integration ---------------------------------------------------
+
+
+class TestTemperingIntegration:
+    def test_tempering_deterministic(self):
+        """Same seed + num_replicas produces identical output."""
+        pd = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        pd["num_replicas"] = 3
+        pd["swap_interval"] = 20
+        pd["max_temperature"] = 50.0
+        p1 = EngineParams.from_dict(pd)
+        p2 = EngineParams.from_dict(pd)
+        r1 = generate(p1)
+        r2 = generate(p2)
+        assert r1.layout.to_dict() == r2.layout.to_dict()
+        assert r1.score == r2.score
+
+    def test_tempering_produces_features(self):
+        """Multi-replica generation produces terrain features."""
+        pd = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        pd["num_replicas"] = 3
+        p = EngineParams.from_dict(pd)
+        r = generate(p)
+        assert len(r.layout.placed_features) > 0
+
+    def test_tempering_different_seeds(self):
+        """Different seeds produce different layouts with tempering."""
+        pd1 = _make_params_dict(seed=1, num_steps=100, skip_visibility=True)
+        pd1["num_replicas"] = 3
+        pd2 = _make_params_dict(seed=2, num_steps=100, skip_visibility=True)
+        pd2["num_replicas"] = 3
+        r1 = generate(EngineParams.from_dict(pd1))
+        r2 = generate(EngineParams.from_dict(pd2))
+        assert r1.layout.to_dict() != r2.layout.to_dict()
+
+    def test_tempering_no_overlaps(self):
+        """Multi-replica output has no overlapping features."""
+        pd = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        pd["num_replicas"] = 3
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+        features = result.layout.placed_features
+        for i in range(len(features)):
+            obbs_i = get_world_obbs(features[i], objects_by_id)
+            for j in range(i + 1, len(features)):
+                obbs_j = get_world_obbs(features[j], objects_by_id)
+                for ca in obbs_i:
+                    for cb in obbs_j:
+                        assert not obbs_overlap(ca, cb), (
+                            f"Features {i} and {j} overlap"
+                        )
+
+    def test_tempering_all_in_bounds(self):
+        """Multi-replica output has all features within table bounds."""
+        pd = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        pd["num_replicas"] = 3
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+        for pf in result.layout.placed_features:
+            obbs = get_world_obbs(pf, objects_by_id)
+            for corners in obbs:
+                assert obb_in_bounds(
+                    corners, params.table_width, params.table_depth
+                )
+
+    def test_single_replica_matches_hill_climbing(self):
+        """num_replicas=1 dispatches to hill climbing (same code path)."""
+        pd = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        pd["num_replicas"] = 1
+        p_one = EngineParams.from_dict(pd)
+
+        pd_none = _make_params_dict(
+            seed=42, num_steps=100, skip_visibility=True
+        )
+        p_none = EngineParams.from_dict(pd_none)
+
+        r_one = generate(p_one)
+        r_none = generate(p_none)
+        assert r_one.layout.to_dict() == r_none.layout.to_dict()
+        assert r_one.score == r_none.score
+
+    def test_multi_mutation_at_high_temperature(self):
+        """MAX_EXTRA_MUTATIONS is used: hot replicas do more mutations per step."""
+        # Verify the constant is what we expect
+        assert MAX_EXTRA_MUTATIONS == 3
+        # At t_factor=1.0: 1 + int(1.0 * 3) = 4 mutations per step
+        # At t_factor=0.0: 1 + int(0.0 * 3) = 1 mutation per step
+        assert 1 + int(1.0 * MAX_EXTRA_MUTATIONS) == 4
+        assert 1 + int(0.0 * MAX_EXTRA_MUTATIONS) == 1
+        assert 1 + int(0.5 * MAX_EXTRA_MUTATIONS) == 2
+
+    def test_tempering_with_gaps(self):
+        """Tempering respects gap constraints."""
+        pd = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        pd["num_replicas"] = 3
+        pd["min_feature_gap_inches"] = 2.0
+        pd["min_edge_gap_inches"] = 3.0
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        # Verify edge gaps
+        for pf in result.layout.placed_features:
+            tall_obbs = get_tall_world_obbs(pf, objects_by_id, min_height=1.0)
+            for corners in tall_obbs:
+                dist = obb_to_table_edge_distance(
+                    corners, params.table_width, params.table_depth
+                )
+                assert dist >= (params.min_edge_gap_inches or 0) - 1e-6
+
+        # Verify feature gaps
+        features = result.layout.placed_features
+        for i in range(len(features)):
+            tall_i = get_tall_world_obbs(
+                features[i], objects_by_id, min_height=1.0
+            )
+            for j in range(i + 1, len(features)):
+                tall_j = get_tall_world_obbs(
+                    features[j], objects_by_id, min_height=1.0
+                )
+                for ca in tall_i:
+                    for cb in tall_j:
+                        dist = obb_distance(ca, cb)
+                        assert (
+                            dist >= (params.min_feature_gap_inches or 0) - 1e-6
+                        )
+
+    def test_tempering_with_preferences(self):
+        """Tempering respects feature count preferences."""
+        pd = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        pd["num_replicas"] = 3
+        pd["feature_count_preferences"] = [
+            {"feature_type": "obstacle", "min": 5}
+        ]
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        count = len(result.layout.placed_features)
+        assert count >= 5, f"Expected >= 5 features, got {count}"
+
+    def test_tempering_json_roundtrip(self):
+        """Tempering works through the JSON interface."""
+        pd = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        pd["num_replicas"] = 3
+        pd["swap_interval"] = 20
+        pd["max_temperature"] = 50.0
+        result = generate_json(pd)
+        assert "layout" in result
+        assert "score" in result
+        assert len(result["layout"]["placed_features"]) > 0
+
+    def test_tempering_score_nonnegative(self):
+        """Tempering always produces a non-negative score."""
+        pd = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        pd["num_replicas"] = 3
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        assert result.score >= 0

@@ -13,6 +13,7 @@ const PHASE2_BASE: f64 = 1000.0;
 const MAX_RETRIES: u32 = 100;
 const RETRY_DECAY: f64 = 0.95;
 const MIN_MOVE_RANGE: f64 = 0.1;
+const MAX_EXTRA_MUTATIONS: u32 = 3;
 
 /// Undo token for reverting a single mutation step.
 #[derive(Debug)]
@@ -577,6 +578,14 @@ fn undo_step(layout: &mut TerrainLayout, undo: StepUndo) {
 }
 
 pub fn generate(params: &EngineParams) -> EngineResult {
+    match params.num_replicas {
+        Some(n) if n > 1 => return generate_tempering(params, n),
+        _ => {}
+    }
+    generate_hill_climbing(params)
+}
+
+fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
     let mut rng = Pcg32::new(params.seed, 0);
     let objects_by_id = build_object_index(&params.catalog);
 
@@ -668,6 +677,247 @@ pub fn generate(params: &EngineParams) -> EngineResult {
     }
 }
 
+fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult {
+    use crate::tempering::{compute_temperatures, sa_accept};
+
+    let objects_by_id = build_object_index(&params.catalog);
+    let catalog_features: Vec<&TerrainFeature> = params
+        .catalog
+        .features
+        .iter()
+        .map(|cf| &cf.item)
+        .collect();
+    let has_catalog = !catalog_features.is_empty();
+    let num_steps = params.steps();
+    let prefs = params.feature_count_preferences.as_deref().unwrap_or(&[]);
+    let temperatures = compute_temperatures(num_replicas, params.max_temperature);
+    let max_temperature = params.max_temperature;
+    let swap_interval = params.swap_interval;
+
+    // Create replicas
+    struct Replica<'a> {
+        layout: TerrainLayout,
+        rng: Pcg32,
+        score: f64,
+        next_id: u32,
+        temperature: f64,
+        vis_cache: Option<crate::visibility::VisibilityCache<'a>>,
+    }
+
+    let mut replicas: Vec<Replica> = Vec::with_capacity(num_replicas as usize);
+    for i in 0..num_replicas {
+        let rng = Pcg32::new(params.seed, i as u64);
+        let (initial_features, next_id) = match &params.initial_layout {
+            Some(initial) => {
+                let feats = initial.placed_features.clone();
+                let id = next_feature_id(&feats);
+                (feats, id)
+            }
+            None => (Vec::new(), 1u32),
+        };
+        let layout = TerrainLayout {
+            table_width_inches: params.table_width_inches,
+            table_depth_inches: params.table_depth_inches,
+            placed_features: initial_features,
+            rotationally_symmetric: params.rotationally_symmetric,
+            visibility: None,
+            mission: params.mission.clone(),
+        };
+        let vis_cache = if !params.skip_visibility {
+            Some(crate::visibility::VisibilityCache::new(&layout, &objects_by_id))
+        } else {
+            None
+        };
+        let score = compute_score(
+            &layout,
+            prefs,
+            &objects_by_id,
+            params.skip_visibility,
+            params.scoring_targets.as_ref(),
+            None,
+        );
+        replicas.push(Replica {
+            layout,
+            rng,
+            score,
+            next_id,
+            temperature: temperatures[i as usize],
+            vis_cache,
+        });
+    }
+
+    let mut swap_rng = Pcg32::new(params.seed, num_replicas as u64);
+
+    // Track best
+    let mut best_score = replicas[0].score;
+    let mut best_layout = replicas[0].layout.clone();
+    for r in replicas.iter().skip(1) {
+        if r.score > best_score {
+            best_score = r.score;
+            best_layout = r.layout.clone();
+        }
+    }
+
+    // Main loop — each batch runs replicas in parallel via scoped threads
+    let mut remaining = num_steps;
+
+    while remaining > 0 {
+        let batch_size = remaining.min(swap_interval);
+
+        // Per-replica best tracking for this batch
+        let mut per_replica_best: Vec<(f64, Option<TerrainLayout>)> =
+            (0..num_replicas).map(|_| (f64::NEG_INFINITY, None)).collect();
+        let current_best = best_score;
+
+        std::thread::scope(|s| {
+            let handles: Vec<_> = replicas.iter_mut()
+                .zip(per_replica_best.iter_mut())
+                .map(|(replica, prb)| {
+                    let cat_feats = &catalog_features;
+                    let objs = &objects_by_id;
+                    s.spawn(move || {
+                        let t_factor = if max_temperature > 0.0 {
+                            replica.temperature / max_temperature
+                        } else {
+                            0.0
+                        };
+                        let num_mutations = 1 + (t_factor * MAX_EXTRA_MUTATIONS as f64) as u32;
+
+                        for _ in 0..batch_size {
+                            let mut sub_undos: Vec<(StepUndo, u32)> = Vec::with_capacity(num_mutations as usize);
+                            for _ in 0..num_mutations {
+                                let (undo, new_nid) = perform_step(
+                                    &mut replica.layout,
+                                    &mut replica.rng,
+                                    t_factor,
+                                    replica.next_id,
+                                    cat_feats,
+                                    has_catalog,
+                                    objs,
+                                    params,
+                                    prefs,
+                                );
+                                sub_undos.push((undo, replica.next_id));
+                                replica.next_id = new_nid;
+                            }
+
+                            if sub_undos.iter().all(|(u, _)| matches!(u, StepUndo::Noop)) {
+                                continue;
+                            }
+
+                            if let Some(ref mut cache) = replica.vis_cache {
+                                cache.mark_dirty();
+                            }
+
+                            let old_score = replica.score;
+                            let new_score = compute_score(
+                                &replica.layout,
+                                prefs,
+                                objs,
+                                params.skip_visibility,
+                                params.scoring_targets.as_ref(),
+                                replica.vis_cache.as_mut(),
+                            );
+
+                            if sa_accept(old_score, new_score, replica.temperature, &mut replica.rng) {
+                                replica.score = new_score;
+                                if new_score > current_best && new_score > prb.0 {
+                                    prb.0 = new_score;
+                                    prb.1 = Some(replica.layout.clone());
+                                }
+                            } else {
+                                for (undo, prev_nid) in sub_undos.into_iter().rev() {
+                                    undo_step(&mut replica.layout, undo);
+                                    replica.next_id = prev_nid;
+                                }
+                                if let Some(ref mut cache) = replica.vis_cache {
+                                    cache.mark_dirty();
+                                }
+                            }
+                        }
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
+
+        // Merge per-replica bests into global best
+        for (score, layout_opt) in per_replica_best {
+            if score > best_score {
+                if let Some(l) = layout_opt {
+                    best_score = score;
+                    best_layout = l;
+                }
+            }
+        }
+
+        remaining -= batch_size;
+
+        // Swap adjacent replicas
+        if remaining > 0 && num_replicas > 1 {
+            for i in 0..(num_replicas - 1) as usize {
+                let r = swap_rng.next_float();
+                let ti = replicas[i].temperature;
+                let tj = replicas[i + 1].temperature;
+                let si = replicas[i].score;
+                let sj = replicas[i + 1].score;
+
+                let accept = if ti <= 0.0 {
+                    sj >= si
+                } else if tj <= 0.0 {
+                    si >= sj
+                } else {
+                    let delta = (1.0 / ti - 1.0 / tj) * (sj - si);
+                    if delta >= 0.0 {
+                        true
+                    } else {
+                        r < delta.exp()
+                    }
+                };
+
+                if accept {
+                    // Swap layouts, scores, next_ids, vis_caches
+                    let (left, right) = replicas.split_at_mut(i + 1);
+                    std::mem::swap(&mut left[i].layout, &mut right[0].layout);
+                    std::mem::swap(&mut left[i].score, &mut right[0].score);
+                    std::mem::swap(&mut left[i].next_id, &mut right[0].next_id);
+                    std::mem::swap(&mut left[i].vis_cache, &mut right[0].vis_cache);
+                }
+            }
+        }
+    }
+
+    // Pick best from final replica states (covers equal-score case).
+    // Reverse iteration so cold chain (index 0) wins ties.
+    for replica in replicas.iter().rev() {
+        if replica.score >= best_score {
+            best_score = replica.score;
+            best_layout = replica.layout.clone();
+        }
+    }
+
+    // Final visibility on best layout
+    if !params.skip_visibility {
+        let mut best_vis_cache = crate::visibility::VisibilityCache::new(&best_layout, &objects_by_id);
+        best_layout.visibility = Some(
+            crate::visibility::compute_layout_visibility(
+                &best_layout,
+                &objects_by_id,
+                4.0,
+                Some(&mut best_vis_cache),
+            ),
+        );
+    }
+
+    EngineResult {
+        layout: best_layout,
+        score: best_score,
+        steps_completed: num_steps,
+    }
+}
+
 // -----------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------
@@ -728,6 +978,9 @@ mod tests {
             mission: None,
             skip_visibility: false,
             scoring_targets: None,
+            num_replicas: None,
+            swap_interval: 20,
+            max_temperature: 50.0,
         }
     }
 
@@ -811,6 +1064,9 @@ mod tests {
             mission: None,
             skip_visibility: false,
             scoring_targets: None,
+            num_replicas: None,
+            swap_interval: 20,
+            max_temperature: 50.0,
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());

@@ -203,6 +203,20 @@ pub struct EngineParams {
     pub skip_visibility: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scoring_targets: Option<ScoringTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_replicas: Option<u32>,
+    #[serde(default = "default_swap_interval")]
+    pub swap_interval: u32,
+    #[serde(default = "default_max_temperature")]
+    pub max_temperature: f64,
+}
+
+fn default_swap_interval() -> u32 {
+    20
+}
+
+fn default_max_temperature() -> f64 {
+    50.0
 }
 
 impl EngineParams {

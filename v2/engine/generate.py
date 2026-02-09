@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
+import math
 from dataclasses import dataclass
 
 from .collision import is_valid_placement
 from .prng import PCG32
+from .tempering import compute_temperatures, sa_accept
 from .types import (
     EngineParams,
     EngineResult,
@@ -24,6 +27,7 @@ PHASE2_BASE = 1000.0
 MAX_RETRIES = 100
 RETRY_DECAY = 0.95
 MIN_MOVE_RANGE = 0.1
+MAX_EXTRA_MUTATIONS = 3
 
 
 @dataclass
@@ -482,9 +486,8 @@ def _undo_step(layout: TerrainLayout, undo: StepUndo) -> None:
         features[undo.index] = undo.old_feature
 
 
-def generate(params: EngineParams) -> EngineResult:
-    rng = PCG32(params.seed)
-    objects_by_id = _build_object_index(params.catalog)
+def _create_layout(params: EngineParams) -> tuple[TerrainLayout, int]:
+    """Create initial layout and next_id from params."""
     if params.initial_layout is not None:
         layout = TerrainLayout(
             table_width=params.table_width,
@@ -502,11 +505,18 @@ def generate(params: EngineParams) -> EngineResult:
             mission=params.mission,
         )
         next_id = 1
+    return layout, next_id
+
+
+def _generate_hill_climbing(params: EngineParams) -> EngineResult:
+    """Single-replica hill climbing (original algorithm)."""
+    rng = PCG32(params.seed)
+    objects_by_id = _build_object_index(params.catalog)
+    layout, next_id = _create_layout(params)
 
     catalog_features = [cf.item for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
 
-    # Create visibility cache for incremental tall-footprint filtering
     vis_cache: VisibilityCache | None = None
     if not params.skip_visibility:
         vis_cache = VisibilityCache(layout, objects_by_id)
@@ -557,6 +567,192 @@ def generate(params: EngineParams) -> EngineResult:
         score=current_score,
         steps_completed=params.num_steps,
     )
+
+
+@dataclass
+class _TemperingReplica:
+    layout: TerrainLayout
+    rng: PCG32
+    score: float
+    next_id: int
+    temperature: float
+    vis_cache: VisibilityCache | None
+
+
+def _attempt_replica_swap(
+    ri: _TemperingReplica,
+    rj: _TemperingReplica,
+    swap_rng: PCG32,
+) -> bool:
+    """Attempt replica exchange. Always consumes one PRNG value."""
+    r = swap_rng.next_float()
+
+    ti = ri.temperature
+    tj = rj.temperature
+    si = ri.score
+    sj = rj.score
+
+    if ti <= 0.0:
+        accept = sj >= si
+    elif tj <= 0.0:
+        accept = si >= sj
+    else:
+        delta = (1.0 / ti - 1.0 / tj) * (sj - si)
+        if delta >= 0.0:
+            accept = True
+        else:
+            accept = r < math.exp(delta)
+
+    if accept:
+        ri.layout, rj.layout = rj.layout, ri.layout
+        ri.score, rj.score = rj.score, ri.score
+        ri.next_id, rj.next_id = rj.next_id, ri.next_id
+        ri.vis_cache, rj.vis_cache = rj.vis_cache, ri.vis_cache
+
+    return accept
+
+
+def _generate_tempering(
+    params: EngineParams, num_replicas: int
+) -> EngineResult:
+    """Multi-replica parallel tempering with SA acceptance."""
+    objects_by_id = _build_object_index(params.catalog)
+    catalog_features = [cf.item for cf in params.catalog.features]
+    has_catalog = len(catalog_features) > 0
+    temperatures = compute_temperatures(num_replicas, params.max_temperature)
+
+    # Create replicas
+    replicas: list[_TemperingReplica] = []
+    for i in range(num_replicas):
+        rng = PCG32(params.seed, seq=i)
+        layout, next_id = _create_layout(params)
+        vis_cache: VisibilityCache | None = None
+        if not params.skip_visibility:
+            vis_cache = VisibilityCache(layout, objects_by_id)
+        score = _compute_score(
+            layout,
+            params.feature_count_preferences,
+            objects_by_id,
+            params.skip_visibility,
+            params.scoring_targets,
+            visibility_cache=vis_cache,
+        )
+        replicas.append(
+            _TemperingReplica(
+                layout=layout,
+                rng=rng,
+                score=score,
+                next_id=next_id,
+                temperature=temperatures[i],
+                vis_cache=vis_cache,
+            )
+        )
+
+    swap_rng = PCG32(params.seed, seq=num_replicas)
+
+    # Track best
+    best_score = replicas[0].score
+    best_layout = copy.deepcopy(replicas[0].layout)
+    for r in replicas[1:]:
+        if r.score > best_score:
+            best_score = r.score
+            best_layout = copy.deepcopy(r.layout)
+
+    # Main loop
+    remaining = params.num_steps
+    swap_interval = params.swap_interval
+    max_temperature = params.max_temperature
+
+    while remaining > 0:
+        batch_size = min(swap_interval, remaining)
+
+        for replica in replicas:
+            t_factor = (
+                replica.temperature / max_temperature
+                if max_temperature > 0
+                else 0.0
+            )
+            num_mutations = 1 + int(t_factor * MAX_EXTRA_MUTATIONS)
+
+            for _ in range(batch_size):
+                # Apply multiple mutations
+                sub_undos: list[tuple[StepUndo, int]] = []
+                for _ in range(num_mutations):
+                    undo, new_nid = _perform_step(
+                        replica.layout,
+                        replica.rng,
+                        t_factor,
+                        replica.next_id,
+                        catalog_features,
+                        has_catalog,
+                        objects_by_id,
+                        params,
+                    )
+                    sub_undos.append((undo, replica.next_id))
+                    replica.next_id = new_nid
+
+                # Skip scoring if all noops
+                if all(u.action == "noop" for u, _ in sub_undos):
+                    continue
+
+                old_score = replica.score
+                new_score = _compute_score(
+                    replica.layout,
+                    params.feature_count_preferences,
+                    objects_by_id,
+                    params.skip_visibility,
+                    params.scoring_targets,
+                    visibility_cache=replica.vis_cache,
+                )
+
+                if sa_accept(
+                    old_score, new_score, replica.temperature, replica.rng
+                ):
+                    replica.score = new_score
+                    if new_score > best_score:
+                        best_score = new_score
+                        best_layout = copy.deepcopy(replica.layout)
+                else:
+                    # Undo all mutations in reverse
+                    for undo, prev_nid in reversed(sub_undos):
+                        _undo_step(replica.layout, undo)
+                        replica.next_id = prev_nid
+
+        remaining -= batch_size
+
+        # Swap adjacent replicas
+        if remaining > 0 and num_replicas > 1:
+            for i in range(num_replicas - 1):
+                _attempt_replica_swap(replicas[i], replicas[i + 1], swap_rng)
+
+    # Pick best from final replica states (covers equal-score case where
+    # best_layout was never updated during the loop). Reverse iteration
+    # so cold chain (index 0) wins ties.
+    for replica in reversed(replicas):
+        if replica.score >= best_score:
+            best_score = replica.score
+            best_layout = replica.layout
+
+    # Final visibility on best layout
+    if not params.skip_visibility:
+        best_vis_cache = VisibilityCache(best_layout, objects_by_id)
+        best_layout.visibility = compute_layout_visibility(
+            best_layout, objects_by_id, visibility_cache=best_vis_cache
+        )
+
+    return EngineResult(
+        layout=best_layout,
+        score=best_score,
+        steps_completed=params.num_steps,
+    )
+
+
+def generate(params: EngineParams) -> EngineResult:
+    """Run terrain generation. Dispatches to hill climbing or tempering."""
+    num_replicas = params.num_replicas
+    if num_replicas is None or num_replicas <= 1:
+        return _generate_hill_climbing(params)
+    return _generate_tempering(params, num_replicas)
 
 
 def generate_json(params_dict: dict) -> dict:

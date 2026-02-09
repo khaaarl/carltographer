@@ -420,6 +420,9 @@ def make_test_params(
     mission: Optional[Mission] = None,
     skip_visibility: bool = False,
     scoring_targets: Optional[ScoringTargets] = None,
+    num_replicas: Optional[int] = None,
+    swap_interval: int = 20,
+    max_temperature: float = 50.0,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -436,6 +439,9 @@ def make_test_params(
         mission=mission,
         skip_visibility=skip_visibility,
         scoring_targets=scoring_targets,
+        num_replicas=num_replicas,
+        swap_interval=swap_interval,
+        max_temperature=max_temperature,
     )
 
 
@@ -456,6 +462,9 @@ class TestScenario:
     mission: Optional[Mission] = None
     skip_visibility: bool = False
     scoring_targets: Optional[ScoringTargets] = None
+    num_replicas: Optional[int] = None
+    swap_interval: int = 20
+    max_temperature: float = 50.0
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -472,6 +481,9 @@ class TestScenario:
             mission=self.mission,
             skip_visibility=self.skip_visibility,
             scoring_targets=self.scoring_targets,
+            num_replicas=self.num_replicas,
+            swap_interval=self.swap_interval,
+            max_temperature=self.max_temperature,
         )
 
 
@@ -688,6 +700,43 @@ TEST_SCENARIOS = [
             objective_hidability_target=40.0,
         ),
     ),
+    # -- Tempering scenarios ---
+    TestScenario(
+        "tempering_basic",
+        seed=42,
+        num_steps=100,
+        num_replicas=3,
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "tempering_with_visibility",
+        seed=42,
+        num_steps=50,
+        num_replicas=2,
+    ),
+    TestScenario(
+        "tempering_with_gaps",
+        seed=42,
+        num_steps=100,
+        num_replicas=3,
+        min_feature_gap_inches=2.0,
+        min_edge_gap_inches=3.0,
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "tempering_with_preferences",
+        seed=42,
+        num_steps=100,
+        num_replicas=3,
+        feature_count_preferences=[
+            FeatureCountPreference(
+                feature_type="obstacle",
+                min=3,
+                max=8,
+            )
+        ],
+        skip_visibility=True,
+    ),
 ]
 
 
@@ -792,6 +841,13 @@ def params_to_json_dict(params: EngineParams) -> dict:
             if params.scoring_targets is not None
             else {}
         ),
+        **(
+            {"num_replicas": params.num_replicas}
+            if params.num_replicas is not None
+            else {}
+        ),
+        "swap_interval": params.swap_interval,
+        "max_temperature": params.max_temperature,
     }
 
 
