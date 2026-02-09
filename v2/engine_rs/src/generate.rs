@@ -12,7 +12,7 @@ use crate::types::{
 const PHASE2_BASE: f64 = 1000.0;
 const MAX_RETRIES: u32 = 100;
 const RETRY_DECAY: f64 = 0.95;
-const MIN_MOVE_RANGE: f64 = 0.1;
+const MIN_MOVE_RANGE: f64 = 2.0;
 const MAX_EXTRA_MUTATIONS: u32 = 3;
 
 /// Undo token for reverting a single mutation step.
@@ -23,6 +23,7 @@ pub enum StepUndo {
     Move { index: usize, old: PlacedFeature },
     Delete { index: usize, saved: PlacedFeature },
     Replace { index: usize, old: PlacedFeature, prev_next_id: u32 },
+    Rotate { index: usize, old: PlacedFeature },
 }
 
 fn build_object_index<'a>(
@@ -352,11 +353,12 @@ fn try_single_action(
     let has_features = !layout.placed_features.is_empty();
     let feature_counts = count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
 
-    // Compute action weights: [add, move, delete, replace]
+    // Compute action weights: [add, move, delete, replace, rotate]
     let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
     let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
     let mut delete_weight: f64 = if has_features { 1.0 } else { 0.0 };
     let replace_weight: f64 = if has_features && has_catalog { 1.0 } else { 0.0 };
+    let rotate_weight: f64 = if has_features { 1.0 } else { 0.0 };
 
     // Preference biasing on add/delete only
     for pref in prefs {
@@ -377,7 +379,7 @@ fn try_single_action(
         }
     }
 
-    let weights = vec![add_weight, move_weight, delete_weight, replace_weight];
+    let weights = vec![add_weight, move_weight, delete_weight, replace_weight, rotate_weight];
     let action = match weighted_choice(rng, &weights) {
         Some(idx) => idx as u32,
         None => return None,
@@ -522,6 +524,36 @@ fn try_single_action(
                 None
             }
         }
+        4 => {
+            // Rotate: pick random feature, assign new quantized angle
+            let idx = rng.next_int(
+                0,
+                layout.placed_features.len() as u32 - 1,
+            ) as usize;
+            let old = layout.placed_features[idx].clone();
+            let new_rot = quantize_angle(rng.next_float() * 360.0);
+            layout.placed_features[idx].transform = Transform {
+                x_inches: old.transform.x_inches,
+                y_inches: 0.0,
+                z_inches: old.transform.z_inches,
+                rotation_deg: new_rot,
+            };
+            if is_valid_placement(
+                &layout.placed_features,
+                idx,
+                params.table_width_inches,
+                params.table_depth_inches,
+                objects_by_id,
+                params.min_feature_gap_inches,
+                params.min_edge_gap_inches,
+                params.rotationally_symmetric,
+            ) {
+                Some((StepUndo::Rotate { index: idx, old }, next_id))
+            } else {
+                layout.placed_features[idx] = old;
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -572,6 +604,9 @@ fn undo_step(layout: &mut TerrainLayout, undo: StepUndo) {
             layout.placed_features.insert(index, saved);
         }
         StepUndo::Replace { index, old, .. } => {
+            layout.placed_features[index] = old;
+        }
+        StepUndo::Rotate { index, old } => {
             layout.placed_features[index] = old;
         }
     }

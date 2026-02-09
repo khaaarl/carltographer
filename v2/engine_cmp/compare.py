@@ -700,6 +700,13 @@ TEST_SCENARIOS = [
             objective_hidability_target=40.0,
         ),
     ),
+    # -- Rotate action ---
+    TestScenario(
+        "rotate_action_basic",
+        seed=77,
+        num_steps=100,
+        skip_visibility=False,
+    ),
     # -- Tempering scenarios ---
     TestScenario(
         "tempering_basic",

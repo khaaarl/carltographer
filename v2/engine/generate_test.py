@@ -331,7 +331,7 @@ class TestGenerate:
             ],
         }
         params_dict = {
-            "seed": 42,
+            "seed": 1,
             "table_width_inches": 60,
             "table_depth_inches": 44,
             "catalog": catalog_dict,
@@ -629,11 +629,38 @@ class TestUndoStep:
 # -- Retry Loop ------------------------------------------------------
 
 
+class TestRotateAction:
+    def test_rotate_deterministic(self):
+        """Rotate action is deterministic."""
+        p1 = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        )
+        p2 = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        )
+        r1 = generate(p1)
+        r2 = generate(p2)
+        assert r1.layout.to_dict() == r2.layout.to_dict()
+
+    def test_undo_rotate(self):
+        """Undo rotate restores original transform."""
+        layout = TerrainLayout(table_width=60.0, table_depth=44.0)
+        feat = TerrainFeature(id="f1", feature_type="obstacle", components=[])
+        old_pf = PlacedFeature(feat, Transform(1.0, 2.0, 45.0))
+        new_pf = PlacedFeature(feat, Transform(1.0, 2.0, 90.0))
+        layout.placed_features.append(new_pf)
+        undo = StepUndo(action="rotate", index=0, old_feature=old_pf)
+        _undo_step(layout, undo)
+        assert layout.placed_features[0].transform.rotation_deg == 45.0
+        assert layout.placed_features[0].transform.x == 1.0
+        assert layout.placed_features[0].transform.z == 2.0
+
+
 class TestRetryLoop:
     def test_retry_finds_valid_on_crowded_table(self):
         """Even on a crowded table, retry loop should find a valid placement."""
         params = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+            _make_params_dict(seed=13, num_steps=200, skip_visibility=True)
         )
         params.min_feature_gap_inches = 5.0
         params.min_edge_gap_inches = 3.0

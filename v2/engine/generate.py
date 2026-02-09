@@ -26,13 +26,13 @@ from .visibility import VisibilityCache, compute_layout_visibility
 PHASE2_BASE = 1000.0
 MAX_RETRIES = 100
 RETRY_DECAY = 0.95
-MIN_MOVE_RANGE = 0.1
+MIN_MOVE_RANGE = 2.0
 MAX_EXTRA_MUTATIONS = 3
 
 
 @dataclass
 class StepUndo:
-    action: str  # "noop", "add", "move", "delete", "replace"
+    action: str  # "noop", "add", "move", "delete", "replace", "rotate"
     index: int = -1
     old_feature: PlacedFeature | None = None
     prev_next_id: int = 0
@@ -285,11 +285,12 @@ def _try_single_action(
     has_features = len(features) > 0
     feature_counts = _count_features_by_type(layout)
 
-    # Compute action weights: [add, move, delete, replace]
+    # Compute action weights: [add, move, delete, replace, rotate]
     add_weight = 1.0 if has_catalog else 0.0
     move_weight = 1.0 if has_features else 0.0
     delete_weight = 1.0 if has_features else 0.0
     replace_weight = 1.0 if (has_features and has_catalog) else 0.0
+    rotate_weight = 1.0 if has_features else 0.0
 
     # Preference biasing on add/delete only
     for pref in params.feature_count_preferences:
@@ -303,7 +304,13 @@ def _try_single_action(
             delete_weight *= 1.0 + excess * 2.0
             add_weight *= 0.1
 
-    weights = [add_weight, move_weight, delete_weight, replace_weight]
+    weights = [
+        add_weight,
+        move_weight,
+        delete_weight,
+        replace_weight,
+        rotate_weight,
+    ]
     action = _weighted_choice(rng, weights)
 
     if action < 0:
@@ -436,6 +443,31 @@ def _try_single_action(
             features[idx] = old
             return None
 
+    elif action == 4:
+        # Rotate: pick random feature, assign new quantized angle
+        idx = rng.next_int(0, len(features) - 1)
+        old = features[idx]
+        new_rot = _quantize_angle(rng.next_float() * 360.0)
+        new_transform = Transform(old.transform.x, old.transform.z, new_rot)
+        features[idx] = PlacedFeature(old.feature, new_transform)
+        if is_valid_placement(
+            features,
+            idx,
+            params.table_width,
+            params.table_depth,
+            objects_by_id,
+            min_feature_gap=params.min_feature_gap_inches,
+            min_edge_gap=params.min_edge_gap_inches,
+            rotationally_symmetric=params.rotationally_symmetric,
+        ):
+            return (
+                StepUndo(action="rotate", index=idx, old_feature=old),
+                next_id,
+            )
+        else:
+            features[idx] = old
+            return None
+
     return None
 
 
@@ -482,6 +514,9 @@ def _undo_step(layout: TerrainLayout, undo: StepUndo) -> None:
         assert undo.old_feature is not None
         features.insert(undo.index, undo.old_feature)
     elif undo.action == "replace":
+        assert undo.old_feature is not None
+        features[undo.index] = undo.old_feature
+    elif undo.action == "rotate":
         assert undo.old_feature is not None
         features[undo.index] = undo.old_feature
 

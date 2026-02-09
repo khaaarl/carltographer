@@ -7,6 +7,7 @@ with a control panel for engine parameters.
 import copy
 import json
 import math
+import os
 import random
 import time
 import tkinter as tk
@@ -884,6 +885,10 @@ class ControlPanel(ttk.Frame):
                     }
                 )
 
+            # Auto-detect replica count from CPU cores
+            cpu_count = os.cpu_count() or 2
+            num_replicas = max(2, min(cpu_count, 8))
+
             # Build params dict
             params = {
                 "seed": seed,
@@ -893,6 +898,7 @@ class ControlPanel(ttk.Frame):
                 "num_steps": self.num_steps_var.get(),
                 "catalog": SAMPLE_CATALOG,
                 "feature_count_preferences": feature_count_prefs,
+                "num_replicas": num_replicas,
             }
 
             # Only include gap parameters if they're set
