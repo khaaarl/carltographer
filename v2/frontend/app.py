@@ -225,20 +225,32 @@ WTC_SHORT_FEATURE = {
     ],
 }
 
-SAMPLE_CATALOG = {
-    "name": "Sample terrain",
-    "objects": [
-        {"item": CRATE_OBJECT, "quantity": None},
-        {"item": WTC_RUINS_BASE_TALL, "quantity": None},
-        {"item": WTC_RUINS_BASE_SHORT, "quantity": None},
-        {"item": WTC_THREE_STOREY_WALLS, "quantity": None},
-        {"item": WTC_SHORT_WALLS, "quantity": None},
-    ],
-    "features": [
-        {"item": CRATE_FEATURE, "quantity": None},
-        {"item": WTC_THREE_STOREY_FEATURE, "quantity": None},
-        {"item": WTC_SHORT_FEATURE, "quantity": None},
-    ],
+TERRAIN_CATALOGS = {
+    "WTC Set": {
+        "name": "WTC Set",
+        "objects": [
+            {"item": CRATE_OBJECT, "quantity": 2},
+            {"item": WTC_RUINS_BASE_TALL, "quantity": 6},
+            {"item": WTC_RUINS_BASE_SHORT, "quantity": 8},
+            {"item": WTC_THREE_STOREY_WALLS, "quantity": 6},
+            {"item": WTC_SHORT_WALLS, "quantity": 8},
+        ],
+        "features": [
+            {"item": CRATE_FEATURE, "quantity": 2},
+            {"item": WTC_THREE_STOREY_FEATURE, "quantity": 6},
+            {"item": WTC_SHORT_FEATURE, "quantity": 8},
+        ],
+    },
+    "Infinite Tall L's": {
+        "name": "Infinite Tall L's",
+        "objects": [
+            {"item": WTC_RUINS_BASE_TALL, "quantity": None},
+            {"item": WTC_THREE_STOREY_WALLS, "quantity": None},
+        ],
+        "features": [
+            {"item": WTC_THREE_STOREY_FEATURE, "quantity": None},
+        ],
+    },
 }
 
 
@@ -695,6 +707,9 @@ class ControlPanel(ttk.Frame):
         self.obj_hide_target_var = tk.StringVar(value="40")
         self.obj_hide_weight_var = tk.StringVar(value="1.0")
 
+        # Catalog selection variable
+        self.catalog_var = tk.StringVar(value="WTC Set")
+
         # Mission selection variables
         self.edition_var = tk.StringVar(value="")
         self.pack_var = tk.StringVar(value="")
@@ -703,6 +718,7 @@ class ControlPanel(ttk.Frame):
         self._initializing = True  # suppress callbacks during init
 
         # Combo widgets (set during _build via _combo helper)
+        self.catalog_combo: ttk.Combobox = None
         self.edition_combo: ttk.Combobox = None
         self.pack_combo: ttk.Combobox = None
         self.deployment_combo: ttk.Combobox = None
@@ -723,8 +739,15 @@ class ControlPanel(ttk.Frame):
         right = ttk.Frame(self)
         right.pack(side=tk.LEFT, fill=tk.Y)
 
-        # --- Left column: Mission, Table, Generation, Buttons ---
+        # --- Left column: Terrain, Mission, Table, Generation, Buttons ---
         row = 0
+        row = self._section(left, row, "Terrain")
+        row = self._combo(
+            left, row, "Catalog:", self.catalog_var, "catalog_combo"
+        )
+        self.catalog_combo["values"] = list(TERRAIN_CATALOGS.keys())
+
+        row = self._sep(left, row)
         row = self._section(left, row, "Mission")
         row = self._combo(
             left, row, "Edition:", self.edition_var, "edition_combo"
@@ -967,7 +990,7 @@ class ControlPanel(ttk.Frame):
                 "table_depth_inches": self.table_depth_var.get(),
                 "rotationally_symmetric": self.symmetric_var.get(),
                 "num_steps": self.num_steps_var.get(),
-                "catalog": SAMPLE_CATALOG,
+                "catalog": TERRAIN_CATALOGS[self.catalog_var.get()],
                 "feature_count_preferences": feature_count_prefs,
                 "num_replicas": num_replicas,
             }
@@ -1152,7 +1175,7 @@ class App:
             "table_depth_inches": 44,
             "placed_features": [],
         }
-        self.objects_by_id = _build_object_index(SAMPLE_CATALOG)
+        self.objects_by_id = _build_object_index(TERRAIN_CATALOGS["WTC Set"])
 
         # Rendering context for coordinate conversion
         self._render_ppi = None
