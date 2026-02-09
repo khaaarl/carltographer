@@ -2,16 +2,27 @@
 
 Utility scripts for building, testing, and verifying the Rust engine.
 
+## build_rust_engine.py (recommended)
+
+Cross-platform Python script that builds the Rust engine and verifies parity.
+Run from `v2/` with the venv activated:
+
+```bash
+python scripts/build_rust_engine.py          # verbose (default)
+python scripts/build_rust_engine.py --quiet  # minimal output
+```
+
 ## build-rust-engine.sh
 
-Builds the Rust engine and verifies it matches the Python implementation.
+Bash alternative (Linux/macOS only). Builds the Rust engine and verifies it
+matches the Python implementation.
 
 **What it does:**
 1. Validates Python venv is available and functional
 2. Validates Rust toolchain is installed
 3. Validates maturin is available
 4. Compiles Rust engine with `maturin develop`
-5. Runs Python/Rust comparison tests (12 parity scenarios)
+5. Runs Python/Rust comparison tests (30 parity scenarios)
 6. Verifies hash manifest was written
 7. Reports success or fails loudly
 

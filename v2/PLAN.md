@@ -1,4 +1,10 @@
-# Carltographer v2 - Vague Plan
+# Carltographer v2 - Original Design Document
+
+> **Note**: This is the original design document from early development,
+> preserved for historical context. The project has since been fully
+> implemented — see the [README](../README.md) for current state and
+> [CLAUDE.md](../CLAUDE.md) for development details. The "Open Questions"
+> at the bottom have all been resolved.
 
 ## Original Notes (verbatim)
 
@@ -220,19 +226,38 @@ best = engine.best_layout()
 layout.to_json("layout.json")
 ```
 
-### Open Questions
+### Open Questions (all resolved)
 
 - **UI**: What form does the frontend take? CLI that dumps a JSON file? A
   little web viewer? A TUI with ASCII art? Probably start with CLI + JSON and
   add visualization later.
+  > **Resolved**: Tkinter GUI with 2D top-down battlefield viewer, deployment
+  > zone overlay, objective markers, and save/load. No CLI mode.
+
 - **Terrain catalog scope**: v1 only has ruins and containers. Is the catalog
   format general enough for future terrain types (craters, barricades, woods)?
   Probably yes if we keep it abstract (rectangles with properties).
+  > **Resolved**: Yes — the catalog format is general. Features have a
+  > `feature_type` (obstacle, ruin, etc.) and are composed of objects with
+  > rectangular prism shapes. Extensible to any terrain type.
+
 - **Ruin detail level**: How much of the wall-by-wall configuration belongs in
   the engine vs. a post-processing step?
+  > **Resolved**: Ruins are defined in the catalog as multi-component features
+  > (objects with offsets). The engine treats them as collections of shapes for
+  > collision/visibility. No procedural ruin generation in the engine.
+
 - **Scoring extensibility**: The scoring function is very domain-specific (40k
   gap rules, desired piece counts). Should it be configurable/pluggable, or
   just hardcoded for now?
+  > **Resolved**: Configurable. Two-phase scoring with user-settable visibility
+  > targets (overall %, DZ %, cross-DZ %, objective hidability %) and per-metric
+  > weights. Feature count preferences are also configurable per type.
+
 - **Table coordinate system**: v1 uses float inches with the origin at center.
   Keep that, or switch to a grid? Grid simplifies determinism but loses
   placement precision. A fine grid (0.25" or 0.5") might be the best of both.
+  > **Resolved**: Float inches with origin at center, quantized to 0.1"
+  > increments. Rotations quantized to 15° increments. Determinism achieved
+  > via PCG32 PRNG with explicit 64-bit masking, verified across Python and
+  > Rust implementations.
