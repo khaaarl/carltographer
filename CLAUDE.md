@@ -125,9 +125,11 @@ When the user asks to merge a feature branch to main, follow this procedure:
 ```bash
 # 1. Create a temporary branch and squash all feature commits into one
 #    (This way conflicts only need to be resolved once, not per-commit)
+#    IMPORTANT: The REAL commit message goes HERE — step 4 is a fast-forward
+#    merge which does NOT create a new commit, so any -m there is ignored.
 git checkout -b feature/my-branch-rebase feature/my-branch
 git reset --soft $(git merge-base main feature/my-branch-rebase)
-git commit -m "Squashed feature commit"
+git commit -m "Your descriptive commit message here"
 
 # 2. Pull latest main
 git checkout main && git pull
@@ -137,7 +139,7 @@ git checkout feature/my-branch-rebase
 git rebase main
 # If conflicts arise, resolve them carefully, then: git add <files> && git rebase --continue
 
-# 4. Fast-forward merge into main
+# 4. Fast-forward merge into main (no new commit — just moves the pointer)
 git checkout main
 git merge feature/my-branch-rebase
 
