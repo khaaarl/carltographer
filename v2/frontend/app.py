@@ -109,12 +109,6 @@ RUINS_OBJECT = {
     "outline_color": "#000000",
 }
 
-RUINS_FEATURE = {
-    "id": "ruins",
-    "feature_type": "obscuring",
-    "components": [{"object_id": "ruins"}],
-}
-
 WTC_THREE_STOREY_WALLS = {
     "id": "wtc_three_storey_walls",
     "name": "WTC Three Storey Walls",
@@ -171,7 +165,6 @@ SAMPLE_CATALOG = {
     ],
     "features": [
         {"item": CRATE_FEATURE, "quantity": None},
-        {"item": RUINS_FEATURE, "quantity": None},
         {"item": WTC_THREE_STOREY_FEATURE, "quantity": None},
     ],
 }
