@@ -19,6 +19,7 @@
       "Bash(grep:*)",
       "Bash(isort:*)",
       "Bash(ls *)",
+      "Bash(maturin:*)",
       "Bash(mkdir:*)",
       "Bash(pip *)",
       "Bash(py --version *)",
