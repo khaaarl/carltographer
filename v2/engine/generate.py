@@ -336,6 +336,8 @@ def _try_single_action(
     has_catalog: bool,
     objects_by_id: dict[str, TerrainObject],
     params: EngineParams,
+    index_in_chain: int = 0,
+    chain_length: int = 1,
 ) -> tuple[StepUndo, int] | None:
     """Attempt one mutation action. Returns (undo, new_next_id) or None on failure."""
     features = layout.placed_features
@@ -343,9 +345,15 @@ def _try_single_action(
     feature_counts = _count_features_by_type(layout)
 
     # Compute action weights: [add, move, delete, replace, rotate]
+    # Non-final mutations in a chain get full delete weight (clearing space
+    # for subsequent add/move), while final/standalone mutations use the
+    # reduced base weight to avoid wasting scoring compute on doomed deletes.
     add_weight = 1.0 if has_catalog else 0.0
     move_weight = 1.0 if has_features else 0.0
-    delete_weight = 1.0 if has_features else 0.0
+    is_last = index_in_chain >= chain_length - 1
+    delete_weight = (
+        0.25 if has_features and is_last else 1.0 if has_features else 0.0
+    )
     replace_weight = 1.0 if (has_features and has_catalog) else 0.0
     rotate_weight = 1.0 if has_features else 0.0
 
@@ -549,6 +557,8 @@ def _perform_step(
     has_catalog: bool,
     objects_by_id: dict[str, TerrainObject],
     params: EngineParams,
+    index_in_chain: int = 0,
+    chain_length: int = 1,
 ) -> tuple[StepUndo, int]:
     """Try mutations with decaying temperature until one succeeds or retries exhausted."""
     effective_t = t_factor
@@ -562,6 +572,8 @@ def _perform_step(
             has_catalog,
             objects_by_id,
             params,
+            index_in_chain=index_in_chain,
+            chain_length=chain_length,
         )
         if result is not None:
             return result
@@ -781,7 +793,7 @@ def _generate_tempering(
             for _ in range(batch_size):
                 # Apply multiple mutations
                 sub_undos: list[tuple[StepUndo, int]] = []
-                for _ in range(num_mutations):
+                for mi in range(num_mutations):
                     undo, new_nid = _perform_step(
                         replica.layout,
                         replica.rng,
@@ -791,6 +803,8 @@ def _generate_tempering(
                         has_catalog,
                         objects_by_id,
                         params,
+                        index_in_chain=mi,
+                        chain_length=num_mutations,
                     )
                     sub_undos.append((undo, replica.next_id))
                     replica.next_id = new_nid

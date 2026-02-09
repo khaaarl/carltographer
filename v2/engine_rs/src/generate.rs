@@ -407,14 +407,20 @@ fn try_single_action(
     objects_by_id: &HashMap<String, &TerrainObject>,
     params: &EngineParams,
     prefs: &[FeatureCountPreference],
+    index_in_chain: u32,
+    chain_length: u32,
 ) -> Option<(StepUndo, u32)> {
     let has_features = !layout.placed_features.is_empty();
     let feature_counts = count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
 
     // Compute action weights: [add, move, delete, replace, rotate]
+    // Non-final mutations in a chain get full delete weight (clearing space
+    // for subsequent add/move), while final/standalone mutations use the
+    // reduced base weight to avoid wasting scoring compute on doomed deletes.
     let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
     let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
-    let mut delete_weight: f64 = if has_features { 1.0 } else { 0.0 };
+    let is_last = index_in_chain >= chain_length - 1;
+    let mut delete_weight: f64 = if !has_features { 0.0 } else if is_last { 0.25 } else { 1.0 };
     let replace_weight: f64 = if has_features && has_catalog { 1.0 } else { 0.0 };
     let rotate_weight: f64 = if has_features { 1.0 } else { 0.0 };
 
@@ -636,6 +642,8 @@ fn perform_step(
     objects_by_id: &HashMap<String, &TerrainObject>,
     params: &EngineParams,
     prefs: &[FeatureCountPreference],
+    index_in_chain: u32,
+    chain_length: u32,
 ) -> (StepUndo, u32) {
     let mut effective_t = t_factor;
     for _ in 0..MAX_RETRIES {
@@ -649,6 +657,8 @@ fn perform_step(
             objects_by_id,
             params,
             prefs,
+            index_in_chain,
+            chain_length,
         ) {
             return result;
         }
@@ -740,6 +750,8 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
             &objects_by_id,
             params,
             prefs,
+            0,
+            1,
         );
 
         if matches!(undo, StepUndo::Noop) {
@@ -887,7 +899,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
 
                         for _ in 0..batch_size {
                             let mut sub_undos: Vec<(StepUndo, u32)> = Vec::with_capacity(num_mutations as usize);
-                            for _ in 0..num_mutations {
+                            for mi in 0..num_mutations {
                                 let (undo, new_nid) = perform_step(
                                     &mut replica.layout,
                                     &mut replica.rng,
@@ -898,6 +910,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                     objs,
                                     params,
                                     prefs,
+                                    mi,
+                                    num_mutations,
                                 );
                                 sub_undos.push((undo, replica.next_id));
                                 replica.next_id = new_nid;
