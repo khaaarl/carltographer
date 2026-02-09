@@ -625,7 +625,7 @@ class ControlPanel(ttk.Frame):
         self.overall_vis_weight_var = tk.StringVar(value="1.0")
         self.dz_vis_target_var = tk.StringVar(value="20")
         self.dz_vis_weight_var = tk.StringVar(value="1.0")
-        self.dz_hidden_target_var = tk.StringVar(value="40")
+        self.dz_hidden_target_var = tk.StringVar(value="70")
         self.dz_hidden_weight_var = tk.StringVar(value="1.0")
         self.obj_hide_target_var = tk.StringVar(value="40")
         self.obj_hide_weight_var = tk.StringVar(value="1.0")
