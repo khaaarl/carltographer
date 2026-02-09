@@ -326,7 +326,6 @@ struct VisBuffers {
     endpoints: Vec<(f64, f64)>,
     endpoint_seen: HashSet<(u64, u64)>,
     rays: Vec<(f64, f64, f64)>,
-    polygon: Vec<(f64, f64, f64)>,
     /// Angular buckets: each bucket holds indices into `all_segments`.
     buckets: [Vec<u16>; NUM_ANGLE_BUCKETS],
     /// Flattened terrain + table boundary segments for bucket indexing.
@@ -339,7 +338,6 @@ impl VisBuffers {
             endpoints: Vec::with_capacity(256),
             endpoint_seen: HashSet::with_capacity(256),
             rays: Vec::with_capacity(768),
-            polygon: Vec::with_capacity(768),
             buckets: std::array::from_fn(|_| Vec::with_capacity(16)),
             all_segments: Vec::with_capacity(128),
         }
@@ -359,7 +357,6 @@ fn compute_visibility_polygon(
     bufs.endpoints.clear();
     bufs.endpoint_seen.clear();
     bufs.rays.clear();
-    bufs.polygon.clear();
     result.clear();
 
     // Collect unique endpoints from terrain segments + table boundary
@@ -447,32 +444,38 @@ fn compute_visibility_polygon(
     }
 
     // Cast each ray, testing only segments in its angular bucket.
+    // Inline intersection math with early exit when t >= current min_t.
     let rays = &bufs.rays;
     let buckets = &bufs.buckets;
     let all_segs = &bufs.all_segments;
-    let polygon = &mut bufs.polygon;
 
-    for &(angle, dx, dz) in rays {
-        let bucket_idx = angle_to_bucket(angle);
+    for &(_angle, dx, dz) in rays {
+        let bucket_idx = angle_to_bucket(_angle);
         let mut min_t = f64::INFINITY;
         for &si in &buckets[bucket_idx] {
             let (x1, z1, x2, z2) = all_segs[si as usize];
-            if let Some(t) =
-                ray_segment_intersection(ox, oz, dx, dz, x1, z1, x2, z2)
-            {
-                if t < min_t {
-                    min_t = t;
-                }
+            let sx = x2 - x1;
+            let sz = z2 - z1;
+            let denom = dx * sz - dz * sx;
+            if denom.abs() < 1e-12 {
+                continue;
+            }
+            let d_x1 = x1 - ox;
+            let d_z1 = z1 - oz;
+            let t = (d_x1 * sz - d_z1 * sx) / denom;
+            if t < 0.0 || t >= min_t {
+                continue;
+            }
+            let u = (d_x1 * dz - d_z1 * dx) / denom;
+            if u >= 0.0 && u <= 1.0 {
+                min_t = t;
             }
         }
 
         if min_t < f64::INFINITY {
-            polygon.push((angle, ox + min_t * dx, oz + min_t * dz));
+            result.push((ox + min_t * dx, oz + min_t * dz));
         }
     }
-
-    // Extract just the (x, z) coordinates
-    result.extend(bufs.polygon.iter().map(|p| (p.1, p.2)));
 }
 
 /// Generate grid sample points that fall inside a polygon.
