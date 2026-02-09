@@ -78,18 +78,57 @@ def _weighted_choice(rng: PCG32, weights: list[float]) -> int:
     return len(weights) - 1
 
 
+def _count_placed_per_template(
+    placed_features: list[PlacedFeature],
+    catalog_features: list[TerrainFeature],
+    rotationally_symmetric: bool,
+) -> list[int]:
+    """Count how many placed features match each catalog template.
+
+    Matches by comparing component object_id tuples. When rotationally
+    symmetric, non-origin features count as 2 (canonical + mirror).
+    """
+    template_keys = [
+        tuple(c.object_id for c in cf.components) for cf in catalog_features
+    ]
+    counts = [0] * len(catalog_features)
+    for pf in placed_features:
+        pf_key = tuple(c.object_id for c in pf.feature.components)
+        increment = 1
+        if rotationally_symmetric and (
+            pf.transform.x != 0.0 or pf.transform.z != 0.0
+        ):
+            increment = 2
+        for i, tk in enumerate(template_keys):
+            if pf_key == tk:
+                counts[i] += increment
+                break
+    return counts
+
+
 def _compute_template_weights(
     catalog_features: list[TerrainFeature],
     feature_counts: dict[str, int],
     preferences: list,
+    catalog_quantities: list[int | None],
+    placed_features: list[PlacedFeature],
+    rotationally_symmetric: bool,
 ) -> list[float]:
     """Compute weights for selecting which catalog feature to add.
 
     Boosts weight for types below their min, reduces for types at/above max.
+    Sets weight to 0 for templates that have reached their catalog quantity limit.
     """
     pref_by_type = {p.feature_type: p for p in preferences}
+    placed_counts = _count_placed_per_template(
+        placed_features, catalog_features, rotationally_symmetric
+    )
     weights = []
-    for cf in catalog_features:
+    for i, cf in enumerate(catalog_features):
+        qty = catalog_quantities[i]
+        if qty is not None and placed_counts[i] >= qty:
+            weights.append(0.0)
+            continue
         pref = pref_by_type.get(cf.feature_type)
         w = 1.0
         if pref is not None:
@@ -230,6 +269,7 @@ def _try_single_action(
     has_catalog: bool,
     objects_by_id: dict[str, TerrainObject],
     params: EngineParams,
+    catalog_quantities: list[int | None],
     index_in_chain: int = 0,
     chain_length: int = 1,
 ) -> tuple[StepUndo, int] | None:
@@ -281,6 +321,9 @@ def _try_single_action(
             catalog_features,
             feature_counts,
             params.feature_count_preferences,
+            catalog_quantities,
+            features,
+            layout.rotationally_symmetric,
         )
         tidx = _weighted_choice(rng, template_weights)
         if tidx < 0:
@@ -383,6 +426,9 @@ def _try_single_action(
             catalog_features,
             feature_counts,
             params.feature_count_preferences,
+            catalog_quantities,
+            features,
+            layout.rotationally_symmetric,
         )
         tidx = _weighted_choice(rng, template_weights)
         if tidx < 0:
@@ -451,10 +497,13 @@ def _perform_step(
     has_catalog: bool,
     objects_by_id: dict[str, TerrainObject],
     params: EngineParams,
+    catalog_quantities: list[int | None] | None = None,
     index_in_chain: int = 0,
     chain_length: int = 1,
 ) -> tuple[StepUndo, int]:
     """Try mutations with decaying temperature until one succeeds or retries exhausted."""
+    if catalog_quantities is None:
+        catalog_quantities = [None] * len(catalog_features)
     effective_t = t_factor
     for _ in range(MAX_RETRIES):
         result = _try_single_action(
@@ -466,6 +515,7 @@ def _perform_step(
             has_catalog,
             objects_by_id,
             params,
+            catalog_quantities,
             index_in_chain=index_in_chain,
             chain_length=chain_length,
         )

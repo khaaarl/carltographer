@@ -191,6 +191,12 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         .iter()
         .map(|cf| &cf.item)
         .collect();
+    let catalog_quantities: Vec<Option<u32>> = params
+        .catalog
+        .features
+        .iter()
+        .map(|cf| cf.quantity)
+        .collect();
     let has_catalog = !catalog_features.is_empty();
     let num_steps = params.steps();
     let prefs = params.feature_count_preferences.as_deref().unwrap_or(&[]);
@@ -224,6 +230,7 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
             &objects_by_id,
             params,
             prefs,
+            &catalog_quantities,
             0,
             1,
         );
@@ -274,6 +281,12 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
         .features
         .iter()
         .map(|cf| &cf.item)
+        .collect();
+    let catalog_quantities: Vec<Option<u32>> = params
+        .catalog
+        .features
+        .iter()
+        .map(|cf| cf.quantity)
         .collect();
     let has_catalog = !catalog_features.is_empty();
     let num_steps = params.steps();
@@ -362,6 +375,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                 .zip(per_replica_best.iter_mut())
                 .map(|(replica, prb)| {
                     let cat_feats = &catalog_features;
+                    let cat_qtys = &catalog_quantities;
                     let objs = &objects_by_id;
                     s.spawn(move || {
                         let t_factor = if max_temperature > 0.0 {
@@ -384,6 +398,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                     objs,
                                     params,
                                     prefs,
+                                    cat_qtys,
                                     mi,
                                     num_mutations,
                                 );
@@ -695,5 +710,20 @@ mod tests {
         params.rotationally_symmetric = true;
         let result = generate(&params);
         assert!(result.layout.rotationally_symmetric);
+    }
+
+    #[test]
+    fn catalog_quantity_limit_respected() {
+        let mut params = make_params(42, 200);
+        params.skip_visibility = true;
+        // Set quantity limit of 2 on the single crate feature
+        params.catalog.features[0].quantity = Some(2);
+        params.catalog.objects[0].quantity = Some(2);
+        let result = generate(&params);
+        assert!(
+            result.layout.placed_features.len() <= 2,
+            "Expected at most 2 features, got {}",
+            result.layout.placed_features.len()
+        );
     }
 }

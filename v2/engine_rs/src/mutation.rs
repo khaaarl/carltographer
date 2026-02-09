@@ -79,17 +79,66 @@ pub(crate) fn weighted_choice(
     Some(weights.len() - 1)
 }
 
+fn count_placed_per_template(
+    placed_features: &[PlacedFeature],
+    catalog_features: &[&TerrainFeature],
+    rotationally_symmetric: bool,
+) -> Vec<u32> {
+    // Count how many placed features match each catalog template.
+    // Matches by comparing component object_id tuples.
+    // When rotationally symmetric, non-origin features count as 2.
+    let template_keys: Vec<Vec<&str>> = catalog_features
+        .iter()
+        .map(|cf| cf.components.iter().map(|c| c.object_id.as_str()).collect())
+        .collect();
+    let mut counts = vec![0u32; catalog_features.len()];
+    for pf in placed_features {
+        let pf_key: Vec<&str> = pf
+            .feature
+            .components
+            .iter()
+            .map(|c| c.object_id.as_str())
+            .collect();
+        let increment = if rotationally_symmetric
+            && (pf.transform.x_inches != 0.0 || pf.transform.z_inches != 0.0)
+        {
+            2
+        } else {
+            1
+        };
+        for (i, tk) in template_keys.iter().enumerate() {
+            if pf_key == *tk {
+                counts[i] += increment;
+                break;
+            }
+        }
+    }
+    counts
+}
+
 fn compute_template_weights(
     catalog_features: &[&TerrainFeature],
     feature_counts: &HashMap<String, u32>,
     preferences: &[FeatureCountPreference],
+    catalog_quantities: &[Option<u32>],
+    placed_features: &[PlacedFeature],
+    rotationally_symmetric: bool,
 ) -> Vec<f64> {
     // Compute weights for selecting which catalog feature to add.
     // Boosts weight for types below their min, reduces for types at/above max.
+    // Sets weight to 0 for templates that have reached their catalog quantity limit.
     let pref_by_type: HashMap<&str, &FeatureCountPreference> =
         preferences.iter().map(|p| (p.feature_type.as_str(), p)).collect();
+    let placed_counts =
+        count_placed_per_template(placed_features, catalog_features, rotationally_symmetric);
     let mut weights = Vec::with_capacity(catalog_features.len());
-    for cf in catalog_features {
+    for (i, cf) in catalog_features.iter().enumerate() {
+        if let Some(qty) = catalog_quantities[i] {
+            if placed_counts[i] >= qty {
+                weights.push(0.0);
+                continue;
+            }
+        }
         let mut w = 1.0;
         if let Some(pref) = pref_by_type.get(cf.feature_type.as_str()) {
             let current = feature_counts
@@ -258,6 +307,7 @@ fn try_single_action(
     objects_by_id: &HashMap<String, &TerrainObject>,
     params: &EngineParams,
     prefs: &[FeatureCountPreference],
+    catalog_quantities: &[Option<u32>],
     index_in_chain: u32,
     chain_length: u32,
 ) -> Option<(StepUndo, u32)> {
@@ -307,6 +357,9 @@ fn try_single_action(
                 catalog_features,
                 &feature_counts,
                 prefs,
+                catalog_quantities,
+                &layout.placed_features,
+                params.rotationally_symmetric,
             );
             let tidx = match weighted_choice(rng, &template_weights) {
                 Some(i) => i,
@@ -420,6 +473,9 @@ fn try_single_action(
                 catalog_features,
                 &feature_counts,
                 prefs,
+                catalog_quantities,
+                &layout.placed_features,
+                params.rotationally_symmetric,
             );
             let tidx = match weighted_choice(rng, &template_weights) {
                 Some(i) => i,
@@ -493,6 +549,7 @@ pub(crate) fn perform_step(
     objects_by_id: &HashMap<String, &TerrainObject>,
     params: &EngineParams,
     prefs: &[FeatureCountPreference],
+    catalog_quantities: &[Option<u32>],
     index_in_chain: u32,
     chain_length: u32,
 ) -> (StepUndo, u32) {
@@ -508,6 +565,7 @@ pub(crate) fn perform_step(
             objects_by_id,
             params,
             prefs,
+            catalog_quantities,
             index_in_chain,
             chain_length,
         ) {

@@ -874,3 +874,46 @@ class TestTemperingIntegration:
         params = EngineParams.from_dict(pd)
         result = generate(params)
         assert result.score >= 0
+
+
+class TestCatalogQuantityLimits:
+    def test_quantity_limit_respected(self):
+        """Features with quantity=2 should never exceed 2 placed instances."""
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": {
+                "objects": [
+                    {
+                        "item": {
+                            "id": "crate_5x2.5",
+                            "shapes": [
+                                {
+                                    "shape_type": "rectangular_prism",
+                                    "width_inches": 5.0,
+                                    "depth_inches": 2.5,
+                                    "height_inches": 2.0,
+                                }
+                            ],
+                        },
+                        "quantity": 2,
+                    }
+                ],
+                "features": [
+                    {
+                        "item": {
+                            "id": "crate",
+                            "feature_type": "obstacle",
+                            "components": [{"object_id": "crate_5x2.5"}],
+                        },
+                        "quantity": 2,
+                    }
+                ],
+            },
+            "num_steps": 200,
+            "skip_visibility": True,
+        }
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        assert len(result.layout.placed_features) <= 2

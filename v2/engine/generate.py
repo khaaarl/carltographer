@@ -157,6 +157,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
     layout, next_id = _create_layout(params)
 
     catalog_features = [cf.item for cf in params.catalog.features]
+    catalog_quantities = [cf.quantity for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
 
     vis_cache: VisibilityCache | None = None
@@ -182,6 +183,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
             has_catalog,
             objects_by_id,
             params,
+            catalog_quantities,
         )
         if undo.action == "noop":
             continue
@@ -260,6 +262,7 @@ def _generate_tempering(
     """Multi-replica parallel tempering with SA acceptance."""
     objects_by_id = _build_object_index(params.catalog)
     catalog_features = [cf.item for cf in params.catalog.features]
+    catalog_quantities = [cf.quantity for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
     temperatures = compute_temperatures(num_replicas, params.max_temperature)
 
@@ -329,6 +332,7 @@ def _generate_tempering(
                         has_catalog,
                         objects_by_id,
                         params,
+                        catalog_quantities,
                         index_in_chain=mi,
                         chain_length=num_mutations,
                     )

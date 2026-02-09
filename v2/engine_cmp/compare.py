@@ -407,6 +407,46 @@ def make_multi_type_catalog() -> TerrainCatalog:
     )
 
 
+def make_quantity_limited_catalog() -> TerrainCatalog:
+    """Test catalog with a single crate feature limited to quantity=2."""
+    return TerrainCatalog(
+        objects=[
+            CatalogObject(
+                item=TerrainObject(
+                    id="crate_5x2.5",
+                    shapes=[
+                        Shape(
+                            width=5.0,
+                            depth=2.5,
+                            height=2.0,
+                            offset=None,
+                        )
+                    ],
+                    name="Crate",
+                    tags=[],
+                ),
+                quantity=2,
+            )
+        ],
+        features=[
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="crate",
+                    feature_type="obstacle",
+                    components=[
+                        FeatureComponent(
+                            object_id="crate_5x2.5",
+                            transform=None,
+                        )
+                    ],
+                ),
+                quantity=2,
+            )
+        ],
+        name="Quantity-limited Test Catalog",
+    )
+
+
 def make_test_params(
     seed: int = 42,
     num_steps: int = 100,
@@ -750,6 +790,13 @@ TEST_SCENARIOS = [
         num_steps=100,
         table_width=20.0,
         table_depth=20.0,
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "catalog_quantity_limit",
+        seed=42,
+        num_steps=100,
+        catalog=make_quantity_limited_catalog(),
         skip_visibility=True,
     ),
 ]
