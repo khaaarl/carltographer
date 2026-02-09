@@ -169,6 +169,57 @@ class TestExtractBlockingSegments:
         )
         assert len(segs) == 0
 
+    def test_wall_inside_obscuring_blocks_from_inside(self):
+        """A tall wall inside an obscuring ruin blocks LoS even for observers
+        inside the ruin footprint.
+
+        The ruin base (12x6, low) grants the observer see-through on the
+        outer footprint, but the internal wall (0.5x4, tall) is a separate
+        shape that the observer is NOT inside, so its back-facing edges
+        still block.
+        """
+        base = TerrainObject(
+            id="ruin_base",
+            shapes=[Shape(width=12, depth=6, height=0.1)],
+        )
+        wall = TerrainObject(
+            id="ruin_wall",
+            shapes=[Shape(width=0.5, depth=4, height=5)],
+        )
+        feat = TerrainFeature(
+            id="ruin_with_wall",
+            feature_type="obscuring",
+            components=[
+                FeatureComponent(object_id="ruin_base"),
+                # Wall offset 2" to the right of center
+                FeatureComponent(
+                    object_id="ruin_wall",
+                    transform=Transform(x=2, z=0),
+                ),
+            ],
+        )
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"ruin_base": base, "ruin_wall": wall}
+
+        # Observer inside the ruin base but to the LEFT of the wall
+        segs = _extract_blocking_segments(
+            layout, objects_by_id, -2, 0, min_blocking_height=4.0
+        )
+        # Base: observer is inside → no blocking from base (correct)
+        # Wall: observer is outside the 0.5"-wide wall → back-faces block
+        assert len(segs) > 0, "Wall inside ruin should block from inside ruin"
+
+        # Observer OUTSIDE the ruin entirely (further left) should see
+        # both the ruin back-faces and the wall back-faces
+        segs_outside = _extract_blocking_segments(
+            layout, objects_by_id, -25, 0, min_blocking_height=4.0
+        )
+        assert len(segs_outside) > len(segs), (
+            "Observer outside ruin should see more blocking edges "
+            "(ruin back-faces + wall back-faces)"
+        )
+
 
 # -- Full visibility computation tests --
 
