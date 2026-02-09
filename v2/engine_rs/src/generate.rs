@@ -23,6 +23,33 @@ pub(crate) fn build_object_index<'a>(
     index
 }
 
+fn merge_layout_objects<'a>(
+    objects_by_id: &mut HashMap<String, &'a TerrainObject>,
+    layout_objects: &'a [TerrainObject],
+) {
+    for obj in layout_objects {
+        objects_by_id.entry(obj.id.clone()).or_insert(obj);
+    }
+}
+
+fn collect_layout_objects(
+    placed_features: &[PlacedFeature],
+    objects_by_id: &HashMap<String, &TerrainObject>,
+) -> Vec<TerrainObject> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for pf in placed_features {
+        for comp in &pf.feature.components {
+            if seen.insert(comp.object_id.clone()) {
+                if let Some(obj) = objects_by_id.get(&comp.object_id) {
+                    result.push((*obj).clone());
+                }
+            }
+        }
+    }
+    result
+}
+
 fn next_feature_id(features: &[PlacedFeature]) -> u32 {
     let mut max_id: u32 = 0;
     for pf in features {
@@ -173,7 +200,10 @@ pub fn generate(params: &EngineParams) -> EngineResult {
 
 fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
     let mut rng = Pcg32::new(params.seed, 0);
-    let objects_by_id = build_object_index(&params.catalog);
+    let mut objects_by_id = build_object_index(&params.catalog);
+    if let Some(ref initial) = params.initial_layout {
+        merge_layout_objects(&mut objects_by_id, &initial.terrain_objects);
+    }
 
     let (initial_features, mut nid) =
         match &params.initial_layout {
@@ -206,6 +236,7 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         table_depth_inches: params.table_depth_inches,
         placed_features: initial_features,
         rotationally_symmetric: params.rotationally_symmetric,
+        terrain_objects: Vec::new(),
         visibility: None,
         mission: params.mission.clone(),
     };
@@ -265,6 +296,8 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         );
     }
 
+    layout.terrain_objects = collect_layout_objects(&layout.placed_features, &objects_by_id);
+
     EngineResult {
         layout,
         score: current_score,
@@ -275,7 +308,10 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
 fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult {
     use crate::tempering::{compute_temperatures, sa_accept};
 
-    let objects_by_id = build_object_index(&params.catalog);
+    let mut objects_by_id = build_object_index(&params.catalog);
+    if let Some(ref initial) = params.initial_layout {
+        merge_layout_objects(&mut objects_by_id, &initial.terrain_objects);
+    }
     let catalog_features: Vec<&TerrainFeature> = params
         .catalog
         .features
@@ -321,6 +357,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
             table_depth_inches: params.table_depth_inches,
             placed_features: initial_features,
             rotationally_symmetric: params.rotationally_symmetric,
+            terrain_objects: Vec::new(),
             visibility: None,
             mission: params.mission.clone(),
         };
@@ -515,6 +552,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
             ),
         );
     }
+
+    best_layout.terrain_objects = collect_layout_objects(&best_layout.placed_features, &objects_by_id);
 
     EngineResult {
         layout: best_layout,
@@ -731,5 +770,155 @@ mod tests {
             "Expected at most 2 features, got {}",
             result.layout.placed_features.len()
         );
+    }
+
+    #[test]
+    fn orphaned_features_no_crash_no_overlap() {
+        // Create a catalog with small blocks
+        let small_catalog = TerrainCatalog {
+            objects: vec![CatalogObject {
+                item: TerrainObject {
+                    id: "small_block".into(),
+                    shapes: vec![GeometricShape {
+                        shape_type: "rectangular_prism".into(),
+                        width_inches: 3.0,
+                        depth_inches: 3.0,
+                        height_inches: 2.0,
+                        offset: None,
+                        opacity_height_inches: None,
+                    }],
+                    name: None,
+                    tags: vec![],
+                },
+                quantity: None,
+            }],
+            features: vec![CatalogFeature {
+                item: TerrainFeature {
+                    id: "small".into(),
+                    feature_type: "obstacle".into(),
+                    components: vec![FeatureComponent {
+                        object_id: "small_block".into(),
+                        transform: None,
+                    }],
+                },
+                quantity: None,
+            }],
+            name: None,
+        };
+
+        // Initial layout has a big_block feature (not in the catalog)
+        let big_block_obj = TerrainObject {
+            id: "big_block".into(),
+            shapes: vec![GeometricShape {
+                shape_type: "rectangular_prism".into(),
+                width_inches: 10.0,
+                depth_inches: 10.0,
+                height_inches: 3.0,
+                offset: None,
+                opacity_height_inches: None,
+            }],
+            name: None,
+            tags: vec![],
+        };
+
+        let initial_layout = TerrainLayout {
+            table_width_inches: 60.0,
+            table_depth_inches: 44.0,
+            placed_features: vec![PlacedFeature {
+                feature: TerrainFeature {
+                    id: "feature_1".into(),
+                    feature_type: "obstacle".into(),
+                    components: vec![FeatureComponent {
+                        object_id: "big_block".into(),
+                        transform: None,
+                    }],
+                },
+                transform: crate::types::Transform {
+                    x_inches: 10.0,
+                    y_inches: 0.0,
+                    z_inches: 5.0,
+                    rotation_deg: 0.0,
+                },
+            }],
+            terrain_objects: vec![big_block_obj],
+            rotationally_symmetric: false,
+            visibility: None,
+            mission: None,
+        };
+
+        let params = EngineParams {
+            seed: 99,
+            table_width_inches: 60.0,
+            table_depth_inches: 44.0,
+            catalog: small_catalog,
+            num_steps: Some(200),
+            initial_layout: Some(initial_layout),
+            feature_count_preferences: None,
+            min_feature_gap_inches: None,
+            min_edge_gap_inches: None,
+            rotationally_symmetric: false,
+            mission: None,
+            skip_visibility: true,
+            scoring_targets: None,
+            num_replicas: None,
+            swap_interval: 20,
+            max_temperature: 50.0,
+        };
+
+        let result = generate(&params);
+
+        // Build combined object index for verification
+        let mut objs: HashMap<String, &TerrainObject> = HashMap::new();
+        for co in &params.catalog.objects {
+            objs.insert(co.item.id.clone(), &co.item);
+        }
+        // Also need big_block for checking orphaned features
+        if let Some(ref il) = params.initial_layout {
+            for obj in &il.terrain_objects {
+                objs.entry(obj.id.clone()).or_insert(obj);
+            }
+        }
+
+        // Verify no overlaps
+        let feats = &result.layout.placed_features;
+        for i in 0..feats.len() {
+            let oi = get_world_obbs(&feats[i], &objs);
+            for j in (i + 1)..feats.len() {
+                let oj = get_world_obbs(&feats[j], &objs);
+                for ca in &oi {
+                    for cb in &oj {
+                        assert!(
+                            !obbs_overlap(ca, cb),
+                            "Features {} and {} overlap",
+                            i,
+                            j
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terrain_objects_in_output() {
+        let params = make_params(42, 50);
+        let result = generate(&params);
+        // Output should have terrain_objects matching placed features
+        assert!(!result.layout.terrain_objects.is_empty());
+        let obj_ids: std::collections::HashSet<&str> = result
+            .layout
+            .terrain_objects
+            .iter()
+            .map(|o| o.id.as_str())
+            .collect();
+        for pf in &result.layout.placed_features {
+            for comp in &pf.feature.components {
+                assert!(
+                    obj_ids.contains(comp.object_id.as_str()),
+                    "Object {} not in terrain_objects",
+                    comp.object_id
+                );
+            }
+        }
     }
 }

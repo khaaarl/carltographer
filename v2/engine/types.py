@@ -158,6 +158,7 @@ class TerrainLayout:
     rotationally_symmetric: bool = False
     visibility: dict | None = None
     mission: Mission | None = None
+    terrain_objects: list[TerrainObject] = field(default_factory=list)
 
     @staticmethod
     def from_dict(d: dict) -> TerrainLayout:
@@ -172,6 +173,10 @@ class TerrainLayout:
             rotationally_symmetric=d.get("rotationally_symmetric", False),
             visibility=d.get("visibility"),
             mission=Mission.from_dict(m) if m else None,
+            terrain_objects=[
+                TerrainObject.from_dict(o)
+                for o in d.get("terrain_objects", [])
+            ],
         )
 
     def to_dict(self) -> dict:
@@ -181,6 +186,8 @@ class TerrainLayout:
             "placed_features": [p.to_dict() for p in self.placed_features],
             "rotationally_symmetric": self.rotationally_symmetric,
         }
+        if self.terrain_objects:
+            d["terrain_objects"] = [o.to_dict() for o in self.terrain_objects]
         if self.visibility is not None:
             d["visibility"] = self.visibility
         if self.mission is not None:

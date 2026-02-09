@@ -35,6 +35,38 @@ def _build_object_index(
     return {co.item.id: co.item for co in catalog.objects}
 
 
+def _merge_layout_objects(
+    objects_by_id: dict[str, TerrainObject],
+    layout: TerrainLayout | None,
+) -> None:
+    """Merge object definitions from an initial layout into objects_by_id.
+
+    Only adds objects whose IDs are not already present (catalog wins).
+    """
+    if layout is None:
+        return
+    for obj in layout.terrain_objects:
+        if obj.id not in objects_by_id:
+            objects_by_id[obj.id] = obj
+
+
+def _collect_layout_objects(
+    layout: TerrainLayout,
+    objects_by_id: dict[str, TerrainObject],
+) -> list[TerrainObject]:
+    """Collect all unique TerrainObjects referenced by placed features."""
+    seen: set[str] = set()
+    result: list[TerrainObject] = []
+    for pf in layout.placed_features:
+        for comp in pf.feature.components:
+            if comp.object_id not in seen:
+                seen.add(comp.object_id)
+                obj = objects_by_id.get(comp.object_id)
+                if obj is not None:
+                    result.append(obj)
+    return result
+
+
 # NOTE: If scoring logic grows more complex, consider extracting to a
 # dedicated scoring module.
 def _compute_score(
@@ -154,6 +186,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
     """Single-replica hill climbing (original algorithm)."""
     rng = PCG32(params.seed)
     objects_by_id = _build_object_index(params.catalog)
+    _merge_layout_objects(objects_by_id, params.initial_layout)
     layout, next_id = _create_layout(params)
 
     catalog_features = [cf.item for cf in params.catalog.features]
@@ -205,6 +238,8 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
         layout.visibility = compute_layout_visibility(
             layout, objects_by_id, visibility_cache=vis_cache
         )
+
+    layout.terrain_objects = _collect_layout_objects(layout, objects_by_id)
 
     return EngineResult(
         layout=layout,
@@ -261,6 +296,7 @@ def _generate_tempering(
 ) -> EngineResult:
     """Multi-replica parallel tempering with SA acceptance."""
     objects_by_id = _build_object_index(params.catalog)
+    _merge_layout_objects(objects_by_id, params.initial_layout)
     catalog_features = [cf.item for cf in params.catalog.features]
     catalog_quantities = [cf.quantity for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
@@ -387,6 +423,10 @@ def _generate_tempering(
         best_layout.visibility = compute_layout_visibility(
             best_layout, objects_by_id, visibility_cache=best_vis_cache
         )
+
+    best_layout.terrain_objects = _collect_layout_objects(
+        best_layout, objects_by_id
+    )
 
     return EngineResult(
         layout=best_layout,

@@ -1423,6 +1423,7 @@ mod tests {
             table_depth_inches: d,
             placed_features: features,
             rotationally_symmetric: false,
+            terrain_objects: vec![],
             visibility: None,
             mission: None,
         }
@@ -1613,6 +1614,7 @@ mod tests {
             table_depth_inches: d,
             placed_features: features,
             rotationally_symmetric: false,
+            terrain_objects: vec![],
             visibility: None,
             mission,
         }

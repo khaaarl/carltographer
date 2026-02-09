@@ -20,6 +20,7 @@ from engine.prng import PCG32
 from engine.types import (
     EngineParams,
     FeatureCountPreference,
+    PlacedFeature,
     ScoringTargets,
     TerrainLayout,
 )
@@ -940,6 +941,281 @@ class TestTemperingIntegration:
         params = EngineParams.from_dict(pd)
         result = generate(params)
         assert result.score >= 0
+
+
+class TestOrphanedFeatures:
+    """Test that features from a different catalog are handled correctly
+    when carried forward via initial_layout with terrain_objects."""
+
+    def _catalog_a_dict(self):
+        """Catalog A: large 10x10 obstacles."""
+        return {
+            "objects": [
+                {
+                    "item": {
+                        "id": "big_block",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 10.0,
+                                "depth_inches": 10.0,
+                                "height_inches": 3.0,
+                            }
+                        ],
+                    },
+                }
+            ],
+            "features": [
+                {
+                    "item": {
+                        "id": "big",
+                        "feature_type": "obstacle",
+                        "components": [{"object_id": "big_block"}],
+                    },
+                }
+            ],
+        }
+
+    def _catalog_b_dict(self):
+        """Catalog B: small 3x3 obstacles (different object IDs)."""
+        return {
+            "objects": [
+                {
+                    "item": {
+                        "id": "small_block",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 3.0,
+                                "depth_inches": 3.0,
+                                "height_inches": 2.0,
+                            }
+                        ],
+                    },
+                }
+            ],
+            "features": [
+                {
+                    "item": {
+                        "id": "small",
+                        "feature_type": "obstacle",
+                        "components": [{"object_id": "small_block"}],
+                    },
+                }
+            ],
+        }
+
+    def test_orphaned_features_no_overlap(self):
+        """Features from catalog A carried in initial_layout should not be
+        overlapped by new features from catalog B."""
+        # Step 1: Generate a layout with catalog A
+        pd_a = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._catalog_a_dict(),
+            "num_steps": 100,
+            "skip_visibility": True,
+        }
+        result_a = generate_json(pd_a)
+        initial_features = result_a["layout"]["placed_features"]
+        assert len(initial_features) > 0, "Need at least one feature from A"
+
+        # Step 2: Run generation with catalog B, using A's layout as initial
+        # The initial_layout carries terrain_objects so the engine knows
+        # about big_block even though catalog B doesn't have it.
+        pd_b = {
+            "seed": 99,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._catalog_b_dict(),
+            "num_steps": 200,
+            "skip_visibility": True,
+            "initial_layout": {
+                "table_width_inches": 60.0,
+                "table_depth_inches": 44.0,
+                "placed_features": initial_features,
+                "terrain_objects": [
+                    {
+                        "id": "big_block",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 10.0,
+                                "depth_inches": 10.0,
+                                "height_inches": 3.0,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        result_b = generate_json(pd_b)
+        features = result_b["layout"]["placed_features"]
+
+        # Build a combined object index for verification
+        all_objects = {
+            "big_block": {
+                "shapes": [
+                    {
+                        "shape_type": "rectangular_prism",
+                        "width_inches": 10.0,
+                        "depth_inches": 10.0,
+                        "height_inches": 3.0,
+                    }
+                ],
+            },
+            "small_block": {
+                "shapes": [
+                    {
+                        "shape_type": "rectangular_prism",
+                        "width_inches": 3.0,
+                        "depth_inches": 3.0,
+                        "height_inches": 2.0,
+                    }
+                ],
+            },
+        }
+        from engine.types import TerrainObject
+
+        objs = {
+            k: TerrainObject.from_dict({"id": k, **v})
+            for k, v in all_objects.items()
+        }
+
+        # Verify no overlaps between any pair
+        for i in range(len(features)):
+            pf_i = PlacedFeature.from_dict(features[i])
+            obbs_i = get_world_obbs(pf_i, objs)
+            for j in range(i + 1, len(features)):
+                pf_j = PlacedFeature.from_dict(features[j])
+                obbs_j = get_world_obbs(pf_j, objs)
+                for ca in obbs_i:
+                    for cb in obbs_j:
+                        assert not obbs_overlap(ca, cb), (
+                            f"Features {i} and {j} overlap"
+                        )
+
+    def test_orphaned_features_not_used_as_templates(self):
+        """Objects from terrain_objects should NOT be used for new feature
+        placement - only catalog features should be selected for Add/Replace."""
+        # Initial layout has one big_block feature; catalog B only has small_block
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._catalog_b_dict(),
+            "num_steps": 200,
+            "skip_visibility": True,
+            "initial_layout": {
+                "table_width_inches": 60.0,
+                "table_depth_inches": 44.0,
+                "placed_features": [
+                    {
+                        "feature": {
+                            "id": "feature_1",
+                            "feature_type": "obstacle",
+                            "components": [{"object_id": "big_block"}],
+                        },
+                        "transform": {
+                            "x_inches": 0.0,
+                            "y_inches": 0.0,
+                            "z_inches": 0.0,
+                            "rotation_deg": 0.0,
+                        },
+                    }
+                ],
+                "terrain_objects": [
+                    {
+                        "id": "big_block",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 10.0,
+                                "depth_inches": 10.0,
+                                "height_inches": 3.0,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        result = generate_json(pd)
+        features = result["layout"]["placed_features"]
+        # All newly added features (beyond the original big_block) should use
+        # small_block from catalog B, not big_block from terrain_objects
+        for pf in features:
+            comps = pf["feature"]["components"]
+            for comp in comps:
+                assert comp["object_id"] in ("big_block", "small_block")
+        # Count: only the original feature_1 should reference big_block
+        big_count = sum(
+            1
+            for pf in features
+            if any(
+                c["object_id"] == "big_block"
+                for c in pf["feature"]["components"]
+            )
+        )
+        assert big_count <= 1, (
+            f"Expected at most 1 big_block feature (the original), got {big_count}"
+        )
+
+    def test_terrain_objects_in_output(self):
+        """Output layout should carry terrain_objects for all referenced objects."""
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._catalog_b_dict(),
+            "num_steps": 50,
+            "skip_visibility": True,
+            "initial_layout": {
+                "table_width_inches": 60.0,
+                "table_depth_inches": 44.0,
+                "placed_features": [
+                    {
+                        "feature": {
+                            "id": "feature_1",
+                            "feature_type": "obstacle",
+                            "components": [{"object_id": "big_block"}],
+                        },
+                        "transform": {
+                            "x_inches": 0.0,
+                            "y_inches": 0.0,
+                            "z_inches": 0.0,
+                            "rotation_deg": 0.0,
+                        },
+                    }
+                ],
+                "terrain_objects": [
+                    {
+                        "id": "big_block",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 10.0,
+                                "depth_inches": 10.0,
+                                "height_inches": 3.0,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        result = generate_json(pd)
+        layout = result["layout"]
+        # Output should have terrain_objects
+        assert "terrain_objects" in layout, (
+            "Output should include terrain_objects"
+        )
+        obj_ids = {o["id"] for o in layout["terrain_objects"]}
+        # All objects referenced by placed features should be present
+        for pf in layout["placed_features"]:
+            for comp in pf["feature"]["components"]:
+                assert comp["object_id"] in obj_ids, (
+                    f"Object {comp['object_id']} not in terrain_objects"
+                )
 
 
 class TestCatalogQuantityLimits:

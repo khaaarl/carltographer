@@ -20,11 +20,14 @@ from engine.types import (
     FeatureComponent,
     FeatureCountPreference,
     Mission,
+    PlacedFeature,
     ScoringTargets,
     Shape,
     TerrainCatalog,
     TerrainFeature,
+    TerrainLayout,
     TerrainObject,
+    Transform,
 )
 from frontend.missions import get_mission
 
@@ -289,6 +292,16 @@ def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     if not mission_match:
         diffs.extend(mission_diffs)
 
+    # Compare terrain_objects
+    to1 = sorted(layout1.get("terrain_objects", []), key=lambda o: o["id"])
+    to2 = sorted(layout2.get("terrain_objects", []), key=lambda o: o["id"])
+    if len(to1) != len(to2):
+        diffs.append(f"terrain_objects count: {len(to1)} vs {len(to2)}")
+    else:
+        for o1, o2 in zip(to1, to2):
+            if o1["id"] != o2["id"]:
+                diffs.append(f"terrain_objects id: {o1['id']} vs {o2['id']}")
+
     # Compare score
     score1 = result1.get("score", 0.0)
     score2 = result2.get("score", 0.0)
@@ -466,6 +479,7 @@ def make_test_params(
     min_all_feature_gap_inches: Optional[float] = None,
     min_all_edge_gap_inches: Optional[float] = None,
     rotation_granularity_deg: float = 15.0,
+    initial_layout: Optional[TerrainLayout] = None,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -474,7 +488,7 @@ def make_test_params(
         table_depth=table_depth,
         catalog=catalog if catalog is not None else make_test_catalog(),
         num_steps=num_steps,
-        initial_layout=None,
+        initial_layout=initial_layout,
         feature_count_preferences=feature_count_preferences or [],
         min_feature_gap_inches=min_feature_gap_inches,
         min_edge_gap_inches=min_edge_gap_inches,
@@ -514,6 +528,7 @@ class TestScenario:
     min_all_feature_gap_inches: Optional[float] = None
     min_all_edge_gap_inches: Optional[float] = None
     rotation_granularity_deg: float = 15.0
+    initial_layout: Optional[TerrainLayout] = None
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -536,6 +551,7 @@ class TestScenario:
             min_all_feature_gap_inches=self.min_all_feature_gap_inches,
             min_all_edge_gap_inches=self.min_all_edge_gap_inches,
             rotation_granularity_deg=self.rotation_granularity_deg,
+            initial_layout=self.initial_layout,
         )
 
 
@@ -832,6 +848,37 @@ TEST_SCENARIOS = [
         min_all_feature_gap_inches=1.5,
         min_all_edge_gap_inches=1.0,
         skip_visibility=True,
+    ),
+    TestScenario(
+        "orphaned_features",
+        seed=99,
+        num_steps=100,
+        catalog=make_test_catalog(),
+        skip_visibility=True,
+        initial_layout=TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="feature_1",
+                        feature_type="obstacle",
+                        components=[
+                            FeatureComponent(object_id="big_block"),
+                        ],
+                    ),
+                    transform=Transform(x=10.0, z=5.0, rotation_deg=0.0),
+                ),
+            ],
+            terrain_objects=[
+                TerrainObject(
+                    id="big_block",
+                    shapes=[
+                        Shape(width=10.0, depth=10.0, height=3.0),
+                    ],
+                ),
+            ],
+        ),
     ),
 ]
 
