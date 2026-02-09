@@ -6,7 +6,12 @@ import copy
 import math
 from dataclasses import dataclass
 
-from .collision import is_valid_placement
+from .collision import (
+    _is_at_origin,
+    _mirror_placed_feature,
+    get_world_obbs,
+    is_valid_placement,
+)
 from .prng import PCG32
 from .tempering import compute_temperatures, sa_accept
 from .types import (
@@ -28,6 +33,7 @@ MAX_RETRIES = 100
 RETRY_DECAY = 0.95
 MIN_MOVE_RANGE = 2.0
 MAX_EXTRA_MUTATIONS = 3
+TILE_SIZE = 2.0
 
 
 @dataclass
@@ -127,6 +133,57 @@ def _compute_delete_weights(
                 w = 0.1
         weights.append(w)
     return weights
+
+
+def _compute_tile_weights(
+    placed_features: list[PlacedFeature],
+    objects_by_id: dict[str, TerrainObject],
+    table_width: float,
+    table_depth: float,
+    rotationally_symmetric: bool,
+) -> tuple[list[float], int, int, float, float]:
+    """Compute per-tile placement weights inversely proportional to occupancy.
+
+    Divides table into ~TILE_SIZE tiles and counts how many feature OBBs
+    overlap each tile. Weight = 1/(1+count), biasing placement toward
+    empty areas.
+
+    Could be cached and invalidated on layout changes (similar to
+    VisibilityCache pattern) if performance becomes a concern.
+
+    Returns (weights, nx, nz, tile_w, tile_d).
+    """
+    nx = max(1, round(table_width / TILE_SIZE))
+    nz = max(1, round(table_depth / TILE_SIZE))
+    tile_w = table_width / nx
+    tile_d = table_depth / nz
+    half_w = table_width / 2.0
+    half_d = table_depth / 2.0
+
+    counts = [0] * (nx * nz)
+
+    for pf in placed_features:
+        obbs = get_world_obbs(pf, objects_by_id)
+        if rotationally_symmetric and not _is_at_origin(pf):
+            mirror = _mirror_placed_feature(pf)
+            obbs.extend(get_world_obbs(mirror, objects_by_id))
+        for corners in obbs:
+            # Compute AABB from corners
+            min_x = min(c[0] for c in corners)
+            max_x = max(c[0] for c in corners)
+            min_z = min(c[1] for c in corners)
+            max_z = max(c[1] for c in corners)
+            # Convert to tile indices
+            ix_lo = max(0, int((min_x + half_w) / tile_w))
+            ix_hi = min(nx - 1, int((max_x + half_w) / tile_w))
+            iz_lo = max(0, int((min_z + half_d) / tile_d))
+            iz_hi = min(nz - 1, int((max_z + half_d) / tile_d))
+            for iz in range(iz_lo, iz_hi + 1):
+                for ix in range(ix_lo, ix_hi + 1):
+                    counts[iz * nx + ix] += 1
+
+    weights = [1.0 / (1 + c) for c in counts]
+    return weights, nx, nz, tile_w, tile_d
 
 
 def _build_object_index(
@@ -328,12 +385,24 @@ def _try_single_action(
             return None
         template = catalog_features[tidx]
         new_feat = _instantiate_feature(template, next_id)
-        x = _quantize_position(
-            rng.next_float() * params.table_width - params.table_width / 2
+        half_w = params.table_width / 2.0
+        half_d = params.table_depth / 2.0
+        tile_weights, nx, nz, tile_w, tile_d = _compute_tile_weights(
+            features,
+            objects_by_id,
+            params.table_width,
+            params.table_depth,
+            params.rotationally_symmetric,
         )
-        z = _quantize_position(
-            rng.next_float() * params.table_depth - params.table_depth / 2
-        )
+        tile_idx = _weighted_choice(rng, tile_weights)
+        if tile_idx < 0:
+            return None
+        tile_iz = tile_idx // nx
+        tile_ix = tile_idx % nx
+        tile_x_min = -half_w + tile_ix * tile_w
+        tile_z_min = -half_d + tile_iz * tile_d
+        x = _quantize_position(tile_x_min + rng.next_float() * tile_w)
+        z = _quantize_position(tile_z_min + rng.next_float() * tile_d)
         rot = _quantize_angle(rng.next_float() * 360.0)
         placed = PlacedFeature(new_feat, Transform(x, z, rot))
         features.append(placed)

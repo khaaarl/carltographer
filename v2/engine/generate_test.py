@@ -13,8 +13,10 @@ from engine.generate import (
     MAX_EXTRA_MUTATIONS,
     MIN_MOVE_RANGE,
     PHASE2_BASE,
+    TILE_SIZE,
     StepUndo,
     _compute_score,
+    _compute_tile_weights,
     _quantize_angle,
     _quantize_position,
     _temperature_move,
@@ -25,6 +27,7 @@ from engine.generate import (
 from engine.prng import PCG32
 from engine.types import (
     EngineParams,
+    FeatureComponent,
     FeatureCountPreference,
     PlacedFeature,
     ScoringTargets,
@@ -1026,3 +1029,86 @@ class TestTemperingIntegration:
         params = EngineParams.from_dict(pd)
         result = generate(params)
         assert result.score >= 0
+
+
+# -- Tile-Biased Placement -----------------------------------------------
+
+
+class TestTileBiasedPlacement:
+    def test_tile_weights_empty_table(self):
+        """Empty table has all tile weights equal to 1.0."""
+        objects_by_id = {
+            "crate_5x2.5": _crate_catalog_dict()["objects"][0]["item"]
+        }
+        from engine.types import TerrainObject
+
+        obj = TerrainObject.from_dict(objects_by_id["crate_5x2.5"])
+        objs = {"crate_5x2.5": obj}
+
+        weights, nx, nz, tw, td = _compute_tile_weights(
+            [], objs, 60.0, 44.0, False
+        )
+        assert all(w == 1.0 for w in weights)
+        assert nx == round(60.0 / TILE_SIZE)
+        assert nz == round(44.0 / TILE_SIZE)
+
+    def test_tile_weights_occupied_lower(self):
+        """Tiles containing features have lower weight than empty tiles."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        )
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        weights, nx, nz, tw, td = _compute_tile_weights(
+            result.layout.placed_features,
+            objects_by_id,
+            params.table_width,
+            params.table_depth,
+            False,
+        )
+        min_w = min(weights)
+        max_w = max(weights)
+        # Features present means some tiles occupied → lower weight
+        assert min_w < max_w
+        # Max weight should be 1.0 (empty tiles)
+        assert max_w == 1.0
+        # Min weight should be < 1.0 (occupied tiles)
+        assert min_w < 1.0
+
+    def test_tile_weights_symmetric_mirrors(self):
+        """In symmetric mode, mirrored features also penalize tiles."""
+        feat = TerrainFeature(
+            id="f1",
+            feature_type="obstacle",
+            components=[
+                FeatureComponent(
+                    object_id="crate_5x2.5",
+                    transform=None,
+                )
+            ],
+        )
+        placed = PlacedFeature(feat, Transform(10.0, 5.0, 0.0))
+
+        from engine.types import Shape, TerrainObject
+
+        obj = TerrainObject(
+            id="crate_5x2.5",
+            shapes=[Shape(width=5.0, depth=2.5, height=2.0)],
+        )
+        objs = {"crate_5x2.5": obj}
+
+        # Non-symmetric: only affects tiles near (10, 5)
+        w_nonsym, nx, nz, tw, td = _compute_tile_weights(
+            [placed], objs, 60.0, 44.0, False
+        )
+        # Symmetric: also affects tiles near (-10, -5)
+        w_sym, _, _, _, _ = _compute_tile_weights(
+            [placed], objs, 60.0, 44.0, True
+        )
+
+        # Count how many tiles are occupied (weight < 1.0)
+        nonsym_occupied = sum(1 for w in w_nonsym if w < 1.0)
+        sym_occupied = sum(1 for w in w_sym if w < 1.0)
+        # Symmetric should have more occupied tiles due to mirror
+        assert sym_occupied > nonsym_occupied

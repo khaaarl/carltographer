@@ -744,6 +744,14 @@ TEST_SCENARIOS = [
         ],
         skip_visibility=True,
     ),
+    TestScenario(
+        "tile_biased_small_table",
+        seed=42,
+        num_steps=100,
+        table_width=20.0,
+        table_depth=20.0,
+        skip_visibility=True,
+    ),
 ]
 
 

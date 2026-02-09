@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::collision::is_valid_placement;
+use crate::collision::{get_world_obbs, is_at_origin, is_valid_placement, mirror_placed_feature};
 use crate::prng::Pcg32;
 use crate::types::{
     EngineParams, EngineResult, FeatureCountPreference, PlacedFeature, ScoringTargets,
@@ -14,6 +14,7 @@ const MAX_RETRIES: u32 = 100;
 const RETRY_DECAY: f64 = 0.95;
 const MIN_MOVE_RANGE: f64 = 2.0;
 const MAX_EXTRA_MUTATIONS: u32 = 3;
+const TILE_SIZE: f64 = 2.0;
 
 /// Undo token for reverting a single mutation step.
 #[derive(Debug)]
@@ -174,6 +175,63 @@ fn compute_delete_weights(
         weights.push(w);
     }
     weights
+}
+
+/// Compute per-tile placement weights inversely proportional to occupancy.
+///
+/// Divides table into ~TILE_SIZE tiles and counts how many feature OBBs
+/// overlap each tile. Weight = 1/(1+count), biasing placement toward
+/// empty areas.
+///
+/// Could be cached and invalidated on layout changes (similar to
+/// VisibilityCache pattern) if performance becomes a concern.
+fn compute_tile_weights(
+    placed_features: &[PlacedFeature],
+    objects_by_id: &HashMap<String, &TerrainObject>,
+    table_width: f64,
+    table_depth: f64,
+    rotationally_symmetric: bool,
+) -> (Vec<f64>, usize, usize, f64, f64) {
+    let nx = (table_width / TILE_SIZE).round().max(1.0) as usize;
+    let nz = (table_depth / TILE_SIZE).round().max(1.0) as usize;
+    let tile_w = table_width / nx as f64;
+    let tile_d = table_depth / nz as f64;
+    let half_w = table_width / 2.0;
+    let half_d = table_depth / 2.0;
+
+    let mut counts = vec![0u32; nx * nz];
+
+    for pf in placed_features {
+        let mut obbs = get_world_obbs(pf, objects_by_id);
+        if rotationally_symmetric && !is_at_origin(pf) {
+            let mirror = mirror_placed_feature(pf);
+            obbs.extend(get_world_obbs(&mirror, objects_by_id));
+        }
+        for corners in &obbs {
+            // Compute AABB from corners
+            let min_x = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+            let max_x = corners.iter().map(|c| c.0).fold(f64::NEG_INFINITY, f64::max);
+            let min_z = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+            let max_z = corners.iter().map(|c| c.1).fold(f64::NEG_INFINITY, f64::max);
+            // Convert to tile indices
+            let ix_lo = ((min_x + half_w) / tile_w) as isize;
+            let ix_hi = ((max_x + half_w) / tile_w) as isize;
+            let iz_lo = ((min_z + half_d) / tile_d) as isize;
+            let iz_hi = ((max_z + half_d) / tile_d) as isize;
+            let ix_lo = ix_lo.max(0) as usize;
+            let ix_hi = (ix_hi as usize).min(nx - 1);
+            let iz_lo = iz_lo.max(0) as usize;
+            let iz_hi = (iz_hi as usize).min(nz - 1);
+            for iz in iz_lo..=iz_hi {
+                for ix in ix_lo..=ix_hi {
+                    counts[iz * nx + ix] += 1;
+                }
+            }
+        }
+    }
+
+    let weights: Vec<f64> = counts.iter().map(|&c| 1.0 / (1 + c) as f64).collect();
+    (weights, nx, nz, tile_w, tile_d)
 }
 
 fn avg_metric_value(obj: &serde_json::Map<String, serde_json::Value>) -> Option<f64> {
@@ -399,16 +457,25 @@ fn try_single_action(
             };
             let template = catalog_features[tidx];
             let new_feat = instantiate_feature(template, next_id);
-            let x = quantize_position(
-                rng.next_float()
-                    * params.table_width_inches
-                    - params.table_width_inches / 2.0
+            let half_w = params.table_width_inches / 2.0;
+            let half_d = params.table_depth_inches / 2.0;
+            let (tile_weights, nx, _nz, tile_w, tile_d) = compute_tile_weights(
+                &layout.placed_features,
+                objects_by_id,
+                params.table_width_inches,
+                params.table_depth_inches,
+                params.rotationally_symmetric,
             );
-            let z = quantize_position(
-                rng.next_float()
-                    * params.table_depth_inches
-                    - params.table_depth_inches / 2.0
-            );
+            let tile_idx = match weighted_choice(rng, &tile_weights) {
+                Some(i) => i,
+                None => return None,
+            };
+            let tile_iz = tile_idx / nx;
+            let tile_ix = tile_idx % nx;
+            let tile_x_min = -half_w + tile_ix as f64 * tile_w;
+            let tile_z_min = -half_d + tile_iz as f64 * tile_d;
+            let x = quantize_position(tile_x_min + rng.next_float() * tile_w);
+            let z = quantize_position(tile_z_min + rng.next_float() * tile_d);
             let rot = quantize_angle(rng.next_float() * 360.0);
             layout.placed_features.push(PlacedFeature {
                 feature: new_feat,
@@ -1168,5 +1235,36 @@ mod tests {
             rng2.next_float();
         }
         assert_eq!(rng1.next_u32(), rng2.next_u32());
+    }
+
+    #[test]
+    fn tile_weights_empty_table() {
+        let catalog = crate_catalog();
+        let objs = build_object_index(&catalog);
+        let (weights, nx, nz, _, _) = compute_tile_weights(
+            &[], &objs, 60.0, 44.0, false,
+        );
+        assert_eq!(nx, 30); // 60/2
+        assert_eq!(nz, 22); // 44/2
+        assert!(weights.iter().all(|&w| w == 1.0));
+    }
+
+    #[test]
+    fn tile_weights_occupied_lower() {
+        let params = make_params(42, 200);
+        let result = generate(&params);
+        let objs = build_object_index(&params.catalog);
+        let (weights, _, _, _, _) = compute_tile_weights(
+            &result.layout.placed_features,
+            &objs,
+            params.table_width_inches,
+            params.table_depth_inches,
+            false,
+        );
+        let min_w = weights.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_w = weights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        assert!(min_w < max_w);
+        assert_eq!(max_w, 1.0);
+        assert!(min_w < 1.0);
     }
 }
