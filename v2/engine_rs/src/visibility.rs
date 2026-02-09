@@ -374,16 +374,30 @@ fn compute_visibility_polygon(
         }
     }
 
-    // For each endpoint, cast rays at angle and angle +/- epsilon
+    // For each endpoint, cast rays at angle and angle ± epsilon.
+    // Use normalized direction vector for center ray and small-angle
+    // rotation for ±epsilon rays to avoid 6 cos/sin calls per endpoint.
     let eps = 1e-5_f64;
+    let cos_eps = eps.cos(); // ≈ 1.0
+    let sin_eps = eps.sin(); // ≈ eps
 
     for &(ex, ez) in &bufs.endpoints {
         let dx = ex - ox;
         let dz = ez - oz;
         let angle = dz.atan2(dx);
-        for &a in &[angle - eps, angle, angle + eps] {
-            bufs.rays.push((a, a.cos(), a.sin()));
-        }
+        let inv_len = 1.0 / (dx * dx + dz * dz).sqrt();
+        let ndx = dx * inv_len;
+        let ndz = dz * inv_len;
+        // Rotate by -eps
+        let dx_neg = ndx * cos_eps + ndz * sin_eps;
+        let dz_neg = -ndx * sin_eps + ndz * cos_eps;
+        bufs.rays.push((angle - eps, dx_neg, dz_neg));
+        // Center ray
+        bufs.rays.push((angle, ndx, ndz));
+        // Rotate by +eps
+        let dx_pos = ndx * cos_eps - ndz * sin_eps;
+        let dz_pos = ndx * sin_eps + ndz * cos_eps;
+        bufs.rays.push((angle + eps, dx_pos, dz_pos));
     }
 
     // Sort rays by angle (unstable sort is fine — duplicate angles have no meaningful order)
