@@ -1,9 +1,9 @@
 -r requirements.txt
-isort[toml]
-ruff
-ty
-pytest
-coverage
-pre-commit
-maturin
-pyinstaller
+isort[toml]==7.0.0
+ruff==0.15.0
+ty==0.0.15
+pytest==9.0.2
+coverage==7.13.3
+pre-commit==4.5.1
+maturin==1.11.5
+pyinstaller==6.18.0
