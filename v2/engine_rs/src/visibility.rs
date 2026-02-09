@@ -305,12 +305,32 @@ fn get_footprint_corners(
     crate::collision::get_world_obbs(placed, objects_by_id)
 }
 
+/// Number of angular buckets for segment partitioning.
+const NUM_ANGLE_BUCKETS: usize = 64;
+const BUCKET_WIDTH: f64 = 2.0 * std::f64::consts::PI / NUM_ANGLE_BUCKETS as f64;
+
+/// Map an angle in [-π, π] to a bucket index in [0, NUM_ANGLE_BUCKETS).
+#[inline]
+fn angle_to_bucket(angle: f64) -> usize {
+    let normalized = angle + std::f64::consts::PI; // [0, 2π)
+    let b = (normalized / BUCKET_WIDTH) as usize;
+    if b >= NUM_ANGLE_BUCKETS {
+        NUM_ANGLE_BUCKETS - 1
+    } else {
+        b
+    }
+}
+
 /// Reusable buffers for compute_visibility_polygon to avoid per-call allocations.
 struct VisBuffers {
     endpoints: Vec<(f64, f64)>,
     endpoint_seen: HashSet<(u64, u64)>,
     rays: Vec<(f64, f64, f64)>,
     polygon: Vec<(f64, f64, f64)>,
+    /// Angular buckets: each bucket holds indices into `all_segments`.
+    buckets: [Vec<u16>; NUM_ANGLE_BUCKETS],
+    /// Flattened terrain + table boundary segments for bucket indexing.
+    all_segments: Vec<Segment>,
 }
 
 impl VisBuffers {
@@ -320,6 +340,8 @@ impl VisBuffers {
             endpoint_seen: HashSet::with_capacity(256),
             rays: Vec::with_capacity(768),
             polygon: Vec::with_capacity(768),
+            buckets: std::array::from_fn(|_| Vec::with_capacity(16)),
+            all_segments: Vec::with_capacity(128),
         }
     }
 }
@@ -368,11 +390,59 @@ fn compute_visibility_polygon(
     bufs.rays
         .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-    // Cast each ray, find nearest intersection
-    for &(angle, dx, dz) in &bufs.rays {
+    // Build flattened segment array and assign to angular buckets.
+    // Each segment goes in all buckets overlapping its angular extent
+    // (the shorter arc between its two endpoint angles from the observer).
+    // This reduces intersection work from O(R×S) to O(R×k) where k is
+    // the average segments per bucket.
+    bufs.all_segments.clear();
+    bufs.all_segments.extend_from_slice(segments);
+    bufs.all_segments.extend_from_slice(table_boundary);
+    for bucket in &mut bufs.buckets {
+        bucket.clear();
+    }
+
+    let half_buckets = NUM_ANGLE_BUCKETS / 2;
+    for (si, &(x1, z1, x2, z2)) in bufs.all_segments.iter().enumerate() {
+        let a1 = (z1 - oz).atan2(x1 - ox);
+        let a2 = (z2 - oz).atan2(x2 - ox);
+        let b1 = angle_to_bucket(a1);
+        let b2 = angle_to_bucket(a2);
+
+        // Find the shorter arc, expanded by 1 bucket for boundary safety.
+        let (lo, hi) = if b1 <= b2 { (b1, b2) } else { (b2, b1) };
+        let si16 = si as u16;
+        if hi - lo <= half_buckets {
+            // Non-wrapping arc
+            let start = lo.saturating_sub(1);
+            let end = (hi + 1).min(NUM_ANGLE_BUCKETS - 1);
+            for b in start..=end {
+                bufs.buckets[b].push(si16);
+            }
+        } else {
+            // Arc wraps around ±π boundary
+            let start = hi.saturating_sub(1);
+            for b in start..NUM_ANGLE_BUCKETS {
+                bufs.buckets[b].push(si16);
+            }
+            let end = (lo + 1).min(NUM_ANGLE_BUCKETS - 1);
+            for b in 0..=end {
+                bufs.buckets[b].push(si16);
+            }
+        }
+    }
+
+    // Cast each ray, testing only segments in its angular bucket.
+    let rays = &bufs.rays;
+    let buckets = &bufs.buckets;
+    let all_segs = &bufs.all_segments;
+    let polygon = &mut bufs.polygon;
+
+    for &(angle, dx, dz) in rays {
+        let bucket_idx = angle_to_bucket(angle);
         let mut min_t = f64::INFINITY;
-        for &(x1, z1, x2, z2) in segments.iter().chain(table_boundary.iter())
-        {
+        for &si in &buckets[bucket_idx] {
+            let (x1, z1, x2, z2) = all_segs[si as usize];
             if let Some(t) =
                 ray_segment_intersection(ox, oz, dx, dz, x1, z1, x2, z2)
             {
@@ -383,9 +453,7 @@ fn compute_visibility_polygon(
         }
 
         if min_t < f64::INFINITY {
-            let hit_x = ox + min_t * dx;
-            let hit_z = oz + min_t * dz;
-            bufs.polygon.push((angle, hit_x, hit_z));
+            polygon.push((angle, ox + min_t * dx, oz + min_t * dz));
         }
     }
 

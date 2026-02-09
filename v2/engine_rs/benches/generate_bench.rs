@@ -104,6 +104,8 @@ const ALL_FEATURES_JSON: &str = r#"{
 }"#;
 
 /// 50 steps with visibility computation enabled.
+/// Uses 5" tall crates (above 4" blocking height threshold) so terrain
+/// actually generates blocking segments for the intersection loop.
 const VISIBILITY_50_JSON: &str = r#"{
   "seed": 42,
   "table_width_inches": 60.0,
@@ -118,7 +120,7 @@ const VISIBILITY_50_JSON: &str = r#"{
               "shape_type": "rectangular_prism",
               "width_inches": 5.0,
               "depth_inches": 2.5,
-              "height_inches": 2.0
+              "height_inches": 5.0
             }
           ],
           "name": "Crate"
@@ -144,6 +146,8 @@ const VISIBILITY_50_JSON: &str = r#"{
 }"#;
 
 /// 50 steps with mission (Hammer and Anvil) + visibility + DZ scoring.
+/// Uses 5" tall crates (above 4" blocking height threshold) so terrain
+/// actually generates blocking segments for the intersection loop.
 const MISSION_HNA_JSON: &str = r#"{
   "seed": 42,
   "table_width_inches": 60.0,
@@ -158,7 +162,7 @@ const MISSION_HNA_JSON: &str = r#"{
               "shape_type": "rectangular_prism",
               "width_inches": 5.0,
               "depth_inches": 2.5,
-              "height_inches": 2.0
+              "height_inches": 5.0
             }
           ],
           "name": "Crate"
