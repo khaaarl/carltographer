@@ -241,9 +241,19 @@
           "type": "array",
           "items": { "$ref": "#/$defs/placed_feature" }
         },
+        "rotationally_symmetric": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether this layout uses 180-degree rotational symmetry around the table center."
+        },
         "mission": {
           "$ref": "#/$defs/mission",
           "description": "Optional mission information. If omitted, the layout describes terrain only."
+        },
+        "visibility": {
+          "type": ["object", "null"],
+          "default": null,
+          "description": "Visibility analysis results computed by the engine. Contains 'overall' key and optionally 'dz_visibility', 'dz_to_dz_visibility', and 'objective_hidability' keys when a mission with deployment zones or objectives is present."
         }
       },
       "required": ["table_width_inches", "table_depth_inches", "placed_features"],
@@ -325,6 +335,66 @@
       "additionalProperties": false
     },
 
+    "scoring_targets": {
+      "type": "object",
+      "description": "Target values for visibility-based scoring metrics. Each metric has a target (desired percentage) and a weight (relative importance). Only metrics with a non-null target contribute to scoring.",
+      "properties": {
+        "overall_visibility_target": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "default": null,
+          "description": "Target overall visibility percentage."
+        },
+        "overall_visibility_weight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1.0,
+          "description": "Relative weight for the overall visibility metric."
+        },
+        "dz_visibility_target": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "default": null,
+          "description": "Target average deployment zone visibility percentage."
+        },
+        "dz_visibility_weight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1.0,
+          "description": "Relative weight for the DZ visibility metric."
+        },
+        "dz_hidden_target": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "default": null,
+          "description": "Target average cross-DZ hidden fraction percentage."
+        },
+        "dz_hidden_weight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1.0,
+          "description": "Relative weight for the DZ hidden metric."
+        },
+        "objective_hidability_target": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "default": null,
+          "description": "Target average objective hidability percentage."
+        },
+        "objective_hidability_weight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1.0,
+          "description": "Relative weight for the objective hidability metric."
+        }
+      },
+      "additionalProperties": false
+    },
+
     "engine_params": {
       "type": "object",
       "description": "Parameters for the terrain generation engine. This spec is expected to evolve significantly over development.",
@@ -378,7 +448,35 @@
         "num_steps": {
           "type": "integer",
           "minimum": 1,
-          "description": "Number of generation steps (GA iterations) to run."
+          "default": 100,
+          "description": "Number of generation steps (mutation iterations) to run."
+        },
+        "skip_visibility": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, skip visibility computation during scoring. Useful for faster generation when only feature placement matters."
+        },
+        "scoring_targets": {
+          "$ref": "#/$defs/scoring_targets",
+          "description": "Target values for visibility metrics. If omitted, the engine uses legacy scoring (minimize overall visibility)."
+        },
+        "num_replicas": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "default": null,
+          "description": "Number of parallel tempering replicas. null or 1 uses simple hill climbing. Values > 1 enable parallel tempering with replica exchange."
+        },
+        "swap_interval": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 20,
+          "description": "Number of steps between replica exchange attempts in parallel tempering."
+        },
+        "max_temperature": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 50.0,
+          "description": "Temperature of the hottest replica in parallel tempering. Controls mutation magnitude for hot replicas."
         }
       },
       "required": ["seed", "table_width_inches", "table_depth_inches", "catalog"],
