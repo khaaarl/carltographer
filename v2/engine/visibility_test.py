@@ -14,9 +14,11 @@ from engine.types import (
     Transform,
 )
 from engine.visibility import (
+    DZ_EXPANSION_INCHES,
     _extract_blocking_segments,
     _fraction_of_dz_visible,
     _point_in_polygon,
+    _point_near_any_polygon,
     _polygon_area,
     _ray_segment_intersection,
     _sample_points_in_circle,
@@ -425,7 +427,8 @@ class TestDzVisibility:
         """Hidden fraction is asymmetric with off-center terrain.
 
         Wall near green DZ creates asymmetric hiding: the hidden fractions
-        from opposing DZ observers differ.
+        from opposing DZ observers differ. With DZ expansion (6"), green's
+        expanded observers can see around the wall, so red_hidden is low.
         """
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
@@ -451,12 +454,14 @@ class TestDzVisibility:
         green_hidden = cross["green_from_red"]["value"]
         red_hidden = cross["red_from_green"]["value"]
 
-        # Both should have substantial hidden fractions (wall blocks view)
+        # Wall blocks red's view of green DZ -> green_hidden is substantial
         assert green_hidden > 50.0, (
             f"green_hidden ({green_hidden}) should be substantial"
         )
-        assert red_hidden > 50.0, (
-            f"red_hidden ({red_hidden}) should be substantial"
+        # With expanded DZ, green's expanded observers bypass the wall
+        # so the hidden fractions are asymmetric
+        assert green_hidden > red_hidden, (
+            f"green_hidden ({green_hidden}) should exceed red_hidden ({red_hidden})"
         )
 
     def test_symmetric_dz_values_close(self):
@@ -678,3 +683,65 @@ class TestObserverFilteringInsideTallTerrain:
         filtered_count = result["overall"]["sample_count"]
 
         assert filtered_count == empty_count
+
+
+# -- Expanded DZ tests --
+
+
+class TestExpandedDZ:
+    def test_point_near_polygon_inside(self):
+        """Point inside polygon returns True."""
+        poly = [(0, 0), (10, 0), (10, 10), (0, 10)]
+        assert _point_near_any_polygon(5.0, 5.0, [poly], 6.0) is True
+
+    def test_point_near_polygon_within_range(self):
+        """Point outside but within max_dist of polygon edge returns True."""
+        poly = [(0, 0), (10, 0), (10, 10), (0, 10)]
+        # Point at (13, 5) is 3" from the right edge at x=10
+        assert _point_near_any_polygon(13.0, 5.0, [poly], 6.0) is True
+
+    def test_point_near_polygon_out_of_range(self):
+        """Point far from polygon returns False."""
+        poly = [(0, 0), (10, 0), (10, 10), (0, 10)]
+        # Point at (20, 5) is 10" from the right edge — beyond 6"
+        assert _point_near_any_polygon(20.0, 5.0, [poly], 6.0) is False
+
+    def test_point_near_polygon_corner(self):
+        """Point near corner (within diagonal distance) returns True."""
+        poly = [(0, 0), (10, 0), (10, 10), (0, 10)]
+        # Point at (14, 14) — distance from corner (10,10) = sqrt(32) ≈ 5.66"
+        assert _point_near_any_polygon(14.0, 14.0, [poly], 6.0) is True
+
+    def test_expansion_constant(self):
+        """DZ_EXPANSION_INCHES is 6.0."""
+        assert DZ_EXPANSION_INCHES == 6.0
+
+    def test_expanded_dz_increases_observer_count(self):
+        """With expanded DZ, cross-DZ observer count increases vs original.
+
+        Using a wall in the middle of the table: expanded DZ captures observers
+        that were previously not contributing to cross-DZ metrics.
+        """
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        mission = _make_simple_mission([green_dz, red_dz])
+
+        # Wall in the center
+        obj = _make_object("wall", 2, 40, 5)
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 0, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"wall": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        cross = result["dz_to_dz_visibility"]
+
+        # With expanded DZ, observer_count should be > 0 for both directions
+        assert cross["red_from_green"]["observer_count"] > 0
+        assert cross["green_from_red"]["observer_count"] > 0

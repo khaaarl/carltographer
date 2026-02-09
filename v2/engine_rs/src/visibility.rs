@@ -8,11 +8,15 @@ use std::collections::{HashMap, HashSet};
 
 use crate::collision::{
     compose_transform, get_tall_world_obbs, is_at_origin,
-    mirror_placed_feature, obb_corners, Corners,
+    mirror_placed_feature, obb_corners, point_to_segment_distance_squared,
+    Corners,
 };
 use crate::types::{
     DeploymentZone, PlacedFeature, TerrainLayout, TerrainObject, Transform,
 };
+
+/// Expansion distance for DZ threat zone (inches).
+const DZ_EXPANSION_INCHES: f64 = 6.0;
 
 /// A line segment: (x1, z1, x2, z2)
 type Segment = (f64, f64, f64, f64);
@@ -525,6 +529,32 @@ fn point_in_any_polygon(
     false
 }
 
+/// True if point is inside or within max_dist of any polygon ring.
+fn point_near_any_polygon(
+    px: f64,
+    pz: f64,
+    polygons: &[Vec<(f64, f64)>],
+    max_dist: f64,
+) -> bool {
+    let max_dist_sq = max_dist * max_dist;
+    for poly in polygons {
+        if point_in_polygon(px, pz, poly) {
+            return true;
+        }
+        let n = poly.len();
+        for i in 0..n {
+            let (x1, z1) = poly[i];
+            let (x2, z2) = poly[(i + 1) % n];
+            if point_to_segment_distance_squared(px, pz, x1, z1, x2, z2)
+                <= max_dist_sq
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Compute fraction of DZ sample points visible (inside vis polygon).
 #[cfg(test)]
 fn fraction_of_dz_visible(
@@ -838,6 +868,33 @@ pub fn compute_layout_visibility(
         Vec::new()
     };
 
+    // Precompute expanded DZ membership (within DZ_EXPANSION_INCHES of any DZ edge)
+    let observer_expanded_dz: Vec<Option<usize>> = if has_dzs {
+        sample_points
+            .iter()
+            .enumerate()
+            .map(|(i, &(sx, sz))| {
+                // If already inside a DZ, reuse that result
+                if let Some(dz_idx) = observer_dz[i] {
+                    return Some(dz_idx);
+                }
+                // Otherwise check if near any DZ
+                dz_data
+                    .iter()
+                    .position(|dd| {
+                        point_near_any_polygon(
+                            sx,
+                            sz,
+                            &dd.polys,
+                            DZ_EXPANSION_INCHES,
+                        )
+                    })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // -- Objective hidability pre-loop setup --
     let has_objectives = has_dzs
         && layout
@@ -873,9 +930,10 @@ pub fn compute_layout_visibility(
     }
 
     // Helper: handle DZ accumulation when visibility is full
-    // (no segments or < 3 vis_poly vertices). Uses precomputed obs_dz.
+    // (no segments or < 3 vis_poly vertices). Uses precomputed obs_dz + obs_expanded_dz.
     let accumulate_dz_full =
         |obs_dz: Option<usize>,
+         obs_expanded_dz: Option<usize>,
          num_dzs: usize,
          dz_vis_accum: &mut [(f64, i64)],
          dz_cross_seen: &mut [Vec<bool>],
@@ -883,8 +941,13 @@ pub fn compute_layout_visibility(
          obj_seen_from_dz: &mut [Vec<Vec<bool>>],
          has_objectives: bool| {
             for di in 0..num_dzs {
-                if obs_dz == Some(di) {
-                    // Observer in this DZ → full cross-DZ visibility
+                // dz_visibility: uses original boundary
+                if obs_dz != Some(di) {
+                    dz_vis_accum[di].0 += 1.0;
+                    dz_vis_accum[di].1 += 1;
+                }
+                // cross-DZ + objective: uses expanded boundary
+                if obs_expanded_dz == Some(di) {
                     for oi in 0..num_dzs {
                         if oi != di {
                             let pair = oi * num_dzs + di;
@@ -899,10 +962,6 @@ pub fn compute_layout_visibility(
                             seen.fill(true);
                         }
                     }
-                } else {
-                    // Observer outside this DZ → frac = 1.0
-                    dz_vis_accum[di].0 += 1.0;
-                    dz_vis_accum[di].1 += 1;
                 }
             }
         };
@@ -936,12 +995,18 @@ pub fn compute_layout_visibility(
         } else {
             None
         };
+        let obs_expanded_dz = if has_dzs {
+            observer_expanded_dz[obs_idx]
+        } else {
+            None
+        };
 
         if segments.is_empty() {
             total_ratio += 1.0;
             if has_dzs {
                 accumulate_dz_full(
                     obs_dz,
+                    obs_expanded_dz,
                     num_dzs,
                     &mut dz_vis_accum,
                     &mut dz_cross_seen,
@@ -962,6 +1027,7 @@ pub fn compute_layout_visibility(
             if has_dzs {
                 accumulate_dz_full(
                     obs_dz,
+                    obs_expanded_dz,
                     num_dzs,
                     &mut dz_vis_accum,
                     &mut dz_cross_seen,
@@ -979,40 +1045,69 @@ pub fn compute_layout_visibility(
 
         // DZ visibility accumulation (index-based + batch PIP)
         if has_dzs {
-            match obs_dz {
-                Some(my_dz) => {
-                    // Observer is inside DZ `my_dz`
-                    // 1) Fraction visible for all OTHER DZs
-                    for (di, dd) in dz_data.iter().enumerate() {
-                        if di != my_dz {
-                            let frac =
-                                fraction_of_dz_visible_batch(
-                                    &vis_poly,
-                                    &dd.samples,
-                                    &mut pip_buf,
-                                );
-                            dz_vis_accum[di].0 += frac;
-                            dz_vis_accum[di].1 += 1;
+            // Step 1: dz_visibility — uses original DZ boundary
+            for (di, dd) in dz_data.iter().enumerate() {
+                if obs_dz != Some(di) {
+                    let frac = fraction_of_dz_visible_batch(
+                        &vis_poly,
+                        &dd.samples,
+                        &mut pip_buf,
+                    );
+                    dz_vis_accum[di].0 += frac;
+                    dz_vis_accum[di].1 += 1;
+                }
+            }
+
+            // Step 2: cross-DZ + objective — uses expanded DZ boundary
+            if let Some(my_dz) = obs_expanded_dz {
+                // Cross-DZ seen tracking: batch PIP unseen samples
+                for (oi, other_dd) in
+                    dz_data.iter().enumerate()
+                {
+                    if oi == my_dz {
+                        continue;
+                    }
+                    let pair =
+                        oi * num_dzs + my_dz;
+                    dz_cross_obs_count[pair] += 1;
+                    let seen =
+                        &mut dz_cross_seen[pair];
+                    unseen_indices.clear();
+                    unseen_points.clear();
+                    for (i, &pt) in
+                        other_dd.samples.iter().enumerate()
+                    {
+                        if !seen[i] {
+                            unseen_indices.push(i);
+                            unseen_points.push(pt);
                         }
                     }
-                    // 2) Cross-DZ seen tracking: batch PIP
-                    //    unseen samples of other DZs
-                    for (oi, other_dd) in
-                        dz_data.iter().enumerate()
-                    {
-                        if oi == my_dz {
-                            continue;
+                    if !unseen_points.is_empty() {
+                        batch_point_in_polygon(
+                            &unseen_points,
+                            &vis_poly,
+                            &mut pip_buf,
+                        );
+                        for (k, &idx) in
+                            unseen_indices.iter().enumerate()
+                        {
+                            if pip_buf[k] {
+                                seen[idx] = true;
+                            }
                         }
-                        let pair =
-                            oi * num_dzs + my_dz;
-                        dz_cross_obs_count[pair] += 1;
+                    }
+                }
+                // Objective hidability: batch PIP unseen samples
+                if has_objectives {
+                    for (oi, obj_pts) in
+                        obj_sample_points.iter().enumerate()
+                    {
                         let seen =
-                            &mut dz_cross_seen[pair];
-                        // Gather unseen into compact buffer
+                            &mut obj_seen_from_dz[my_dz][oi];
                         unseen_indices.clear();
                         unseen_points.clear();
                         for (i, &pt) in
-                            other_dd.samples.iter().enumerate()
+                            obj_pts.iter().enumerate()
                         {
                             if !seen[i] {
                                 unseen_indices.push(i);
@@ -1025,64 +1120,15 @@ pub fn compute_layout_visibility(
                                 &vis_poly,
                                 &mut pip_buf,
                             );
-                            for (k, &idx) in
-                                unseen_indices.iter().enumerate()
+                            for (k, &idx) in unseen_indices
+                                .iter()
+                                .enumerate()
                             {
                                 if pip_buf[k] {
                                     seen[idx] = true;
                                 }
                             }
                         }
-                    }
-                    // 3) Objective hidability: batch PIP
-                    //    unseen objective samples
-                    if has_objectives {
-                        for (oi, obj_pts) in
-                            obj_sample_points.iter().enumerate()
-                        {
-                            let seen =
-                                &mut obj_seen_from_dz[my_dz][oi];
-                            unseen_indices.clear();
-                            unseen_points.clear();
-                            for (i, &pt) in
-                                obj_pts.iter().enumerate()
-                            {
-                                if !seen[i] {
-                                    unseen_indices.push(i);
-                                    unseen_points.push(pt);
-                                }
-                            }
-                            if !unseen_points.is_empty() {
-                                batch_point_in_polygon(
-                                    &unseen_points,
-                                    &vis_poly,
-                                    &mut pip_buf,
-                                );
-                                for (k, &idx) in unseen_indices
-                                    .iter()
-                                    .enumerate()
-                                {
-                                    if pip_buf[k] {
-                                        seen[idx] = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                None => {
-                    // Observer not in any DZ: compute fraction
-                    // visible for ALL DZs (batch PIP each)
-                    for (di, dd) in dz_data.iter().enumerate()
-                    {
-                        let frac =
-                            fraction_of_dz_visible_batch(
-                                &vis_poly,
-                                &dd.samples,
-                                &mut pip_buf,
-                            );
-                        dz_vis_accum[di].0 += frac;
-                        dz_vis_accum[di].1 += 1;
                     }
                 }
             }
@@ -1744,5 +1790,42 @@ mod tests {
         let result =
             compute_layout_visibility(&layout, &objects, 4.0, None);
         assert!(result.get("objective_hidability").is_none());
+    }
+
+    // -- Expanded DZ tests --
+
+    #[test]
+    fn point_near_any_polygon_inside() {
+        let poly = vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ];
+        assert!(point_near_any_polygon(5.0, 5.0, &[poly], 6.0));
+    }
+
+    #[test]
+    fn point_near_any_polygon_within_range() {
+        let poly = vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ];
+        // Point at (13, 5) is 3" from the right edge at x=10
+        assert!(point_near_any_polygon(13.0, 5.0, &[poly], 6.0));
+    }
+
+    #[test]
+    fn point_near_any_polygon_out_of_range() {
+        let poly = vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ];
+        // Point at (20, 5) is 10" from the right edge — beyond 6"
+        assert!(!point_near_any_polygon(20.0, 5.0, &[poly], 6.0));
     }
 }

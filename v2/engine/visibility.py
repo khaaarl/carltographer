@@ -19,6 +19,7 @@ from .collision import (
     get_tall_world_obbs,
     get_world_obbs,
     obb_corners,
+    point_to_segment_distance_squared,
 )
 from .types import (
     DeploymentZone,
@@ -29,6 +30,8 @@ from .types import (
 )
 
 Segment = tuple[float, float, float, float]  # (x1, z1, x2, z2)
+
+DZ_EXPANSION_INCHES = 6.0
 
 
 def _polygon_area(vertices: list[tuple[float, float]]) -> float:
@@ -445,6 +448,29 @@ def _point_in_any_polygon(
     return False
 
 
+def _point_near_any_polygon(
+    px: float,
+    pz: float,
+    polygons: list[list[tuple[float, float]]],
+    max_dist: float,
+) -> bool:
+    """True if point is inside or within max_dist of any polygon ring."""
+    max_dist_sq = max_dist * max_dist
+    for poly in polygons:
+        if _point_in_polygon(px, pz, poly):
+            return True
+        n = len(poly)
+        for i in range(n):
+            x1, z1 = poly[i]
+            x2, z2 = poly[(i + 1) % n]
+            if (
+                point_to_segment_distance_squared(px, pz, x1, z1, x2, z2)
+                <= max_dist_sq
+            ):
+                return True
+    return False
+
+
 def _fraction_of_dz_visible(
     vis_poly: list[tuple[float, float]],
     dz_sample_points: list[tuple[float, float]],
@@ -816,11 +842,16 @@ def compute_layout_visibility(
                 # Full visibility: all DZ samples visible
                 for dz_id, dz_polys, dz_samples in dz_data:
                     observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                    observer_in_expanded_dz = (
+                        observer_in_dz
+                        or _point_near_any_polygon(
+                            sx, sz, dz_polys, DZ_EXPANSION_INCHES
+                        )
+                    )
                     if not observer_in_dz:
                         dz_vis_accum[dz_id][0] += 1.0
                         dz_vis_accum[dz_id][1] += 1
-                    else:
-                        # Observer inside this DZ: all target samples seen
+                    if observer_in_expanded_dz:
                         for (
                             other_id,
                             _other_polys,
@@ -833,7 +864,6 @@ def compute_layout_visibility(
                                     dz_cross_seen[key].update(
                                         range(len(other_samples))
                                     )
-                        # Full vis: all objective samples seen from this DZ
                         if has_objectives:
                             for oi, obj_pts in enumerate(obj_sample_points):
                                 obj_seen_from_dz[dz_id][oi].update(
@@ -849,10 +879,16 @@ def compute_layout_visibility(
             if has_dzs:
                 for dz_id, dz_polys, dz_samples in dz_data:
                     observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                    observer_in_expanded_dz = (
+                        observer_in_dz
+                        or _point_near_any_polygon(
+                            sx, sz, dz_polys, DZ_EXPANSION_INCHES
+                        )
+                    )
                     if not observer_in_dz:
                         dz_vis_accum[dz_id][0] += 1.0
                         dz_vis_accum[dz_id][1] += 1
-                    else:
+                    if observer_in_expanded_dz:
                         for (
                             other_id,
                             _other_polys,
@@ -865,7 +901,6 @@ def compute_layout_visibility(
                                     dz_cross_seen[key].update(
                                         range(len(other_samples))
                                     )
-                        # Full vis: all objective samples seen from this DZ
                         if has_objectives:
                             for oi, obj_pts in enumerate(obj_sample_points):
                                 obj_seen_from_dz[dz_id][oi].update(
@@ -881,13 +916,19 @@ def compute_layout_visibility(
         if has_dzs:
             for dz_id, dz_polys, dz_samples in dz_data:
                 observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                observer_in_expanded_dz = (
+                    observer_in_dz
+                    or _point_near_any_polygon(
+                        sx, sz, dz_polys, DZ_EXPANSION_INCHES
+                    )
+                )
                 if not observer_in_dz:
                     # Observer outside this DZ: contributes to dz_visibility
                     frac = _fraction_of_dz_visible(vis_poly, dz_samples)
                     dz_vis_accum[dz_id][0] += frac
                     dz_vis_accum[dz_id][1] += 1
-                else:
-                    # Observer inside this DZ: mark visible target samples
+                if observer_in_expanded_dz:
+                    # Observer in expanded DZ: mark visible target samples
                     for (
                         other_id,
                         _other_polys,
