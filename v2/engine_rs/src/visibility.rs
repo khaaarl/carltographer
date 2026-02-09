@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rayon::prelude::*;
+
 use crate::collision::{
     compose_transform, get_tall_world_obbs, is_at_origin,
     mirror_placed_feature, obb_corners, point_to_segment_distance_squared,
@@ -919,24 +921,6 @@ pub fn compute_layout_visibility(
     }
     let num_dzs = dz_data.len();
 
-    // Index-based accumulators (no HashMap<String, ...> in hot loop)
-    let mut dz_vis_accum: Vec<(f64, i64)> = vec![(0.0, 0); num_dzs];
-    // Cross-DZ seen: flat Vec indexed by target_idx * num_dzs + source_idx
-    // Each entry is Vec<bool> with len = target DZ's sample count
-    let mut dz_cross_seen: Vec<Vec<bool>> = (0..num_dzs * num_dzs)
-        .map(|flat| {
-            let target = flat / num_dzs;
-            let source = flat % num_dzs;
-            if target != source {
-                vec![false; dz_data[target].samples.len()]
-            } else {
-                Vec::new() // diagonal: unused
-            }
-        })
-        .collect();
-    let mut dz_cross_obs_count: Vec<i64> =
-        vec![0; num_dzs * num_dzs];
-
     // Precompute observer DZ membership: Vec<Option<usize>>
     let observer_dz: Vec<Option<usize>> = if has_dzs {
         sample_points
@@ -988,8 +972,6 @@ pub fn compute_layout_visibility(
             .map_or(false, |m| !m.objectives.is_empty());
 
     let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
-    // Per-DZ, per-objective, Vec<bool> of seen sample indices
-    let mut obj_seen_from_dz: Vec<Vec<Vec<bool>>> = Vec::new();
 
     if has_objectives {
         let mission = layout.mission.as_ref().unwrap();
@@ -1004,52 +986,7 @@ pub fn compute_layout_visibility(
             );
             obj_sample_points.push(pts);
         }
-
-        for _ in 0..num_dzs {
-            let per_obj: Vec<Vec<bool>> = obj_sample_points
-                .iter()
-                .map(|pts| vec![false; pts.len()])
-                .collect();
-            obj_seen_from_dz.push(per_obj);
-        }
     }
-
-    // Helper: handle DZ accumulation when visibility is full
-    // (no segments or < 3 vis_poly vertices). Uses precomputed obs_dz + obs_expanded_dz.
-    let accumulate_dz_full =
-        |obs_dz: Option<usize>,
-         obs_expanded_dz: Option<usize>,
-         num_dzs: usize,
-         dz_vis_accum: &mut [(f64, i64)],
-         dz_cross_seen: &mut [Vec<bool>],
-         dz_cross_obs_count: &mut [i64],
-         obj_seen_from_dz: &mut [Vec<Vec<bool>>],
-         has_objectives: bool| {
-            for di in 0..num_dzs {
-                // dz_visibility: uses original boundary
-                if obs_dz != Some(di) {
-                    dz_vis_accum[di].0 += 1.0;
-                    dz_vis_accum[di].1 += 1;
-                }
-                // cross-DZ + objective: uses expanded boundary
-                if obs_expanded_dz == Some(di) {
-                    for oi in 0..num_dzs {
-                        if oi != di {
-                            let pair = oi * num_dzs + di;
-                            dz_cross_obs_count[pair] += 1;
-                            dz_cross_seen[pair].fill(true);
-                        }
-                    }
-                    if has_objectives {
-                        for seen in
-                            obj_seen_from_dz[di].iter_mut()
-                        {
-                            seen.fill(true);
-                        }
-                    }
-                }
-            }
-        };
 
     // Precompute static segments and obscuring shape data once
     let precomputed =
@@ -1063,162 +1000,277 @@ pub fn compute_layout_visibility(
         (-half_w, half_d, -half_w, -half_d), // left
     ];
 
-    let mut total_ratio = 0.0;
-    let mut segments: Vec<Segment> = Vec::new();
-    let mut vis_bufs = VisBuffers::new();
-    let mut vis_poly: Vec<(f64, f64)> = Vec::new();
-    // Reusable buffers for batch PIP
-    let mut pip_buf: Vec<bool> = Vec::new();
-    let mut unseen_indices: Vec<usize> = Vec::new();
-    let mut unseen_points: Vec<(f64, f64)> = Vec::new();
+    // Per-thread accumulator for parallel observer loop.
+    struct ThreadAccum {
+        total_ratio: f64,
+        dz_vis_accum: Vec<(f64, i64)>,
+        dz_cross_seen: Vec<Vec<bool>>,
+        dz_cross_obs_count: Vec<i64>,
+        obj_seen_from_dz: Vec<Vec<Vec<bool>>>,
+        // Working buffers (not merged — just avoids per-call allocation)
+        segments: Vec<Segment>,
+        vis_bufs: VisBuffers,
+        vis_poly: Vec<(f64, f64)>,
+        pip_buf: Vec<bool>,
+        unseen_indices: Vec<usize>,
+        unseen_points: Vec<(f64, f64)>,
+    }
 
-    for (obs_idx, &(sx, sz)) in sample_points.iter().enumerate()
-    {
-        get_observer_segments(&precomputed, sx, sz, &mut segments);
-        let obs_dz = if has_dzs {
-            observer_dz[obs_idx]
-        } else {
-            None
-        };
-        let obs_expanded_dz = if has_dzs {
-            observer_expanded_dz[obs_idx]
-        } else {
-            None
-        };
-
-        if segments.is_empty() {
-            total_ratio += 1.0;
-            if has_dzs {
-                accumulate_dz_full(
-                    obs_dz,
-                    obs_expanded_dz,
-                    num_dzs,
-                    &mut dz_vis_accum,
-                    &mut dz_cross_seen,
-                    &mut dz_cross_obs_count,
-                    &mut obj_seen_from_dz,
-                    has_objectives,
-                );
-            }
-            continue;
-        }
-
-        compute_visibility_polygon(
-            sx, sz, &segments, &table_boundary, &mut vis_bufs,
-            &mut vis_poly,
-        );
-        if vis_poly.len() < 3 {
-            total_ratio += 1.0;
-            if has_dzs {
-                accumulate_dz_full(
-                    obs_dz,
-                    obs_expanded_dz,
-                    num_dzs,
-                    &mut dz_vis_accum,
-                    &mut dz_cross_seen,
-                    &mut dz_cross_obs_count,
-                    &mut obj_seen_from_dz,
-                    has_objectives,
-                );
-            }
-            continue;
-        }
-
-        let vis_area = polygon_area(&vis_poly);
-        let ratio = (vis_area / table_area).min(1.0);
-        total_ratio += ratio;
-
-        // DZ visibility accumulation (index-based + batch PIP)
-        if has_dzs {
-            // Step 1: dz_visibility — uses original DZ boundary
-            for (di, dd) in dz_data.iter().enumerate() {
-                if obs_dz != Some(di) {
-                    let frac = fraction_of_dz_visible_batch(
-                        &vis_poly,
-                        &dd.samples,
-                        &mut pip_buf,
-                    );
-                    dz_vis_accum[di].0 += frac;
-                    dz_vis_accum[di].1 += 1;
+    // Closure to create a fresh per-thread accumulator.
+    let make_accum = || Box::new(ThreadAccum {
+        total_ratio: 0.0,
+        dz_vis_accum: vec![(0.0, 0); num_dzs],
+        dz_cross_seen: (0..num_dzs * num_dzs)
+            .map(|flat| {
+                let target = flat / num_dzs;
+                let source = flat % num_dzs;
+                if target != source {
+                    vec![false; dz_data[target].samples.len()]
+                } else {
+                    Vec::new()
                 }
-            }
+            })
+            .collect(),
+        dz_cross_obs_count: vec![0; num_dzs * num_dzs],
+        obj_seen_from_dz: if has_objectives {
+            (0..num_dzs)
+                .map(|_| {
+                    obj_sample_points
+                        .iter()
+                        .map(|pts| vec![false; pts.len()])
+                        .collect()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        segments: Vec::new(),
+        vis_bufs: VisBuffers::new(),
+        vis_poly: Vec::new(),
+        pip_buf: Vec::new(),
+        unseen_indices: Vec::new(),
+        unseen_points: Vec::new(),
+    });
 
-            // Step 2: cross-DZ + objective — uses expanded DZ boundary
-            if let Some(my_dz) = obs_expanded_dz {
-                // Cross-DZ seen tracking: batch PIP unseen samples
-                for (oi, other_dd) in
-                    dz_data.iter().enumerate()
-                {
-                    if oi == my_dz {
-                        continue;
-                    }
-                    let pair =
-                        oi * num_dzs + my_dz;
-                    dz_cross_obs_count[pair] += 1;
-                    let seen =
-                        &mut dz_cross_seen[pair];
-                    unseen_indices.clear();
-                    unseen_points.clear();
-                    for (i, &pt) in
-                        other_dd.samples.iter().enumerate()
-                    {
-                        if !seen[i] {
-                            unseen_indices.push(i);
-                            unseen_points.push(pt);
-                        }
-                    }
-                    if !unseen_points.is_empty() {
-                        batch_point_in_polygon(
-                            &unseen_points,
-                            &vis_poly,
-                            &mut pip_buf,
-                        );
-                        for (k, &idx) in
-                            unseen_indices.iter().enumerate()
-                        {
-                            if pip_buf[k] {
-                                seen[idx] = true;
+    // Parallel observer loop: each rayon worker folds observers into
+    // its own ThreadAccum, then we reduce (merge) all accumulators.
+    let merged = sample_points
+        .par_iter()
+        .enumerate()
+        .fold(make_accum, |mut acc, (obs_idx, &(sx, sz))| {
+            get_observer_segments(
+                &precomputed,
+                sx,
+                sz,
+                &mut acc.segments,
+            );
+            let obs_dz = if has_dzs {
+                observer_dz[obs_idx]
+            } else {
+                None
+            };
+            let obs_expanded_dz = if has_dzs {
+                observer_expanded_dz[obs_idx]
+            } else {
+                None
+            };
+
+            // Helper: accumulate for full visibility (no segments or degenerate polygon)
+            let accumulate_full =
+                |acc: &mut ThreadAccum| {
+                    acc.total_ratio += 1.0;
+                    if has_dzs {
+                        for di in 0..num_dzs {
+                            if obs_dz != Some(di) {
+                                acc.dz_vis_accum[di].0 += 1.0;
+                                acc.dz_vis_accum[di].1 += 1;
+                            }
+                            if obs_expanded_dz == Some(di) {
+                                for oi in 0..num_dzs {
+                                    if oi != di {
+                                        let pair =
+                                            oi * num_dzs + di;
+                                        acc.dz_cross_obs_count
+                                            [pair] += 1;
+                                        acc.dz_cross_seen[pair]
+                                            .fill(true);
+                                    }
+                                }
+                                if has_objectives {
+                                    for seen in acc
+                                        .obj_seen_from_dz[di]
+                                        .iter_mut()
+                                    {
+                                        seen.fill(true);
+                                    }
+                                }
                             }
                         }
                     }
+                };
+
+            if acc.segments.is_empty() {
+                accumulate_full(&mut acc);
+                return acc;
+            }
+
+            compute_visibility_polygon(
+                sx,
+                sz,
+                &acc.segments,
+                &table_boundary,
+                &mut acc.vis_bufs,
+                &mut acc.vis_poly,
+            );
+            if acc.vis_poly.len() < 3 {
+                accumulate_full(&mut acc);
+                return acc;
+            }
+
+            let vis_area = polygon_area(&acc.vis_poly);
+            let ratio = (vis_area / table_area).min(1.0);
+            acc.total_ratio += ratio;
+
+            if has_dzs {
+                // Step 1: dz_visibility
+                for (di, dd) in dz_data.iter().enumerate() {
+                    if obs_dz != Some(di) {
+                        let frac = fraction_of_dz_visible_batch(
+                            &acc.vis_poly,
+                            &dd.samples,
+                            &mut acc.pip_buf,
+                        );
+                        acc.dz_vis_accum[di].0 += frac;
+                        acc.dz_vis_accum[di].1 += 1;
+                    }
                 }
-                // Objective hidability: batch PIP unseen samples
-                if has_objectives {
-                    for (oi, obj_pts) in
-                        obj_sample_points.iter().enumerate()
+
+                // Step 2: cross-DZ + objective
+                if let Some(my_dz) = obs_expanded_dz {
+                    for (oi, other_dd) in
+                        dz_data.iter().enumerate()
                     {
+                        if oi == my_dz {
+                            continue;
+                        }
+                        let pair = oi * num_dzs + my_dz;
+                        acc.dz_cross_obs_count[pair] += 1;
                         let seen =
-                            &mut obj_seen_from_dz[my_dz][oi];
-                        unseen_indices.clear();
-                        unseen_points.clear();
-                        for (i, &pt) in
-                            obj_pts.iter().enumerate()
+                            &mut acc.dz_cross_seen[pair];
+                        acc.unseen_indices.clear();
+                        acc.unseen_points.clear();
+                        for (i, &pt) in other_dd
+                            .samples
+                            .iter()
+                            .enumerate()
                         {
                             if !seen[i] {
-                                unseen_indices.push(i);
-                                unseen_points.push(pt);
+                                acc.unseen_indices.push(i);
+                                acc.unseen_points.push(pt);
                             }
                         }
-                        if !unseen_points.is_empty() {
+                        if !acc.unseen_points.is_empty() {
                             batch_point_in_polygon(
-                                &unseen_points,
-                                &vis_poly,
-                                &mut pip_buf,
+                                &acc.unseen_points,
+                                &acc.vis_poly,
+                                &mut acc.pip_buf,
                             );
-                            for (k, &idx) in unseen_indices
+                            for (k, &idx) in acc
+                                .unseen_indices
                                 .iter()
                                 .enumerate()
                             {
-                                if pip_buf[k] {
+                                if acc.pip_buf[k] {
                                     seen[idx] = true;
+                                }
+                            }
+                        }
+                    }
+                    if has_objectives {
+                        for (oi, obj_pts) in
+                            obj_sample_points.iter().enumerate()
+                        {
+                            let seen = &mut acc
+                                .obj_seen_from_dz[my_dz][oi];
+                            acc.unseen_indices.clear();
+                            acc.unseen_points.clear();
+                            for (i, &pt) in
+                                obj_pts.iter().enumerate()
+                            {
+                                if !seen[i] {
+                                    acc.unseen_indices.push(i);
+                                    acc.unseen_points.push(pt);
+                                }
+                            }
+                            if !acc.unseen_points.is_empty() {
+                                batch_point_in_polygon(
+                                    &acc.unseen_points,
+                                    &acc.vis_poly,
+                                    &mut acc.pip_buf,
+                                );
+                                for (k, &idx) in acc
+                                    .unseen_indices
+                                    .iter()
+                                    .enumerate()
+                                {
+                                    if acc.pip_buf[k] {
+                                        seen[idx] = true;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-    }
+
+            acc
+        })
+        .reduce(make_accum, |mut a, b| {
+            // Merge accumulators: sum scalars, OR booleans
+            a.total_ratio += b.total_ratio;
+            for di in 0..num_dzs {
+                a.dz_vis_accum[di].0 += b.dz_vis_accum[di].0;
+                a.dz_vis_accum[di].1 += b.dz_vis_accum[di].1;
+            }
+            for pair in 0..num_dzs * num_dzs {
+                a.dz_cross_obs_count[pair] +=
+                    b.dz_cross_obs_count[pair];
+                if !b.dz_cross_seen[pair].is_empty() {
+                    for (i, &seen) in
+                        b.dz_cross_seen[pair].iter().enumerate()
+                    {
+                        if seen {
+                            a.dz_cross_seen[pair][i] = true;
+                        }
+                    }
+                }
+            }
+            if has_objectives {
+                for di in 0..num_dzs {
+                    for oi in
+                        0..a.obj_seen_from_dz[di].len()
+                    {
+                        for (i, &seen) in b.obj_seen_from_dz
+                            [di][oi]
+                            .iter()
+                            .enumerate()
+                        {
+                            if seen {
+                                a.obj_seen_from_dz[di][oi]
+                                    [i] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            a
+        });
+
+    let total_ratio = merged.total_ratio;
+    let dz_vis_accum = merged.dz_vis_accum;
+    let dz_cross_seen = merged.dz_cross_seen;
+    let dz_cross_obs_count = merged.dz_cross_obs_count;
+    let obj_seen_from_dz = merged.obj_seen_from_dz;
 
     let avg_visibility = total_ratio / sample_points.len() as f64;
     let value =

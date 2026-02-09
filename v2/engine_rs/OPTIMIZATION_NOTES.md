@@ -1,6 +1,6 @@
 # Rust Visibility Optimization Notes
 
-Status: **in progress** on branch `feature/rust-visibility-optimization`
+Status: **in progress** on branch `feature/rust-rayon-parallelism`
 
 ## Context
 
@@ -40,12 +40,28 @@ Inline `ray_segment_intersection` in the hot loop to enable early exit when `t >
 - visibility_100: 2.17s → 1.68s (**-23%**)
 - mission_hna: 4.82s → 4.93s (~same)
 
-### Cumulative improvement
+### Cumulative improvement (single-threaded optimizations)
 | Benchmark | Before | After | Improvement |
 |---|---|---|---|
 | visibility_50 | 872 ms | 476 ms | **-45%** |
 | visibility_100 | 3.80 s | 1.68 s | **-56%** |
 | mission_hna | 5.70 s | 4.93 s | **-14%** |
+
+### 4. Rayon parallel observer loop (commit `3f719bc`)
+Parallelize the observer loop in `compute_layout_visibility` using `rayon::par_iter().fold().reduce()`. Each thread gets a `Box<ThreadAccum>` with its own working buffers (segments, vis_bufs, vis_poly, pip_buf, etc.) and accumulators (total_ratio, dz_vis_accum, dz_cross_seen, obj_seen_from_dz). Merge via sum for ratios/counts and OR for boolean seen arrays.
+
+Note: rayon parallelism changes the order observers are processed, but the final result is mathematically identical (addition is commutative). Parity with Python engine is maintained.
+
+- visibility_50: 476ms → 178ms (**-63%**)
+- visibility_100: 1.68s → 551ms (**-67%**)
+- mission_hna: 4.93s → 1.92s (**-61%**)
+
+### Cumulative improvement (all optimizations including parallelism)
+| Benchmark | Original | After ST opts | After rayon | Total improvement |
+|---|---|---|---|---|
+| visibility_50 | 872 ms | 476 ms | 178 ms | **-80%** |
+| visibility_100 | 3.80 s | 1.68 s | 551 ms | **-85%** |
+| mission_hna | 5.70 s | 4.93 s | 1.92 s | **-66%** |
 
 ## Attempted But Abandoned
 
@@ -80,13 +96,6 @@ Currently fixed at 64 buckets. Could scale with segment count: more segments →
 
 ### DZ/objective PIP optimization
 For the mission benchmark, a large fraction of time is spent in `batch_point_in_polygon` for DZ visibility, cross-DZ tracking, and objective hidability — not in the visibility polygon computation. Optimizing PIP (e.g., spatial partitioning of the visibility polygon) could help mission-heavy workloads.
-
-### Parallelism (rayon)
-The observer loop in `compute_layout_visibility` is embarrassingly parallel — each observer's visibility polygon is independent. Using `rayon::par_iter` could give near-linear speedup with core count. Concerns:
-- Synchronization cost for DZ/cross-DZ/objective accumulators
-- Would need atomic or per-thread accumulation with final merge
-- Wouldn't affect Python engine parity (Rust-only optimization)
-- User expressed caution about synchronization overhead
 
 ### SIMD intersection
 Manually vectorize the ray-segment intersection using `std::arch` SIMD intrinsics (SSE2/AVX2). Process 2-4 rays simultaneously against one segment. Requires branchless arithmetic (replace conditionals with masks). Complex to implement and maintain.
