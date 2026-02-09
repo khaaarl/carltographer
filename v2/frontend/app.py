@@ -225,32 +225,283 @@ WTC_SHORT_FEATURE = {
     ],
 }
 
+# ---------------------------------------------------------------------------
+# GW Misc terrain objects & features
+# ---------------------------------------------------------------------------
+
+# Bases (flat footprints, height=0)
+
+GW_FLAT_RUIN_BASE = {
+    "id": "gw_flat_ruin_base",
+    "name": "Flat Ruin Base (6x4)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 6.0,
+            "depth_inches": 4.0,
+            "height_inches": 0.0,
+        }
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#C8D8C0",
+    "outline_color": "#000000",
+}
+
+GW_RUIN_BASE_12X6 = {
+    "id": "gw_ruin_base_12x6",
+    "name": "Ruin Base (12x6)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 12.0,
+            "depth_inches": 6.0,
+            "height_inches": 0.0,
+        }
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#D4C8A0",
+    "outline_color": "#000000",
+}
+
+GW_RUIN_BASE_10X5 = {
+    "id": "gw_ruin_base_10x5",
+    "name": "Ruin Base (10x5)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 10.0,
+            "depth_inches": 5.0,
+            "height_inches": 0.0,
+        }
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#C0C8D8",
+    "outline_color": "#000000",
+}
+
+# Wall objects (tall shapes that block LOS)
+
+# L-shaped walls (4"x8") for 12x6 base — L in bottom-left corner
+# Base spans x:[-6,6], z:[-3,3]. Walls 0.2" thick, 0.1" from base edges.
+GW_TALL_L_4X8_WALLS = {
+    "id": "gw_tall_L_4x8",
+    "name": "Tall L Walls (4x8)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 8.0,
+            "depth_inches": 0.2,
+            "height_inches": 5.0,
+            "offset": {"x_inches": -1.9, "z_inches": -2.8},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.2,
+            "depth_inches": 4.0,
+            "height_inches": 5.0,
+            "offset": {"x_inches": -5.8, "z_inches": -0.9},
+        },
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#444444",
+    "outline_color": "#000000",
+}
+
+# U-shaped walls (8" wide, 4" deep) for 12x6 base
+# Bar 0.1" from -z long edge, centered (2" margin on each side).
+# Base spans x:[-6,6], z:[-3,3]. Walls 0.2" thick.
+GW_TALL_U_8X4_WALLS = {
+    "id": "gw_tall_U_8x4",
+    "name": "Tall U Walls (8x4)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 8.0,
+            "depth_inches": 0.2,
+            "height_inches": 5.0,
+            "offset": {"x_inches": 0.0, "z_inches": -2.8},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.2,
+            "depth_inches": 4.0,
+            "height_inches": 5.0,
+            "offset": {"x_inches": -3.9, "z_inches": -0.9},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.2,
+            "depth_inches": 4.0,
+            "height_inches": 5.0,
+            "offset": {"x_inches": 3.9, "z_inches": -0.9},
+        },
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#444444",
+    "outline_color": "#000000",
+}
+
+# J-shaped walls (6"x~5") for 10x5 base
+# Longer arm (6") along -z edge, tip in bottom-right corner.
+# Shorter arm (~4.7") extends upward from the other end (J corner NOT in base corner).
+# Base spans x:[-5,5], z:[-2.5,2.5]. Walls 0.2" thick, 0.1" from base edges.
+GW_TALL_J_6X5_WALLS = {
+    "id": "gw_tall_J_6x5",
+    "name": "Tall J Walls (6x5)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 6.0,
+            "depth_inches": 0.2,
+            "height_inches": 5.0,
+            "offset": {"x_inches": 1.9, "z_inches": -2.3},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.2,
+            "depth_inches": 4.7,
+            "height_inches": 5.0,
+            "offset": {"x_inches": -1.1, "z_inches": -0.05},
+        },
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#444444",
+    "outline_color": "#000000",
+}
+
+# L-shaped walls (6"x~5") for 10x5 base
+# Longer arm (6") along -z edge, L corner in bottom-right base corner.
+# Shorter arm (~4.7") extends upward from the corner end.
+# Base spans x:[-5,5], z:[-2.5,2.5]. Walls 0.2" thick, 0.1" from base edges.
+GW_TALL_L_6X5_WALLS = {
+    "id": "gw_tall_L_6x5",
+    "name": "Tall L Walls (6x5)",
+    "shapes": [
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 6.0,
+            "depth_inches": 0.2,
+            "height_inches": 5.0,
+            "offset": {"x_inches": 1.9, "z_inches": -2.3},
+        },
+        {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.2,
+            "depth_inches": 4.7,
+            "height_inches": 5.0,
+            "offset": {"x_inches": 4.8, "z_inches": -0.05},
+        },
+    ],
+    "tags": ["ruins"],
+    "fill_color": "#444444",
+    "outline_color": "#000000",
+}
+
+# GW Misc features
+
+GW_FLAT_RUIN_FEATURE = {
+    "id": "gw_flat_ruin",
+    "feature_type": "obscuring",
+    "components": [{"object_id": "gw_flat_ruin_base"}],
+}
+
+GW_RUIN_L_4X8_FEATURE = {
+    "id": "gw_ruin_L_4x8",
+    "feature_type": "obscuring",
+    "components": [
+        {"object_id": "gw_ruin_base_12x6"},
+        {"object_id": "gw_tall_L_4x8"},
+    ],
+}
+
+GW_RUIN_U_8X4_FEATURE = {
+    "id": "gw_ruin_U_8x4",
+    "feature_type": "obscuring",
+    "components": [
+        {"object_id": "gw_ruin_base_12x6"},
+        {"object_id": "gw_tall_U_8x4"},
+    ],
+}
+
+GW_RUIN_J_6X5_FEATURE = {
+    "id": "gw_ruin_J_6x5",
+    "feature_type": "obscuring",
+    "components": [
+        {"object_id": "gw_ruin_base_10x5"},
+        {"object_id": "gw_tall_J_6x5"},
+    ],
+}
+
+GW_RUIN_L_6X5_FEATURE = {
+    "id": "gw_ruin_L_6x5",
+    "feature_type": "obscuring",
+    "components": [
+        {"object_id": "gw_ruin_base_10x5"},
+        {"object_id": "gw_tall_L_6x5"},
+    ],
+}
+
+
+def _merge_catalogs(name, *catalogs):
+    """Merge multiple catalogs, deduplicating by ID, all unlimited."""
+    seen_obj_ids: set[str] = set()
+    seen_feat_ids: set[str] = set()
+    objects = []
+    features = []
+    for cat in catalogs:
+        for entry in cat["objects"]:
+            oid = entry["item"]["id"]
+            if oid not in seen_obj_ids:
+                seen_obj_ids.add(oid)
+                objects.append({"item": entry["item"], "quantity": None})
+        for entry in cat["features"]:
+            fid = entry["item"]["id"]
+            if fid not in seen_feat_ids:
+                seen_feat_ids.add(fid)
+                features.append({"item": entry["item"], "quantity": None})
+    return {"name": name, "objects": objects, "features": features}
+
+
+_WTC_SET = {
+    "name": "WTC Set",
+    "objects": [
+        {"item": CRATE_OBJECT, "quantity": 2},
+        {"item": WTC_RUINS_BASE_TALL, "quantity": 6},
+        {"item": WTC_RUINS_BASE_SHORT, "quantity": 8},
+        {"item": WTC_THREE_STOREY_WALLS, "quantity": 6},
+        {"item": WTC_SHORT_WALLS, "quantity": 8},
+    ],
+    "features": [
+        {"item": CRATE_FEATURE, "quantity": 2},
+        {"item": WTC_THREE_STOREY_FEATURE, "quantity": 6},
+        {"item": WTC_SHORT_FEATURE, "quantity": 8},
+    ],
+}
+
+_GW_MISC = {
+    "name": "GW Misc",
+    "objects": [
+        {"item": GW_FLAT_RUIN_BASE, "quantity": None},
+        {"item": GW_RUIN_BASE_12X6, "quantity": None},
+        {"item": GW_RUIN_BASE_10X5, "quantity": None},
+        {"item": GW_TALL_L_4X8_WALLS, "quantity": None},
+        {"item": GW_TALL_U_8X4_WALLS, "quantity": None},
+        {"item": GW_TALL_J_6X5_WALLS, "quantity": None},
+        {"item": GW_TALL_L_6X5_WALLS, "quantity": None},
+    ],
+    "features": [
+        {"item": GW_FLAT_RUIN_FEATURE, "quantity": None},
+        {"item": GW_RUIN_L_4X8_FEATURE, "quantity": None},
+        {"item": GW_RUIN_U_8X4_FEATURE, "quantity": None},
+        {"item": GW_RUIN_J_6X5_FEATURE, "quantity": None},
+        {"item": GW_RUIN_L_6X5_FEATURE, "quantity": None},
+    ],
+}
+
 TERRAIN_CATALOGS = {
-    "WTC Set": {
-        "name": "WTC Set",
-        "objects": [
-            {"item": CRATE_OBJECT, "quantity": 2},
-            {"item": WTC_RUINS_BASE_TALL, "quantity": 6},
-            {"item": WTC_RUINS_BASE_SHORT, "quantity": 8},
-            {"item": WTC_THREE_STOREY_WALLS, "quantity": 6},
-            {"item": WTC_SHORT_WALLS, "quantity": 8},
-        ],
-        "features": [
-            {"item": CRATE_FEATURE, "quantity": 2},
-            {"item": WTC_THREE_STOREY_FEATURE, "quantity": 6},
-            {"item": WTC_SHORT_FEATURE, "quantity": 8},
-        ],
-    },
-    "Infinite Tall L's": {
-        "name": "Infinite Tall L's",
-        "objects": [
-            {"item": WTC_RUINS_BASE_TALL, "quantity": None},
-            {"item": WTC_THREE_STOREY_WALLS, "quantity": None},
-        ],
-        "features": [
-            {"item": WTC_THREE_STOREY_FEATURE, "quantity": None},
-        ],
-    },
+    "Omnium Gatherum": _merge_catalogs("Omnium Gatherum", _WTC_SET, _GW_MISC),
+    "WTC Set": _WTC_SET,
+    "GW Misc": _GW_MISC,
 }
 
 
@@ -708,7 +959,7 @@ class ControlPanel(ttk.Frame):
         self.obj_hide_weight_var = tk.StringVar(value="1.0")
 
         # Catalog selection variable
-        self.catalog_var = tk.StringVar(value="WTC Set")
+        self.catalog_var = tk.StringVar(value="Omnium Gatherum")
 
         # Mission selection variables
         self.edition_var = tk.StringVar(value="")
@@ -1175,7 +1426,9 @@ class App:
             "table_depth_inches": 44,
             "placed_features": [],
         }
-        self.objects_by_id = _build_object_index(TERRAIN_CATALOGS["WTC Set"])
+        self.objects_by_id = _build_object_index(
+            TERRAIN_CATALOGS["Omnium Gatherum"]
+        )
 
         # Rendering context for coordinate conversion
         self._render_ppi = None
