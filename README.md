@@ -112,6 +112,7 @@ All commands run from `v2/` with the venv activated:
 
 ```bash
 cd v2 && source .env/bin/activate
+pip install -r requirements-dev.txt
 
 # Run tests
 python -m pytest engine/ -v          # 156 Python engine tests
