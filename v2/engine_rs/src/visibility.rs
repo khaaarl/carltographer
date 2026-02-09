@@ -511,22 +511,12 @@ fn fraction_of_dz_visible(
     count as f64 / dz_sample_points.len() as f64
 }
 
-/// Compute visibility score for a terrain layout.
-///
-/// Samples observer positions on a grid across the table, computes
-/// visibility polygon for each, and returns the average visibility
-/// ratio (visible area / total area).
-pub fn compute_layout_visibility(
-    layout: &TerrainLayout,
-    objects_by_id: &HashMap<String, &TerrainObject>,
-    min_blocking_height: f64,
-) -> serde_json::Value {
+/// Build the full sample grid for a table + mission (same logic as
+/// the grid generation in `compute_layout_visibility`).
+fn build_sample_grid(layout: &TerrainLayout) -> Vec<(f64, f64)> {
     let half_w = layout.table_width_inches / 2.0;
     let half_d = layout.table_depth_inches / 2.0;
-    let table_area =
-        layout.table_width_inches * layout.table_depth_inches;
 
-    // Build objective ranges for proximity check
     let mut obj_ranges: Vec<(f64, f64, f64)> = Vec::new();
     if let Some(ref mission) = layout.mission {
         for obj_marker in &mission.objectives {
@@ -538,8 +528,6 @@ pub fn compute_layout_visibility(
         }
     }
 
-    // Generate grid sample points: integer coords, skip edges, 2" spacing
-    // except near objectives (1" spacing)
     let mut sample_points: Vec<(f64, f64)> = Vec::new();
     let ix_start = (-half_w) as i32 + 1;
     let ix_end = half_w as i32 - 1;
@@ -551,7 +539,6 @@ pub fn compute_layout_visibility(
             if ix % 2 == 0 && iz % 2 == 0 {
                 sample_points.push((ix as f64, iz as f64));
             } else {
-                // Check proximity to any objective
                 let fx = ix as f64;
                 let fz = iz as f64;
                 let mut near_obj = false;
@@ -569,34 +556,167 @@ pub fn compute_layout_visibility(
             }
         }
     }
+    sample_points
+}
 
-    // Filter out observer points inside tall terrain (height >= 1")
-    let mut tall_footprints: Vec<Corners> = Vec::new();
-    {
-        let mut effective_features: Vec<PlacedFeature> = Vec::new();
+/// Cache for visibility computation that avoids regenerating the
+/// observer sample grid on every call.
+///
+/// The sample grid is constant for a given table size + mission.
+/// Tall-terrain filtering is recomputed lazily when `dirty` is set.
+/// The generate loop calls `mark_dirty()` (O(1)) whenever features
+/// change; the actual PIP recompute only happens when visibility is
+/// next needed.
+pub struct VisibilityCache<'a> {
+    objects_by_id: &'a HashMap<String, &'a TerrainObject>,
+    rotationally_symmetric: bool,
+    /// Full sample grid (before tall-terrain filtering).
+    all_sample_points: Vec<(f64, f64)>,
+    /// Cached filtered sample points (rebuilt lazily when dirty).
+    filtered_cache: Vec<(f64, f64)>,
+    /// Whether filtered_cache needs rebuilding.
+    dirty: bool,
+}
+
+impl<'a> VisibilityCache<'a> {
+    pub fn new(
+        layout: &TerrainLayout,
+        objects_by_id: &'a HashMap<String, &'a TerrainObject>,
+    ) -> Self {
+        let all_sample_points = build_sample_grid(layout);
+        let mut cache = Self {
+            objects_by_id,
+            rotationally_symmetric: layout.rotationally_symmetric,
+            all_sample_points,
+            filtered_cache: Vec::new(),
+            dirty: true,
+        };
+        cache.recompute_filtered(layout);
+        cache
+    }
+
+    /// Mark the cache as needing a recompute.
+    /// Called from the generate loop when features change — O(1).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Recompute tall-terrain filtering from scratch.
+    fn recompute_filtered(
+        &mut self,
+        layout: &TerrainLayout,
+    ) {
+        let mut tall_footprints: Vec<Corners> = Vec::new();
         for pf in &layout.placed_features {
-            effective_features.push(pf.clone());
-            if layout.rotationally_symmetric && !is_at_origin(pf) {
-                effective_features
-                    .push(mirror_placed_feature(pf));
-            }
-        }
-        for pf in &effective_features {
             for corners in
-                get_tall_world_obbs(pf, objects_by_id, 1.0)
+                get_tall_world_obbs(pf, self.objects_by_id, 1.0)
             {
                 tall_footprints.push(corners);
             }
+            if self.rotationally_symmetric && !is_at_origin(pf) {
+                let mirror = mirror_placed_feature(pf);
+                for corners in get_tall_world_obbs(
+                    &mirror,
+                    self.objects_by_id,
+                    1.0,
+                ) {
+                    tall_footprints.push(corners);
+                }
+            }
         }
+
+        self.filtered_cache.clear();
+        if tall_footprints.is_empty() {
+            self.filtered_cache
+                .extend_from_slice(&self.all_sample_points);
+        } else {
+            for &(x, z) in &self.all_sample_points {
+                if !tall_footprints
+                    .iter()
+                    .any(|fp| point_in_polygon(x, z, fp))
+                {
+                    self.filtered_cache.push((x, z));
+                }
+            }
+        }
+        self.dirty = false;
     }
 
-    if !tall_footprints.is_empty() {
-        sample_points.retain(|&(x, z)| {
-            !tall_footprints
-                .iter()
-                .any(|fp| point_in_polygon(x, z, fp))
-        });
+    /// Return sample points not inside any tall terrain.
+    /// Recomputes only when dirty (i.e., features changed since
+    /// last call).
+    pub fn get_filtered_sample_points(
+        &mut self,
+        layout: &TerrainLayout,
+    ) -> &[(f64, f64)] {
+        if self.dirty {
+            self.recompute_filtered(layout);
+        }
+        &self.filtered_cache
     }
+}
+
+/// Compute visibility score for a terrain layout.
+///
+/// Samples observer positions on a grid across the table, computes
+/// visibility polygon for each, and returns the average visibility
+/// ratio (visible area / total area).
+///
+/// When `visibility_cache` is provided, uses incremental tall-footprint
+/// filtering instead of recomputing from scratch each call.
+pub fn compute_layout_visibility(
+    layout: &TerrainLayout,
+    objects_by_id: &HashMap<String, &TerrainObject>,
+    min_blocking_height: f64,
+    visibility_cache: Option<&mut VisibilityCache>,
+) -> serde_json::Value {
+    let half_w = layout.table_width_inches / 2.0;
+    let half_d = layout.table_depth_inches / 2.0;
+    let table_area =
+        layout.table_width_inches * layout.table_depth_inches;
+
+    // Get sample points (either from cache or computed fresh)
+    let owned_points: Vec<(f64, f64)>;
+    let sample_points: &[(f64, f64)] = match visibility_cache {
+        Some(cache) => cache.get_filtered_sample_points(layout),
+        None => {
+            let mut pts = build_sample_grid(layout);
+
+            // Filter out observer points inside tall terrain (height >= 1")
+            let mut tall_footprints: Vec<Corners> = Vec::new();
+            {
+                let mut effective_features: Vec<PlacedFeature> =
+                    Vec::new();
+                for pf in &layout.placed_features {
+                    effective_features.push(pf.clone());
+                    if layout.rotationally_symmetric
+                        && !is_at_origin(pf)
+                    {
+                        effective_features
+                            .push(mirror_placed_feature(pf));
+                    }
+                }
+                for pf in &effective_features {
+                    for corners in
+                        get_tall_world_obbs(pf, objects_by_id, 1.0)
+                    {
+                        tall_footprints.push(corners);
+                    }
+                }
+            }
+
+            if !tall_footprints.is_empty() {
+                pts.retain(|&(x, z)| {
+                    !tall_footprints
+                        .iter()
+                        .any(|fp| point_in_polygon(x, z, fp))
+                });
+            }
+
+            owned_points = pts;
+            &owned_points
+        }
+    };
 
     if sample_points.is_empty() {
         return serde_json::json!({
@@ -776,7 +896,7 @@ pub fn compute_layout_visibility(
     let mut vis_bufs = VisBuffers::new();
     let mut vis_poly: Vec<(f64, f64)> = Vec::new();
 
-    for &(sx, sz) in &sample_points {
+    for &(sx, sz) in sample_points {
         get_observer_segments(&precomputed, sx, sz, &mut segments);
 
         if segments.is_empty() {
@@ -1102,7 +1222,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1117,7 +1237,7 @@ mod tests {
             HashMap::new();
         objects.insert("box".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
         assert!(val > 50.0);
@@ -1133,7 +1253,7 @@ mod tests {
             HashMap::new();
         objects.insert("box".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1148,7 +1268,7 @@ mod tests {
             HashMap::new();
         objects.insert("ruins".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
     }
@@ -1301,7 +1421,7 @@ mod tests {
             make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
 
         assert!(result.get("dz_visibility").is_some());
         let dz_vis = &result["dz_visibility"];
@@ -1329,7 +1449,7 @@ mod tests {
             make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
 
         let cross = &result["dz_to_dz_visibility"];
         // No terrain -> nothing hidden -> 0%
@@ -1360,7 +1480,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         assert!(result.get("dz_visibility").is_none());
         assert!(result.get("dz_to_dz_visibility").is_none());
     }
@@ -1449,7 +1569,7 @@ mod tests {
         );
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
 
         assert!(result.get("objective_hidability").is_some());
         let oh = &result["objective_hidability"];
@@ -1474,6 +1594,7 @@ mod tests {
             &empty_layout,
             &empty_objects,
             4.0,
+            None,
         );
         let empty_count =
             empty_result["overall"]["sample_count"].as_i64().unwrap();
@@ -1486,7 +1607,7 @@ mod tests {
             HashMap::new();
         objects.insert("box".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         let filtered_count =
             result["overall"]["sample_count"].as_i64().unwrap();
 
@@ -1502,6 +1623,7 @@ mod tests {
             &empty_layout,
             &empty_objects,
             4.0,
+            None,
         );
         let empty_count =
             empty_result["overall"]["sample_count"].as_i64().unwrap();
@@ -1514,7 +1636,7 @@ mod tests {
             HashMap::new();
         objects.insert("box".into(), &obj);
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         let filtered_count =
             result["overall"]["sample_count"].as_i64().unwrap();
 
@@ -1540,7 +1662,7 @@ mod tests {
         );
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result =
-            compute_layout_visibility(&layout, &objects, 4.0);
+            compute_layout_visibility(&layout, &objects, 4.0, None);
         assert!(result.get("objective_hidability").is_none());
     }
 }

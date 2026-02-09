@@ -490,21 +490,21 @@ def _require_mission(deployment_name: str) -> dict:
 # Test scenarios
 TEST_SCENARIOS = [
     TestScenario(
-        "basic_10_steps", seed=42, num_steps=10, skip_visibility=True
+        "basic_10_steps", seed=42, num_steps=10, skip_visibility=False
     ),
     TestScenario("basic_50_steps", seed=42, num_steps=50),
     TestScenario(
-        "basic_100_steps", seed=42, num_steps=100, skip_visibility=True
+        "basic_100_steps", seed=42, num_steps=100, skip_visibility=False
     ),
-    TestScenario("seed_1", seed=1, num_steps=100, skip_visibility=True),
-    TestScenario("seed_999", seed=999, num_steps=100, skip_visibility=True),
+    TestScenario("seed_1", seed=1, num_steps=100, skip_visibility=False),
+    TestScenario("seed_999", seed=999, num_steps=100, skip_visibility=False),
     TestScenario(
         "small_table",
         seed=42,
         num_steps=50,
         table_width=30.0,
         table_depth=22.0,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "large_table",
@@ -512,21 +512,21 @@ TEST_SCENARIOS = [
         num_steps=50,
         table_width=120.0,
         table_depth=88.0,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "with_edge_gap",
         seed=42,
         num_steps=50,
         min_edge_gap_inches=2.0,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "with_feature_gap",
         seed=42,
         num_steps=50,
         min_feature_gap_inches=3.0,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "with_both_gaps",
@@ -534,7 +534,7 @@ TEST_SCENARIOS = [
         num_steps=50,
         min_edge_gap_inches=2.0,
         min_feature_gap_inches=3.0,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "with_preferences",
@@ -547,7 +547,7 @@ TEST_SCENARIOS = [
                 max=5,
             )
         ],
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "all_features",
@@ -562,7 +562,7 @@ TEST_SCENARIOS = [
                 max=10,
             )
         ],
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "multi_type_no_prefs",
@@ -587,7 +587,7 @@ TEST_SCENARIOS = [
                 max=3,
             ),
         ],
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "multi_type_one_pref",
@@ -601,14 +601,14 @@ TEST_SCENARIOS = [
                 max=4,
             ),
         ],
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "symmetric_basic",
         seed=42,
         num_steps=50,
         rotationally_symmetric=True,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "symmetric_with_gaps",
@@ -617,7 +617,7 @@ TEST_SCENARIOS = [
         min_edge_gap_inches=2.0,
         min_feature_gap_inches=3.0,
         rotationally_symmetric=True,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "symmetric_multi_type",
@@ -637,7 +637,7 @@ TEST_SCENARIOS = [
             ),
         ],
         rotationally_symmetric=True,
-        skip_visibility=True,
+        skip_visibility=False,
     ),
     TestScenario(
         "with_mission_hna",

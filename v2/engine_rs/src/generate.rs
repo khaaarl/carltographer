@@ -186,6 +186,7 @@ fn compute_score(
     objects_by_id: &HashMap<String, &TerrainObject>,
     skip_visibility: bool,
     scoring_targets: Option<&ScoringTargets>,
+    visibility_cache: Option<&mut crate::visibility::VisibilityCache>,
 ) -> f64 {
     // Phase 1: gradient toward satisfying count preferences.
     let counts = count_features_by_type(
@@ -220,6 +221,7 @@ fn compute_score(
         layout,
         objects_by_id,
         4.0,  // min_blocking_height
+        visibility_cache,
     );
 
     let targets = match scoring_targets {
@@ -316,7 +318,14 @@ pub fn generate(params: &EngineParams) -> EngineResult {
         mission: params.mission.clone(),
     };
 
-    let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
+    // Create visibility cache for incremental tall-footprint filtering
+    let mut vis_cache: Option<crate::visibility::VisibilityCache> = if !params.skip_visibility {
+        Some(crate::visibility::VisibilityCache::new(&layout, &objects_by_id))
+    } else {
+        None
+    };
+
+    let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
 
     for _ in 0..num_steps {
         let has_features = !layout.placed_features.is_empty();
@@ -395,12 +404,18 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
+                    if let Some(ref mut cache) = vis_cache {
+                        cache.mark_dirty();
+                    }
+                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
                     if new_score >= current_score {
                         current_score = new_score;
                         nid += 1;
                     } else {
                         layout.placed_features.pop();
+                        if let Some(ref mut cache) = vis_cache {
+                            cache.mark_dirty();
+                        }
                     }
                 } else {
                     layout.placed_features.pop();
@@ -439,11 +454,17 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     params.min_edge_gap_inches,
                     params.rotationally_symmetric,
                 ) {
-                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
+                    if let Some(ref mut cache) = vis_cache {
+                        cache.mark_dirty();
+                    }
+                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
                     if new_score >= current_score {
                         current_score = new_score;
                     } else {
                         layout.placed_features[idx] = old;
+                        if let Some(ref mut cache) = vis_cache {
+                            cache.mark_dirty();
+                        }
                     }
                 } else {
                     layout.placed_features[idx] = old;
@@ -460,11 +481,17 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                     None => continue,
                 };
                 let saved = layout.placed_features.remove(idx);
-                let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref());
+                if let Some(ref mut cache) = vis_cache {
+                    cache.mark_dirty();
+                }
+                let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
                 if new_score >= current_score {
                     current_score = new_score;
                 } else {
                     layout.placed_features.insert(idx, saved);
+                    if let Some(ref mut cache) = vis_cache {
+                        cache.mark_dirty();
+                    }
                 }
             }
             _ => unreachable!(),
@@ -477,6 +504,7 @@ pub fn generate(params: &EngineParams) -> EngineResult {
                 &layout,
                 &objects_by_id,
                 4.0,  // min_blocking_height
+                vis_cache.as_mut(),
             ),
         );
     }

@@ -7,7 +7,10 @@ polygons via angular sweep.
 
 from __future__ import annotations
 
+import itertools
 import math
+
+import numpy as np
 
 from .collision import (
     _is_at_origin,
@@ -98,23 +101,33 @@ def _get_footprint_corners(
     return get_world_obbs(placed, objects_by_id)
 
 
-def _extract_blocking_segments(
+# Edge with precomputed outward normal: (x1, z1, x2, z2, mx, mz, nx, nz)
+_PrecomputedEdge = tuple[
+    float, float, float, float, float, float, float, float
+]
+
+
+# Precomputed obscuring shape: (corners, edges_with_normals)
+_ObscuringShape = tuple[list[tuple[float, float]], list[_PrecomputedEdge]]
+
+
+# Full precomputed data: (static_segments, obscuring_shapes)
+_PrecomputedSegments = tuple[list[Segment], list[_ObscuringShape]]
+
+
+def _precompute_segments(
     layout: TerrainLayout,
     objects_by_id: dict[str, TerrainObject],
-    observer_x: float,
-    observer_z: float,
     min_blocking_height: float = 4.0,
-) -> list[Segment]:
-    """Extract line segments that block LoS from the given observer position.
+) -> _PrecomputedSegments:
+    """Precompute observer-independent segment data.
 
-    Rules:
-    - Regular features (not "obscuring"): shapes with height >= min_blocking_height
-      produce all 4 OBB edges as blocking segments.
-    - Obscuring features: use footprint regardless of height:
-      - Observer inside footprint → skip feature entirely
-      - Observer outside → only back-facing edges block
+    Called once before the observer loop. Returns:
+    - static_segments: segments from regular obstacles (always block, observer-independent)
+    - obscuring_shapes: precomputed corners + edge normals for obscuring features
     """
-    segments: list[Segment] = []
+    static_segments: list[Segment] = []
+    obscuring_shapes: list[_ObscuringShape] = []
 
     # Build effective placed features list (include mirrors for symmetric)
     effective_features: list[PlacedFeature] = []
@@ -132,53 +145,28 @@ def _extract_blocking_segments(
             if not all_corners:
                 continue
 
-            # Check if observer is inside any shape of this feature
-            observer_inside = False
-            for corners in all_corners:
-                if _point_in_polygon(observer_x, observer_z, corners):
-                    observer_inside = True
-                    break
-
-            if observer_inside:
-                continue  # Can see out from inside
-
-            # Observer outside: only back-facing edges block
+            # Precompute edges with outward normals for each shape
             for corners in all_corners:
                 n = len(corners)
+                cx = sum(c[0] for c in corners) / n
+                cz = sum(c[1] for c in corners) / n
+                edges: list[_PrecomputedEdge] = []
                 for i in range(n):
                     j = (i + 1) % n
                     x1, z1 = corners[i]
                     x2, z2 = corners[j]
-
-                    # Edge midpoint
                     mx = (x1 + x2) / 2.0
                     mz = (z1 + z2) / 2.0
-
-                    # Outward normal (perpendicular to edge, pointing outward)
                     ex = x2 - x1
                     ez = z2 - z1
-                    # For CCW winding, outward normal is (ez, -ex)
-                    # For CW winding, outward normal is (-ez, ex)
-                    # We determine outward by checking which side the polygon center is on
-                    # Compute polygon center
-                    cx = sum(c[0] for c in corners) / n
-                    cz = sum(c[1] for c in corners) / n
-                    # Normal candidate 1: (ez, -ex)
                     nx, nz = ez, -ex
-                    # If center is on the same side as normal, flip
                     dot_center = (cx - mx) * nx + (cz - mz) * nz
                     if dot_center > 0:
                         nx, nz = -nx, -nz
-
-                    # Back-facing: outward normal points away from observer
-                    dot_observer = (observer_x - mx) * nx + (
-                        observer_z - mz
-                    ) * nz
-                    if dot_observer < 0:
-                        # Normal points away from observer → back-facing edge
-                        segments.append((x1, z1, x2, z2))
+                    edges.append((x1, z1, x2, z2, mx, mz, nx, nz))
+                obscuring_shapes.append((corners, edges))
         else:
-            # Regular obstacle: only shapes with height >= min_blocking_height
+            # Regular obstacle: precompute transforms + corners once
             for comp in pf.feature.components:
                 obj = objects_by_id.get(comp.object_id)
                 if obj is None:
@@ -199,10 +187,9 @@ def _extract_blocking_segments(
                         shape.depth / 2,
                         math.radians(world.rotation_deg),
                     )
-                    # All 4 edges block
                     for i in range(4):
                         j = (i + 1) % 4
-                        segments.append(
+                        static_segments.append(
                             (
                                 corners[i][0],
                                 corners[i][1],
@@ -211,7 +198,55 @@ def _extract_blocking_segments(
                             )
                         )
 
+    return static_segments, obscuring_shapes
+
+
+def _get_observer_segments(
+    precomputed: _PrecomputedSegments,
+    observer_x: float,
+    observer_z: float,
+) -> list[Segment]:
+    """Get blocking segments for a specific observer position.
+
+    Starts from precomputed static segments, adds back-facing edges
+    from obscuring features based on observer position.
+    """
+    static_segments, obscuring_shapes = precomputed
+
+    # Start with a copy of static segments
+    segments = list(static_segments)
+
+    # Add back-facing edges from obscuring shapes
+    for corners, edges in obscuring_shapes:
+        # Check if observer is inside this shape
+        if _point_in_polygon(observer_x, observer_z, corners):
+            continue  # Can see out from inside
+
+        # Observer outside: only back-facing edges block
+        for x1, z1, x2, z2, mx, mz, nx, nz in edges:
+            dot_observer = (observer_x - mx) * nx + (observer_z - mz) * nz
+            if dot_observer < 0:
+                segments.append((x1, z1, x2, z2))
+
     return segments
+
+
+def _extract_blocking_segments(
+    layout: TerrainLayout,
+    objects_by_id: dict[str, TerrainObject],
+    observer_x: float,
+    observer_z: float,
+    min_blocking_height: float = 4.0,
+) -> list[Segment]:
+    """Extract blocking segments for a single observer (convenience wrapper).
+
+    Calls precompute + get_observer_segments. For multiple observers,
+    use _precompute_segments() once + _get_observer_segments() per observer.
+    """
+    precomputed = _precompute_segments(
+        layout, objects_by_id, min_blocking_height
+    )
+    return _get_observer_segments(precomputed, observer_x, observer_z)
 
 
 def _compute_visibility_polygon(
@@ -225,55 +260,70 @@ def _compute_visibility_polygon(
 
     Returns polygon vertices sorted by angle.
     """
-    # Add table boundary segments
-    all_segments = list(segments)
+    # Table boundary segments
     tw, td = table_half_w, table_half_d
-    all_segments.extend(
-        [
-            (-tw, -td, tw, -td),  # bottom
-            (tw, -td, tw, td),  # right
-            (tw, td, -tw, td),  # top
-            (-tw, td, -tw, -td),  # left
-        ]
-    )
+    table_boundary: list[Segment] = [
+        (-tw, -td, tw, -td),  # bottom
+        (tw, -td, tw, td),  # right
+        (tw, td, -tw, td),  # top
+        (-tw, td, -tw, -td),  # left
+    ]
 
-    # Collect unique endpoints
+    # Collect unique endpoints from both segment lists (no copy)
     endpoints: set[tuple[float, float]] = set()
-    for x1, z1, x2, z2 in all_segments:
+    for x1, z1, x2, z2 in itertools.chain(segments, table_boundary):
         endpoints.add((x1, z1))
         endpoints.add((x2, z2))
 
     # For each endpoint, cast rays at angle and angle +/- epsilon
     EPS = 1e-5
     rays: list[tuple[float, float, float]] = []  # (angle, dx, dz)
+    _atan2 = math.atan2
+    _cos = math.cos
+    _sin = math.sin
 
     for ex, ez in endpoints:
         dx = ex - ox
         dz = ez - oz
-        angle = math.atan2(dz, dx)
-        for a in (angle - EPS, angle, angle + EPS):
-            rays.append((a, math.cos(a), math.sin(a)))
+        angle = _atan2(dz, dx)
+        # Epsilon-shifted rays need trig, but direct ray reuses normalized vector
+        dist = math.sqrt(dx * dx + dz * dz)
+        if dist > 1e-12:
+            ndx = dx / dist
+            ndz = dz / dist
+        else:
+            ndx = _cos(angle)
+            ndz = _sin(angle)
+        a_minus = angle - EPS
+        a_plus = angle + EPS
+        rays.append((a_minus, _cos(a_minus), _sin(a_minus)))
+        rays.append((angle, ndx, ndz))
+        rays.append((a_plus, _cos(a_plus), _sin(a_plus)))
 
     # Sort rays by angle
     rays.sort(key=lambda r: r[0])
 
     # Cast each ray, find nearest intersection
-    polygon: list[tuple[float, float, float]] = []  # (angle, hit_x, hit_z)
+    polygon: list[tuple[float, float]] = []
 
-    for angle, dx, dz in rays:
+    for _angle, dx, dz in rays:
         min_t = float("inf")
-        for x1, z1, x2, z2 in all_segments:
-            t = _ray_segment_intersection(ox, oz, dx, dz, x1, z1, x2, z2)
-            if t is not None and t < min_t:
+        for x1, z1, x2, z2 in itertools.chain(segments, table_boundary):
+            # Inlined _ray_segment_intersection to avoid function call overhead
+            sx = x2 - x1
+            sz = z2 - z1
+            denom = dx * sz - dz * sx
+            if abs(denom) < 1e-12:
+                continue
+            t = ((x1 - ox) * sz - (z1 - oz) * sx) / denom
+            u = ((x1 - ox) * dz - (z1 - oz) * dx) / denom
+            if t >= 0 and 0 <= u <= 1 and t < min_t:
                 min_t = t
 
         if min_t < float("inf"):
-            hit_x = ox + min_t * dx
-            hit_z = oz + min_t * dz
-            polygon.append((angle, hit_x, hit_z))
+            polygon.append((ox + min_t * dx, oz + min_t * dz))
 
-    # Extract just the (x, z) coordinates
-    return [(p[1], p[2]) for p in polygon]
+    return polygon
 
 
 def _sample_points_in_polygon(
@@ -411,10 +461,192 @@ def _fraction_of_dz_visible(
     return count / len(dz_sample_points)
 
 
+def _vectorized_pip_mask(
+    pts_x: np.ndarray,
+    pts_z: np.ndarray,
+    polygon: list[tuple[float, float]],
+) -> np.ndarray:
+    """Vectorized ray-casting PIP: test all points against one polygon.
+
+    Returns boolean array — True where point is inside polygon.
+    """
+    n = len(polygon)
+    inside = np.zeros(len(pts_x), dtype=bool)
+    j = n - 1
+    for i in range(n):
+        xi, zi = polygon[i]
+        xj, zj = polygon[j]
+        crosses = (zi > pts_z) != (zj > pts_z)
+        if np.any(crosses):
+            dz_edge = zj - zi
+            intersect_x = np.where(
+                crosses,
+                (xj - xi) * (pts_z - zi) / np.where(crosses, dz_edge, 1.0)
+                + xi,
+                0.0,
+            )
+            inside ^= crosses & (pts_x < intersect_x)
+        j = i
+    return inside
+
+
+# Key for identifying a placed feature's tall footprint contribution.
+# (feature_type_id, x, z, rotation_deg) — unique because positions are quantized.
+_FeatureKey = tuple[str, float, float, float]
+
+
+class VisibilityCache:
+    """Incrementally maintained cache of which observer grid points are
+    blocked by tall terrain.
+
+    The sample grid is constant for a given table size + mission.
+    The blocked mask is updated incrementally: when one feature is
+    added/moved/deleted, only that feature's contribution is recomputed
+    instead of re-testing all ~600 points against all footprints.
+    """
+
+    def __init__(
+        self,
+        layout: TerrainLayout,
+        objects_by_id: dict[str, TerrainObject],
+    ) -> None:
+        self._objects_by_id = objects_by_id
+        self._rotationally_symmetric = layout.rotationally_symmetric
+
+        # Precompute sample grid (constant for table size + mission)
+        self._all_sample_points = self._build_sample_grid(layout)
+        self._pts_x = np.array([p[0] for p in self._all_sample_points])
+        self._pts_z = np.array([p[1] for p in self._all_sample_points])
+
+        # Per-feature tracking: feature_key -> bool mask of blocked points
+        self._feature_masks: dict[_FeatureKey, np.ndarray] = {}
+        # Count of tall features covering each grid point
+        self._blocked_count = np.zeros(
+            len(self._all_sample_points), dtype=np.int32
+        )
+
+        # Initialize from current layout
+        self._sync(layout)
+
+    @staticmethod
+    def _build_sample_grid(
+        layout: TerrainLayout,
+    ) -> list[tuple[float, float]]:
+        """Generate the observer sample grid (same logic as compute_layout_visibility)."""
+        half_w = layout.table_width / 2.0
+        half_d = layout.table_depth / 2.0
+
+        obj_ranges: list[tuple[float, float, float]] = []
+        if layout.mission is not None:
+            for obj_marker in layout.mission.objectives:
+                obj_ranges.append(
+                    (
+                        obj_marker.position.x,
+                        obj_marker.position.z,
+                        0.75 + obj_marker.range_inches,
+                    )
+                )
+
+        sample_points: list[tuple[float, float]] = []
+        ix_start = int(-half_w) + 1
+        ix_end = int(half_w) - 1
+        iz_start = int(-half_d) + 1
+        iz_end = int(half_d) - 1
+
+        for ix in range(ix_start, ix_end + 1):
+            for iz in range(iz_start, iz_end + 1):
+                if ix % 2 == 0 and iz % 2 == 0:
+                    sample_points.append((float(ix), float(iz)))
+                else:
+                    fx = float(ix)
+                    fz = float(iz)
+                    near_obj = False
+                    for ox, oz, radius in obj_ranges:
+                        dx = fx - ox
+                        dz = fz - oz
+                        if dx * dx + dz * dz <= radius * radius:
+                            near_obj = True
+                            break
+                    if near_obj:
+                        sample_points.append((fx, fz))
+
+        return sample_points
+
+    @staticmethod
+    def _feature_key(
+        pf: PlacedFeature, is_mirror: bool = False
+    ) -> _FeatureKey:
+        prefix = "m:" if is_mirror else ""
+        return (
+            prefix + pf.feature.id,
+            pf.transform.x,
+            pf.transform.z,
+            pf.transform.rotation_deg,
+        )
+
+    def _compute_feature_mask(self, pf: PlacedFeature) -> np.ndarray:
+        """Compute which sample points are inside this feature's tall OBBs."""
+        mask = np.zeros(len(self._all_sample_points), dtype=bool)
+        for corners in get_tall_world_obbs(
+            pf, self._objects_by_id, min_height=1.0
+        ):
+            mask |= _vectorized_pip_mask(self._pts_x, self._pts_z, corners)
+        return mask
+
+    def _effective_features(
+        self, layout: TerrainLayout
+    ) -> list[tuple[PlacedFeature, bool]]:
+        """Build effective features list with mirror flags."""
+        result: list[tuple[PlacedFeature, bool]] = []
+        for pf in layout.placed_features:
+            result.append((pf, False))
+            if self._rotationally_symmetric and not _is_at_origin(pf):
+                result.append((_mirror_placed_feature(pf), True))
+        return result
+
+    def _sync(self, layout: TerrainLayout) -> None:
+        """Sync cache to current layout state via incremental diff."""
+        # Build current feature keys
+        current_keys: dict[_FeatureKey, PlacedFeature] = {}
+        for pf, is_mirror in self._effective_features(layout):
+            key = self._feature_key(pf, is_mirror)
+            current_keys[key] = pf
+
+        new_key_set = set(current_keys.keys())
+        old_key_set = set(self._feature_masks.keys())
+
+        # Remove departed features
+        for key in old_key_set - new_key_set:
+            self._blocked_count -= self._feature_masks[key]
+            del self._feature_masks[key]
+
+        # Add new features
+        for key in new_key_set - old_key_set:
+            mask = self._compute_feature_mask(current_keys[key])
+            if np.any(mask):
+                self._feature_masks[key] = mask
+                self._blocked_count += mask
+
+    def get_filtered_sample_points(
+        self, layout: TerrainLayout
+    ) -> list[tuple[float, float]]:
+        """Return sample points not inside any tall terrain (incrementally cached)."""
+        self._sync(layout)
+        if not self._feature_masks:
+            return list(self._all_sample_points)
+        unblocked = self._blocked_count == 0
+        return [
+            self._all_sample_points[i]
+            for i in range(len(self._all_sample_points))
+            if unblocked[i]
+        ]
+
+
 def compute_layout_visibility(
     layout: TerrainLayout,
     objects_by_id: dict[str, TerrainObject],
     min_blocking_height: float = 4.0,
+    visibility_cache: VisibilityCache | None = None,
 ) -> dict:
     """Compute visibility score for a terrain layout.
 
@@ -438,61 +670,67 @@ def compute_layout_visibility(
     half_d = layout.table_depth / 2.0
     table_area = layout.table_width * layout.table_depth
 
-    # Build objective ranges for proximity check
-    obj_ranges: list[tuple[float, float, float]] = []
-    if layout.mission is not None:
-        for obj_marker in layout.mission.objectives:
-            obj_ranges.append(
-                (
-                    obj_marker.position.x,
-                    obj_marker.position.z,
-                    0.75 + obj_marker.range_inches,
+    if visibility_cache is not None:
+        # Use incremental cache: grid precomputed, blocked mask updated via diff
+        sample_points = visibility_cache.get_filtered_sample_points(layout)
+    else:
+        # No cache: compute grid and filter from scratch
+        obj_ranges: list[tuple[float, float, float]] = []
+        if layout.mission is not None:
+            for obj_marker in layout.mission.objectives:
+                obj_ranges.append(
+                    (
+                        obj_marker.position.x,
+                        obj_marker.position.z,
+                        0.75 + obj_marker.range_inches,
+                    )
                 )
+
+        sample_points: list[tuple[float, float]] = []
+        ix_start = int(-half_w) + 1
+        ix_end = int(half_w) - 1
+        iz_start = int(-half_d) + 1
+        iz_end = int(half_d) - 1
+
+        for ix in range(ix_start, ix_end + 1):
+            for iz in range(iz_start, iz_end + 1):
+                if ix % 2 == 0 and iz % 2 == 0:
+                    sample_points.append((float(ix), float(iz)))
+                else:
+                    fx = float(ix)
+                    fz = float(iz)
+                    near_obj = False
+                    for ox, oz, radius in obj_ranges:
+                        dx = fx - ox
+                        dz = fz - oz
+                        if dx * dx + dz * dz <= radius * radius:
+                            near_obj = True
+                            break
+                    if near_obj:
+                        sample_points.append((fx, fz))
+
+        tall_footprints: list[list[tuple[float, float]]] = []
+        effective_features: list[PlacedFeature] = []
+        for pf in layout.placed_features:
+            effective_features.append(pf)
+            if layout.rotationally_symmetric and not _is_at_origin(pf):
+                effective_features.append(_mirror_placed_feature(pf))
+        for pf in effective_features:
+            for corners in get_tall_world_obbs(
+                pf, objects_by_id, min_height=1.0
+            ):
+                tall_footprints.append(corners)
+
+        if tall_footprints:
+            pts_x = np.array([p[0] for p in sample_points])
+            pts_z = np.array([p[1] for p in sample_points])
+            inside_any = np.zeros(len(sample_points), dtype=bool)
+            for fp in tall_footprints:
+                inside_any |= _vectorized_pip_mask(pts_x, pts_z, fp)
+            mask = ~inside_any
+            sample_points = list(
+                zip(pts_x[mask].tolist(), pts_z[mask].tolist())
             )
-
-    # Generate grid sample points: integer coords, skip edges, 2" spacing
-    # except near objectives (1" spacing)
-    sample_points: list[tuple[float, float]] = []
-    ix_start = int(-half_w) + 1
-    ix_end = int(half_w) - 1
-    iz_start = int(-half_d) + 1
-    iz_end = int(half_d) - 1
-
-    for ix in range(ix_start, ix_end + 1):
-        for iz in range(iz_start, iz_end + 1):
-            if ix % 2 == 0 and iz % 2 == 0:
-                sample_points.append((float(ix), float(iz)))
-            else:
-                # Check proximity to any objective
-                fx = float(ix)
-                fz = float(iz)
-                near_obj = False
-                for ox, oz, radius in obj_ranges:
-                    dx = fx - ox
-                    dz = fz - oz
-                    if dx * dx + dz * dz <= radius * radius:
-                        near_obj = True
-                        break
-                if near_obj:
-                    sample_points.append((fx, fz))
-
-    # Filter out observer points inside tall terrain (height >= 1")
-    tall_footprints: list[list[tuple[float, float]]] = []
-    effective_features: list[PlacedFeature] = []
-    for pf in layout.placed_features:
-        effective_features.append(pf)
-        if layout.rotationally_symmetric and not _is_at_origin(pf):
-            effective_features.append(_mirror_placed_feature(pf))
-    for pf in effective_features:
-        for corners in get_tall_world_obbs(pf, objects_by_id, min_height=1.0):
-            tall_footprints.append(corners)
-
-    if tall_footprints:
-        sample_points = [
-            (x, z)
-            for x, z in sample_points
-            if not any(_point_in_polygon(x, z, fp) for fp in tall_footprints)
-        ]
 
     if not sample_points:
         return {
@@ -562,12 +800,15 @@ def compute_layout_visibility(
                 i: set() for i in range(len(mission.objectives))
             }
 
+    # Precompute observer-independent segment data once
+    precomputed = _precompute_segments(
+        layout, objects_by_id, min_blocking_height
+    )
+
     total_ratio = 0.0
 
     for sx, sz in sample_points:
-        segments = _extract_blocking_segments(
-            layout, objects_by_id, sx, sz, min_blocking_height
-        )
+        segments = _get_observer_segments(precomputed, sx, sz)
 
         if not segments:
             total_ratio += 1.0

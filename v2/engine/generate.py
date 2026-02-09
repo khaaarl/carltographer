@@ -16,7 +16,7 @@ from .types import (
     TerrainObject,
     Transform,
 )
-from .visibility import compute_layout_visibility
+from .visibility import VisibilityCache, compute_layout_visibility
 
 PHASE2_BASE = 1000.0
 
@@ -124,6 +124,7 @@ def _compute_score(
     objects_by_id: dict[str, TerrainObject],
     skip_visibility: bool = False,
     scoring_targets: ScoringTargets | None = None,
+    visibility_cache: VisibilityCache | None = None,
 ) -> float:
     """Compute fitness score for hill-climbing.
 
@@ -145,7 +146,9 @@ def _compute_score(
     if skip_visibility:
         return PHASE2_BASE
 
-    vis = compute_layout_visibility(layout, objects_by_id)
+    vis = compute_layout_visibility(
+        layout, objects_by_id, visibility_cache=visibility_cache
+    )
 
     if scoring_targets is None:
         vis_pct = vis["overall"]["value"]
@@ -241,12 +244,18 @@ def generate(params: EngineParams) -> EngineResult:
     catalog_features = [cf.item for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
 
+    # Create visibility cache for incremental tall-footprint filtering
+    vis_cache: VisibilityCache | None = None
+    if not params.skip_visibility:
+        vis_cache = VisibilityCache(layout, objects_by_id)
+
     current_score = _compute_score(
         layout,
         params.feature_count_preferences,
         objects_by_id,
         params.skip_visibility,
         params.scoring_targets,
+        visibility_cache=vis_cache,
     )
 
     for _ in range(params.num_steps):
@@ -312,6 +321,7 @@ def generate(params: EngineParams) -> EngineResult:
                     objects_by_id,
                     params.skip_visibility,
                     params.scoring_targets,
+                    visibility_cache=vis_cache,
                 )
                 if new_score >= current_score:
                     current_score = new_score
@@ -348,6 +358,7 @@ def generate(params: EngineParams) -> EngineResult:
                     objects_by_id,
                     params.skip_visibility,
                     params.scoring_targets,
+                    visibility_cache=vis_cache,
                 )
                 if new_score >= current_score:
                     current_score = new_score
@@ -370,6 +381,7 @@ def generate(params: EngineParams) -> EngineResult:
                 objects_by_id,
                 params.skip_visibility,
                 params.scoring_targets,
+                visibility_cache=vis_cache,
             )
             if new_score >= current_score:
                 current_score = new_score
@@ -377,7 +389,9 @@ def generate(params: EngineParams) -> EngineResult:
                 features.insert(idx, saved)
 
     if not params.skip_visibility:
-        layout.visibility = compute_layout_visibility(layout, objects_by_id)
+        layout.visibility = compute_layout_visibility(
+            layout, objects_by_id, visibility_cache=vis_cache
+        )
 
     return EngineResult(
         layout=layout,
