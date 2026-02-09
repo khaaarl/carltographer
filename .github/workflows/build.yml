@@ -1,0 +1,107 @@
+name: Build Executables
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub Release with the built executables"
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag (required if creating release, e.g. v0.1.0)"
+        required: false
+        type: string
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact-name: linux-x86_64
+          - os: macos-latest
+            artifact-name: mac-arm64
+          - os: macos-13
+            artifact-name: mac-x86_64
+          - os: windows-latest
+            artifact-name: windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: v2/requirements-dev.txt
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/engine_rs/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('v2/engine_rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Create venv and install dependencies
+        shell: bash
+        working-directory: v2
+        run: |
+          python -m venv .env
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            .env/Scripts/pip install -r requirements-dev.txt
+          else
+            .env/bin/pip install -r requirements-dev.txt
+          fi
+
+      - name: Build executable
+        shell: bash
+        working-directory: v2
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            .env/Scripts/python scripts/package_executable.py
+          else
+            .env/bin/python scripts/package_executable.py
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: carltographer-${{ matrix.artifact-name }}
+          path: v2/dist/
+
+  release:
+    if: ${{ inputs.create_release }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.release_tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "Carltographer ${{ inputs.release_tag }}" \
+            --generate-notes \
+            artifacts/carltographer-*
