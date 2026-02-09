@@ -31,9 +31,9 @@ pub(crate) fn quantize_position(value: f64) -> f64 {
     (value / 0.1).round() * 0.1
 }
 
-pub(crate) fn quantize_angle(value: f64) -> f64 {
-    // Quantize angle to nearest 15 degrees.
-    (value / 15.0).round() * 15.0
+pub(crate) fn quantize_angle(value: f64, granularity: f64) -> f64 {
+    // Quantize angle to nearest multiple of granularity degrees.
+    (value / granularity).round() * granularity
 }
 
 pub(crate) fn count_features_by_type(
@@ -269,6 +269,7 @@ pub(crate) fn temperature_move(
     table_width: f64,
     table_depth: f64,
     t_factor: f64,
+    rotation_granularity: f64,
 ) -> Transform {
     let max_dim = table_width.max(table_depth);
     let move_range = MIN_MOVE_RANGE + t_factor * (max_dim - MIN_MOVE_RANGE);
@@ -283,7 +284,7 @@ pub(crate) fn temperature_move(
 
     // Rotation: 0% chance at t=0, 50% chance at t=1
     let rot = if rotate_check < 0.5 * t_factor {
-        quantize_angle(rot_angle_raw * 360.0)
+        quantize_angle(rot_angle_raw * 360.0, rotation_granularity)
     } else {
         old_transform.rotation_deg
     };
@@ -386,7 +387,7 @@ fn try_single_action(
             let tile_z_min = -half_d + tile_iz as f64 * tile_d;
             let x = quantize_position(tile_x_min + rng.next_float() * tile_w);
             let z = quantize_position(tile_z_min + rng.next_float() * tile_d);
-            let rot = quantize_angle(rng.next_float() * 360.0);
+            let rot = quantize_angle(rng.next_float() * 360.0, params.rotation_granularity_deg);
             layout.placed_features.push(PlacedFeature {
                 feature: new_feat,
                 transform: Transform {
@@ -406,6 +407,8 @@ fn try_single_action(
                 params.min_feature_gap_inches,
                 params.min_edge_gap_inches,
                 params.rotationally_symmetric,
+                params.min_all_feature_gap_inches,
+                params.min_all_edge_gap_inches,
             ) {
                 Some((StepUndo::Add { index: idx, prev_next_id: next_id }, next_id + 1))
             } else {
@@ -426,6 +429,7 @@ fn try_single_action(
                 params.table_width_inches,
                 params.table_depth_inches,
                 t_factor,
+                params.rotation_granularity_deg,
             );
             layout.placed_features[idx].transform = new_transform;
             if is_valid_placement(
@@ -437,6 +441,8 @@ fn try_single_action(
                 params.min_feature_gap_inches,
                 params.min_edge_gap_inches,
                 params.rotationally_symmetric,
+                params.min_all_feature_gap_inches,
+                params.min_all_edge_gap_inches,
             ) {
                 Some((StepUndo::Move { index: idx, old }, next_id))
             } else {
@@ -497,6 +503,8 @@ fn try_single_action(
                 params.min_feature_gap_inches,
                 params.min_edge_gap_inches,
                 params.rotationally_symmetric,
+                params.min_all_feature_gap_inches,
+                params.min_all_edge_gap_inches,
             ) {
                 Some((StepUndo::Replace { index: idx, old, prev_next_id: next_id }, next_id + 1))
             } else {
@@ -511,7 +519,7 @@ fn try_single_action(
                 layout.placed_features.len() as u32 - 1,
             ) as usize;
             let old = layout.placed_features[idx].clone();
-            let new_rot = quantize_angle(rng.next_float() * 360.0);
+            let new_rot = quantize_angle(rng.next_float() * 360.0, params.rotation_granularity_deg);
             layout.placed_features[idx].transform = Transform {
                 x_inches: old.transform.x_inches,
                 y_inches: 0.0,
@@ -527,6 +535,8 @@ fn try_single_action(
                 params.min_feature_gap_inches,
                 params.min_edge_gap_inches,
                 params.rotationally_symmetric,
+                params.min_all_feature_gap_inches,
+                params.min_all_edge_gap_inches,
             ) {
                 Some((StepUndo::Rotate { index: idx, old }, next_id))
             } else {
@@ -655,6 +665,9 @@ mod tests {
             feature_count_preferences: None,
             min_feature_gap_inches: None,
             min_edge_gap_inches: None,
+            min_all_feature_gap_inches: None,
+            min_all_edge_gap_inches: None,
+            rotation_granularity_deg: 15.0,
             rotationally_symmetric: false,
             mission: None,
             skip_visibility: false,
@@ -672,7 +685,7 @@ mod tests {
             x_inches: 0.0, y_inches: 0.0, z_inches: 0.0, rotation_deg: 90.0,
         };
         for _ in 0..100 {
-            let t = temperature_move(&mut rng, &old, 60.0, 44.0, 0.0);
+            let t = temperature_move(&mut rng, &old, 60.0, 44.0, 0.0, 15.0);
             assert!((t.x_inches - old.x_inches).abs() <= MIN_MOVE_RANGE + 0.1);
             assert!((t.z_inches - old.z_inches).abs() <= MIN_MOVE_RANGE + 0.1);
             assert_eq!(t.rotation_deg, 90.0); // no rotation at t=0
@@ -686,7 +699,7 @@ mod tests {
         let old = Transform {
             x_inches: 5.0, y_inches: 0.0, z_inches: 3.0, rotation_deg: 30.0,
         };
-        temperature_move(&mut rng1, &old, 60.0, 44.0, 0.5);
+        temperature_move(&mut rng1, &old, 60.0, 44.0, 0.5, 15.0);
         for _ in 0..4 {
             rng2.next_float();
         }

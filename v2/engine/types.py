@@ -388,6 +388,9 @@ class EngineParams:
     )
     min_feature_gap_inches: float | None = None
     min_edge_gap_inches: float | None = None
+    min_all_feature_gap_inches: float | None = None
+    min_all_edge_gap_inches: float | None = None
+    rotation_granularity_deg: float = 15.0
     rotationally_symmetric: bool = False
     mission: Mission | None = None
     skip_visibility: bool = False
@@ -415,6 +418,9 @@ class EngineParams:
             feature_count_preferences=prefs,
             min_feature_gap_inches=d.get("min_feature_gap_inches"),
             min_edge_gap_inches=d.get("min_edge_gap_inches"),
+            min_all_feature_gap_inches=d.get("min_all_feature_gap_inches"),
+            min_all_edge_gap_inches=d.get("min_all_edge_gap_inches"),
+            rotation_granularity_deg=d.get("rotation_granularity_deg", 15.0),
             rotationally_symmetric=d.get("rotationally_symmetric", False),
             mission=Mission.from_dict(m) if m else None,
             skip_visibility=d.get("skip_visibility", False),

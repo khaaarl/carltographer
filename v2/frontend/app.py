@@ -941,8 +941,11 @@ class ControlPanel(ttk.Frame):
         self.seed_var = tk.StringVar(value="")
         self.num_steps_var = tk.IntVar(value=1)
         self.symmetric_var = tk.BooleanVar(value=False)
+        self.rotation_granularity_var = tk.StringVar(value="15")
         self.min_gap_var = tk.StringVar(value="")
         self.min_edge_gap_var = tk.StringVar(value="")
+        self.min_all_gap_var = tk.StringVar(value="")
+        self.min_all_edge_gap_var = tk.StringVar(value="")
         self.min_crates_var = tk.StringVar(value="")
         self.max_crates_var = tk.StringVar(value="")
         self.min_ruins_var = tk.StringVar(value="")
@@ -973,6 +976,7 @@ class ControlPanel(ttk.Frame):
         self.edition_combo: ttk.Combobox = None
         self.pack_combo: ttk.Combobox = None
         self.deployment_combo: ttk.Combobox = None
+        self.rotation_granularity_combo: ttk.Combobox = None
 
         self._build()
         self._initializing = False
@@ -1024,6 +1028,18 @@ class ControlPanel(ttk.Frame):
             left, text="Rotationally symmetric", variable=self.symmetric_var
         ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
         row += 1
+        row = self._combo(
+            left,
+            row,
+            "Rotation:",
+            self.rotation_granularity_var,
+            "rotation_granularity_combo",
+        )
+        self.rotation_granularity_combo["values"] = [
+            "90",
+            "45",
+            "15",
+        ]
 
         row = self._sep(left, row)
         ttk.Button(left, text="Generate", command=self.on_generate).grid(
@@ -1044,9 +1060,18 @@ class ControlPanel(ttk.Frame):
 
         # --- Right column: Spacing, Feature Counts, Results ---
         row = 0
-        row = self._section(right, row, "Spacing")
+        row = self._section(right, row, "Spacing (tall terrain)")
         row = self._field(right, row, "Feature gap (in):", self.min_gap_var)
         row = self._field(right, row, "Edge gap (in):", self.min_edge_gap_var)
+
+        row = self._sep(right, row)
+        row = self._section(right, row, "Spacing (all features)")
+        row = self._field(
+            right, row, "Feature gap (in):", self.min_all_gap_var
+        )
+        row = self._field(
+            right, row, "Edge gap (in):", self.min_all_edge_gap_var
+        )
 
         row = self._sep(right, row)
         row = self._section(right, row, "Feature Counts")
@@ -1210,6 +1235,9 @@ class ControlPanel(ttk.Frame):
             max_ruins = parse_int(self.max_ruins_var.get())
             min_gap = parse_float(self.min_gap_var.get())
             min_edge_gap = parse_float(self.min_edge_gap_var.get())
+            min_all_gap = parse_float(self.min_all_gap_var.get())
+            min_all_edge_gap = parse_float(self.min_all_edge_gap_var.get())
+            rotation_granularity = float(self.rotation_granularity_var.get())
 
             # Build feature count preferences only if values are set
             feature_count_prefs = []
@@ -1244,6 +1272,7 @@ class ControlPanel(ttk.Frame):
                 "catalog": TERRAIN_CATALOGS[self.catalog_var.get()],
                 "feature_count_preferences": feature_count_prefs,
                 "num_replicas": num_replicas,
+                "rotation_granularity_deg": rotation_granularity,
             }
 
             # Only include gap parameters if they're set
@@ -1251,6 +1280,10 @@ class ControlPanel(ttk.Frame):
                 params["min_feature_gap_inches"] = min_gap
             if min_edge_gap is not None:
                 params["min_edge_gap_inches"] = min_edge_gap
+            if min_all_gap is not None:
+                params["min_all_feature_gap_inches"] = min_all_gap
+            if min_all_edge_gap is not None:
+                params["min_all_edge_gap_inches"] = min_all_edge_gap
 
             # Include mission if selected
             if self.selected_mission is not None:
@@ -1459,6 +1492,11 @@ class App:
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
+
+        # Snap features when rotation granularity changes
+        self.controls.rotation_granularity_var.trace_add(
+            "write", self._on_granularity_changed
+        )
 
         # Log which engine will be used
         self._log_engine_selection()
@@ -1736,6 +1774,8 @@ class App:
         td = params["table_depth_inches"]
         min_gap = params.get("min_feature_gap_inches")
         min_edge_gap = params.get("min_edge_gap_inches")
+        min_all_gap = params.get("min_all_feature_gap_inches")
+        min_all_edge_gap = params.get("min_all_edge_gap_inches")
         symmetric = bool(self.layout.get("rotationally_symmetric", False))
 
         return is_valid_placement(
@@ -1747,6 +1787,8 @@ class App:
             min_feature_gap=min_gap,
             min_edge_gap=min_edge_gap,
             rotationally_symmetric=symmetric,
+            min_all_feature_gap=min_all_gap,
+            min_all_edge_gap=min_all_edge_gap,
         )
 
     # -- selection & popup --
@@ -2205,28 +2247,55 @@ class App:
                 self._move_current_rotation = old_rot
                 self._update_move_overlay(lx, lz, False)
 
+    def _get_rotation_granularity(self):
+        """Return the current rotation granularity from the UI dropdown."""
+        try:
+            return float(self.controls.rotation_granularity_var.get())
+        except (ValueError, AttributeError):
+            return 15.0
+
+    def _on_granularity_changed(self, *args):
+        """Snap all existing features to the new rotation granularity."""
+        if self.layout is None:
+            return
+        granularity = self._get_rotation_granularity()
+        placed = self.layout.get("placed_features")
+        if not isinstance(placed, list):
+            return
+        changed = False
+        for pf in placed:
+            t = pf.get("transform", {})
+            old_rot = t.get("rotation_deg", 0.0)
+            new_rot = round(old_rot / granularity) * granularity
+            if abs(new_rot - old_rot) > 1e-6:
+                t["rotation_deg"] = new_rot
+                changed = True
+        if changed:
+            self._render()
+
     def _on_move_rotate_cw(self, event=None):
-        self._rotate_move_feature(15.0)
+        self._rotate_move_feature(self._get_rotation_granularity())
 
     def _on_move_rotate_ccw(self, event=None):
-        self._rotate_move_feature(-15.0)
+        self._rotate_move_feature(-self._get_rotation_granularity())
 
     def _on_move_scroll(self, event):
         """Handle mouse wheel rotation (Windows/macOS)."""
         if not self._move_mode:
             return
+        g = self._get_rotation_granularity()
         if event.delta > 0:
-            self._rotate_move_feature(15.0)
+            self._rotate_move_feature(g)
         elif event.delta < 0:
-            self._rotate_move_feature(-15.0)
+            self._rotate_move_feature(-g)
 
     def _on_move_scroll_up(self, event):
         """Handle scroll up (Linux Button-4)."""
-        self._rotate_move_feature(15.0)
+        self._rotate_move_feature(self._get_rotation_granularity())
 
     def _on_move_scroll_down(self, event):
         """Handle scroll down (Linux Button-5)."""
-        self._rotate_move_feature(-15.0)
+        self._rotate_move_feature(-self._get_rotation_granularity())
 
     def _on_move_click(self, event):
         """Place feature at current position and show confirm/cancel popup."""

@@ -406,6 +406,72 @@ class TestGenerate:
                         f"overlaps its mirror"
                     )
 
+    def test_rotation_granularity_90(self):
+        """All features have rotation at multiples of 90 degrees."""
+        d = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        d["rotation_granularity_deg"] = 90.0
+        params = EngineParams.from_dict(d)
+        result = generate(params)
+        assert len(result.layout.placed_features) > 0
+        for pf in result.layout.placed_features:
+            rot = pf.transform.rotation_deg % 360.0
+            assert rot % 90.0 < 1e-6 or abs(rot % 90.0 - 90.0) < 1e-6, (
+                f"Rotation {pf.transform.rotation_deg} is not a multiple of 90"
+            )
+
+    def test_rotation_granularity_45(self):
+        """All features have rotation at multiples of 45 degrees."""
+        d = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        d["rotation_granularity_deg"] = 45.0
+        params = EngineParams.from_dict(d)
+        result = generate(params)
+        assert len(result.layout.placed_features) > 0
+        for pf in result.layout.placed_features:
+            rot = pf.transform.rotation_deg % 360.0
+            assert rot % 45.0 < 1e-6 or abs(rot % 45.0 - 45.0) < 1e-6, (
+                f"Rotation {pf.transform.rotation_deg} is not a multiple of 45"
+            )
+
+    def test_all_feature_edge_gap_enforcement(self):
+        """All shapes (not just tall) respect all-feature edge gap."""
+        d = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        d["min_all_edge_gap_inches"] = 2.0
+        params = EngineParams.from_dict(d)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        for pf in result.layout.placed_features:
+            obbs = get_world_obbs(pf, objects_by_id)
+            for corners in obbs:
+                dist = obb_to_table_edge_distance(
+                    corners,
+                    params.table_width,
+                    params.table_depth,
+                )
+                assert dist >= 2.0 - 1e-6, (
+                    f"Shape too close to edge: dist={dist}, min=2.0"
+                )
+
+    def test_all_feature_gap_enforcement(self):
+        """All shape pairs (not just tall) respect all-feature gap."""
+        d = _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        d["min_all_feature_gap_inches"] = 1.5
+        params = EngineParams.from_dict(d)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+
+        features = result.layout.placed_features
+        for i in range(len(features)):
+            obbs_i = get_world_obbs(features[i], objects_by_id)
+            for j in range(i + 1, len(features)):
+                obbs_j = get_world_obbs(features[j], objects_by_id)
+                for ca in obbs_i:
+                    for cb in obbs_j:
+                        dist = obb_distance(ca, cb)
+                        assert dist >= 1.5 - 1e-6, (
+                            f"Features {i} and {j} too close: dist={dist}, min=1.5"
+                        )
+
 
 # -- Replace Action --------------------------------------------------
 

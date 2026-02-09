@@ -195,6 +195,12 @@ pub struct EngineParams {
     pub min_feature_gap_inches: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_edge_gap_inches: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_all_feature_gap_inches: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_all_edge_gap_inches: Option<f64>,
+    #[serde(default = "default_rotation_granularity")]
+    pub rotation_granularity_deg: f64,
     #[serde(default)]
     pub rotationally_symmetric: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,6 +215,10 @@ pub struct EngineParams {
     pub swap_interval: u32,
     #[serde(default = "default_max_temperature")]
     pub max_temperature: f64,
+}
+
+fn default_rotation_granularity() -> f64 {
+    15.0
 }
 
 fn default_swap_interval() -> u32 {

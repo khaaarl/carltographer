@@ -40,9 +40,9 @@ def _quantize_position(value: float) -> float:
     return round(value / 0.1) * 0.1
 
 
-def _quantize_angle(value: float) -> float:
-    """Quantize angle to nearest 15 degrees."""
-    return round(value / 15.0) * 15.0
+def _quantize_angle(value: float, granularity: float = 15.0) -> float:
+    """Quantize angle to nearest multiple of granularity degrees."""
+    return round(value / granularity) * granularity
 
 
 def _count_features_by_type(layout: TerrainLayout) -> dict[str, int]:
@@ -233,6 +233,7 @@ def _temperature_move(
     table_width: float,
     table_depth: float,
     t_factor: float,
+    rotation_granularity: float = 15.0,
 ) -> Transform:
     """Generate a temperature-aware move transform.
 
@@ -253,7 +254,7 @@ def _temperature_move(
 
     # Rotation: 0% chance at t=0, 50% chance at t=1
     if rotate_check < 0.5 * t_factor:
-        rot = _quantize_angle(rot_angle_raw * 360.0)
+        rot = _quantize_angle(rot_angle_raw * 360.0, rotation_granularity)
     else:
         rot = old_transform.rotation_deg
 
@@ -348,7 +349,9 @@ def _try_single_action(
         tile_z_min = -half_d + tile_iz * tile_d
         x = _quantize_position(tile_x_min + rng.next_float() * tile_w)
         z = _quantize_position(tile_z_min + rng.next_float() * tile_d)
-        rot = _quantize_angle(rng.next_float() * 360.0)
+        rot = _quantize_angle(
+            rng.next_float() * 360.0, params.rotation_granularity_deg
+        )
         placed = PlacedFeature(new_feat, Transform(x, z, rot))
         features.append(placed)
         idx = len(features) - 1
@@ -361,6 +364,8 @@ def _try_single_action(
             min_feature_gap=params.min_feature_gap_inches,
             min_edge_gap=params.min_edge_gap_inches,
             rotationally_symmetric=params.rotationally_symmetric,
+            min_all_feature_gap=params.min_all_feature_gap_inches,
+            min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
             return (
                 StepUndo(action="add", index=idx, prev_next_id=next_id),
@@ -380,6 +385,7 @@ def _try_single_action(
             params.table_width,
             params.table_depth,
             t_factor,
+            rotation_granularity=params.rotation_granularity_deg,
         )
         features[idx] = PlacedFeature(old.feature, new_transform)
         if is_valid_placement(
@@ -391,6 +397,8 @@ def _try_single_action(
             min_feature_gap=params.min_feature_gap_inches,
             min_edge_gap=params.min_edge_gap_inches,
             rotationally_symmetric=params.rotationally_symmetric,
+            min_all_feature_gap=params.min_all_feature_gap_inches,
+            min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
             return (
                 StepUndo(action="move", index=idx, old_feature=old),
@@ -446,6 +454,8 @@ def _try_single_action(
             min_feature_gap=params.min_feature_gap_inches,
             min_edge_gap=params.min_edge_gap_inches,
             rotationally_symmetric=params.rotationally_symmetric,
+            min_all_feature_gap=params.min_all_feature_gap_inches,
+            min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
             return (
                 StepUndo(
@@ -464,7 +474,9 @@ def _try_single_action(
         # Rotate: pick random feature, assign new quantized angle
         idx = rng.next_int(0, len(features) - 1)
         old = features[idx]
-        new_rot = _quantize_angle(rng.next_float() * 360.0)
+        new_rot = _quantize_angle(
+            rng.next_float() * 360.0, params.rotation_granularity_deg
+        )
         new_transform = Transform(old.transform.x, old.transform.z, new_rot)
         features[idx] = PlacedFeature(old.feature, new_transform)
         if is_valid_placement(
@@ -476,6 +488,8 @@ def _try_single_action(
             min_feature_gap=params.min_feature_gap_inches,
             min_edge_gap=params.min_edge_gap_inches,
             rotationally_symmetric=params.rotationally_symmetric,
+            min_all_feature_gap=params.min_all_feature_gap_inches,
+            min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
             return (
                 StepUndo(action="rotate", index=idx, old_feature=old),

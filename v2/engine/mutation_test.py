@@ -64,6 +64,55 @@ def _make_params_dict(
     return d
 
 
+# -- Quantize Angle -------------------------------------------------
+
+
+class TestQuantizeAngle:
+    def test_default_15_degree(self):
+        assert _quantize_angle(0.0) == 0.0
+        assert _quantize_angle(7.0) == 0.0
+        assert _quantize_angle(8.0) == 15.0
+        assert _quantize_angle(22.0) == 15.0
+        assert _quantize_angle(23.0) == 30.0
+        assert _quantize_angle(360.0) == 360.0
+
+    def test_90_degree_granularity(self):
+        assert _quantize_angle(0.0, 90.0) == 0.0
+        assert _quantize_angle(44.0, 90.0) == 0.0
+        assert _quantize_angle(45.0, 90.0) == 0.0  # round-half-to-even
+        assert _quantize_angle(46.0, 90.0) == 90.0
+        assert _quantize_angle(130.0, 90.0) == 90.0
+        assert _quantize_angle(136.0, 90.0) == 180.0
+        assert _quantize_angle(270.0, 90.0) == 270.0
+        assert _quantize_angle(350.0, 90.0) == 360.0
+
+    def test_45_degree_granularity(self):
+        assert _quantize_angle(0.0, 45.0) == 0.0
+        assert _quantize_angle(22.0, 45.0) == 0.0
+        assert _quantize_angle(23.0, 45.0) == 45.0
+        assert _quantize_angle(67.0, 45.0) == 45.0
+        assert _quantize_angle(68.0, 45.0) == 90.0
+        assert _quantize_angle(180.0, 45.0) == 180.0
+        assert _quantize_angle(337.0, 45.0) == 315.0
+        assert _quantize_angle(338.0, 45.0) == 360.0
+
+    def test_snapping_from_15_to_90(self):
+        """Simulates snapping existing 15-degree angles to 90-degree grid."""
+        assert _quantize_angle(15.0, 90.0) == 0.0
+        assert _quantize_angle(30.0, 90.0) == 0.0
+        assert _quantize_angle(60.0, 90.0) == 90.0
+        assert _quantize_angle(75.0, 90.0) == 90.0
+        assert _quantize_angle(105.0, 90.0) == 90.0
+        assert _quantize_angle(150.0, 90.0) == 180.0
+
+    def test_snapping_from_15_to_45(self):
+        """Simulates snapping existing 15-degree angles to 45-degree grid."""
+        assert _quantize_angle(15.0, 45.0) == 0.0
+        assert _quantize_angle(30.0, 45.0) == 45.0
+        assert _quantize_angle(60.0, 45.0) == 45.0
+        assert _quantize_angle(75.0, 45.0) == 90.0
+
+
 # -- Temperature Move -----------------------------------------------
 
 

@@ -351,6 +351,8 @@ pub fn is_valid_placement(
     min_feature_gap: Option<f64>,
     min_edge_gap: Option<f64>,
     rotationally_symmetric: bool,
+    min_all_feature_gap: Option<f64>,
+    min_all_edge_gap: Option<f64>,
 ) -> bool {
     let check_pf = &placed_features[check_idx];
     let check_obbs = get_world_obbs(check_pf, objects_by_id);
@@ -386,6 +388,39 @@ pub fn is_valid_placement(
             for cb in &other_obbs {
                 if obbs_overlap(ca, cb) {
                     return false;
+                }
+            }
+        }
+    }
+
+    // 2b. All-feature edge gap (applies to all shapes, not just tall)
+    if let Some(gap) = min_all_edge_gap {
+        if gap > 0.0 {
+            for corners in &check_obbs {
+                let dist = obb_to_table_edge_distance(
+                    corners,
+                    table_width,
+                    table_depth,
+                );
+                if dist < gap {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // 2c. All-feature gap (applies to all shapes, not just tall)
+    if let Some(gap) = min_all_feature_gap {
+        if gap > 0.0 {
+            for pf in &other_features {
+                let other_obbs = get_world_obbs(pf, objects_by_id);
+                for ca in &check_obbs {
+                    for cb in &other_obbs {
+                        let dist = obb_distance(ca, cb);
+                        if dist < gap {
+                            return false;
+                        }
+                    }
                 }
             }
         }
@@ -575,13 +610,13 @@ mod tests {
 
         // This should fail with min_edge_gap_inches=2.0
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, Some(2.0), false
+            &features, 0, 60.0, 44.0, &objs, None, Some(2.0), false, None, None
         );
         assert!(!valid);
 
         // But pass without gap constraint
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, None, false
+            &features, 0, 60.0, 44.0, &objs, None, None, false, None, None
         );
         assert!(valid);
     }
@@ -630,15 +665,151 @@ mod tests {
 
         // Gap is ~4 inches, so should fail with min_feature_gap_inches=5.0
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, Some(5.0), None, false
+            &features, 1, 60.0, 44.0, &objs, Some(5.0), None, false, None, None
         );
         assert!(!valid);
 
         // But pass without gap constraint
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, None, None, false
+            &features, 1, 60.0, 44.0, &objs, None, None, false, None, None
         );
         assert!(valid);
+    }
+
+    /// Catalog with short features (height 0.5") for all-feature gap tests.
+    fn short_catalog() -> TerrainCatalog {
+        TerrainCatalog {
+            objects: vec![CatalogObject {
+                item: TerrainObject {
+                    id: "short_box".into(),
+                    shapes: vec![GeometricShape {
+                        shape_type: "rectangular_prism".into(),
+                        width_inches: 5.0,
+                        depth_inches: 2.5,
+                        height_inches: 0.5,
+                        offset: None,
+                        opacity_height_inches: None,
+                    }],
+                    name: None,
+                    tags: vec![],
+                },
+                quantity: None,
+            }],
+            features: vec![CatalogFeature {
+                item: TerrainFeature {
+                    id: "short_crate".into(),
+                    feature_type: "obstacle".into(),
+                    components: vec![FeatureComponent {
+                        object_id: "short_box".into(),
+                        transform: None,
+                    }],
+                },
+                quantity: None,
+            }],
+            name: None,
+        }
+    }
+
+    #[test]
+    fn all_feature_edge_gap_works_on_short_features() {
+        // Short features (height < 1.0) are ignored by tall-only gap checks
+        // but should be caught by all-feature edge gap.
+        let catalog = short_catalog();
+        let objs = build_object_index(&catalog);
+        let features = vec![PlacedFeature {
+            feature: TerrainFeature {
+                id: "feature_1".into(),
+                feature_type: "obstacle".into(),
+                components: vec![FeatureComponent {
+                    object_id: "short_box".into(),
+                    transform: None,
+                }],
+            },
+            transform: Transform {
+                x_inches: 27.0,  // Close to edge at 30.0
+                y_inches: 0.0,
+                z_inches: 0.0,
+                rotation_deg: 0.0,
+            },
+        }];
+
+        // Tall-only edge gap should pass (feature is short)
+        let valid = is_valid_placement(
+            &features, 0, 60.0, 44.0, &objs, None, Some(5.0), false, None, None
+        );
+        assert!(valid, "Short feature should pass tall-only edge gap");
+
+        // All-feature edge gap should fail (feature is close to edge)
+        let valid = is_valid_placement(
+            &features, 0, 60.0, 44.0, &objs, None, None, false, None, Some(5.0)
+        );
+        assert!(!valid, "Short feature should fail all-feature edge gap");
+
+        // All-feature edge gap with smaller value should pass
+        let valid = is_valid_placement(
+            &features, 0, 60.0, 44.0, &objs, None, None, false, None, Some(0.1)
+        );
+        assert!(valid, "Short feature should pass small all-feature edge gap");
+    }
+
+    #[test]
+    fn all_feature_gap_works_on_short_features() {
+        // Short features are ignored by tall-only feature gap checks
+        // but should be caught by all-feature gap.
+        let catalog = short_catalog();
+        let objs = build_object_index(&catalog);
+        let features = vec![
+            PlacedFeature {
+                feature: TerrainFeature {
+                    id: "feature_1".into(),
+                    feature_type: "obstacle".into(),
+                    components: vec![FeatureComponent {
+                        object_id: "short_box".into(),
+                        transform: None,
+                    }],
+                },
+                transform: Transform {
+                    x_inches: -5.0,
+                    y_inches: 0.0,
+                    z_inches: 0.0,
+                    rotation_deg: 0.0,
+                },
+            },
+            PlacedFeature {
+                feature: TerrainFeature {
+                    id: "feature_2".into(),
+                    feature_type: "obstacle".into(),
+                    components: vec![FeatureComponent {
+                        object_id: "short_box".into(),
+                        transform: None,
+                    }],
+                },
+                transform: Transform {
+                    x_inches: 4.0,  // ~4 inch gap between features
+                    y_inches: 0.0,
+                    z_inches: 0.0,
+                    rotation_deg: 0.0,
+                },
+            },
+        ];
+
+        // Tall-only feature gap should pass (features are short)
+        let valid = is_valid_placement(
+            &features, 1, 60.0, 44.0, &objs, Some(5.0), None, false, None, None
+        );
+        assert!(valid, "Short features should pass tall-only feature gap");
+
+        // All-feature gap should fail (features are close)
+        let valid = is_valid_placement(
+            &features, 1, 60.0, 44.0, &objs, None, None, false, Some(5.0), None
+        );
+        assert!(!valid, "Short features should fail all-feature gap");
+
+        // All-feature gap with smaller value should pass
+        let valid = is_valid_placement(
+            &features, 1, 60.0, 44.0, &objs, None, None, false, Some(1.0), None
+        );
+        assert!(valid, "Short features should pass small all-feature gap");
     }
 
     fn crate_catalog() -> TerrainCatalog {

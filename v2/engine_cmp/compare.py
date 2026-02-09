@@ -463,6 +463,9 @@ def make_test_params(
     num_replicas: Optional[int] = None,
     swap_interval: int = 20,
     max_temperature: float = 50.0,
+    min_all_feature_gap_inches: Optional[float] = None,
+    min_all_edge_gap_inches: Optional[float] = None,
+    rotation_granularity_deg: float = 15.0,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -475,6 +478,9 @@ def make_test_params(
         feature_count_preferences=feature_count_preferences or [],
         min_feature_gap_inches=min_feature_gap_inches,
         min_edge_gap_inches=min_edge_gap_inches,
+        min_all_feature_gap_inches=min_all_feature_gap_inches,
+        min_all_edge_gap_inches=min_all_edge_gap_inches,
+        rotation_granularity_deg=rotation_granularity_deg,
         rotationally_symmetric=rotationally_symmetric,
         mission=mission,
         skip_visibility=skip_visibility,
@@ -505,6 +511,9 @@ class TestScenario:
     num_replicas: Optional[int] = None
     swap_interval: int = 20
     max_temperature: float = 50.0
+    min_all_feature_gap_inches: Optional[float] = None
+    min_all_edge_gap_inches: Optional[float] = None
+    rotation_granularity_deg: float = 15.0
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -524,6 +533,9 @@ class TestScenario:
             num_replicas=self.num_replicas,
             swap_interval=self.swap_interval,
             max_temperature=self.max_temperature,
+            min_all_feature_gap_inches=self.min_all_feature_gap_inches,
+            min_all_edge_gap_inches=self.min_all_edge_gap_inches,
+            rotation_granularity_deg=self.rotation_granularity_deg,
         )
 
 
@@ -799,6 +811,28 @@ TEST_SCENARIOS = [
         catalog=make_quantity_limited_catalog(),
         skip_visibility=True,
     ),
+    TestScenario(
+        "rotation_granularity_90",
+        seed=42,
+        num_steps=100,
+        rotation_granularity_deg=90.0,
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "rotation_granularity_45",
+        seed=77,
+        num_steps=100,
+        rotation_granularity_deg=45.0,
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "all_feature_gaps",
+        seed=42,
+        num_steps=100,
+        min_all_feature_gap_inches=1.5,
+        min_all_edge_gap_inches=1.0,
+        skip_visibility=True,
+    ),
 ]
 
 
@@ -885,6 +919,21 @@ def params_to_json_dict(params: EngineParams) -> dict:
         **(
             {"min_edge_gap_inches": params.min_edge_gap_inches}
             if params.min_edge_gap_inches is not None
+            else {}
+        ),
+        **(
+            {"min_all_feature_gap_inches": params.min_all_feature_gap_inches}
+            if params.min_all_feature_gap_inches is not None
+            else {}
+        ),
+        **(
+            {"min_all_edge_gap_inches": params.min_all_edge_gap_inches}
+            if params.min_all_edge_gap_inches is not None
+            else {}
+        ),
+        **(
+            {"rotation_granularity_deg": params.rotation_granularity_deg}
+            if params.rotation_granularity_deg != 15.0
             else {}
         ),
         **(

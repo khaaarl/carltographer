@@ -311,12 +311,16 @@ def is_valid_placement(
     min_feature_gap: float | None = None,
     min_edge_gap: float | None = None,
     rotationally_symmetric: bool = False,
+    min_all_feature_gap: float | None = None,
+    min_all_edge_gap: float | None = None,
 ) -> bool:
     """Check that the feature at check_idx is validly placed.
 
     Validates:
     1. All shapes within table bounds
     2. No overlap with other features (including mirrors if symmetric)
+    2b. All shapes respect min_all_edge_gap from table edges
+    2c. All shapes respect min_all_feature_gap between features
     3. Tall shapes (height >= 1") respect min_feature_gap
     4. Tall shapes (height >= 1") respect min_edge_gap
     """
@@ -350,6 +354,25 @@ def is_valid_placement(
             for cb in other_obbs:
                 if obbs_overlap(ca, cb):
                     return False
+
+    # 2b. All-feature edge gap (applies to all shapes, not just tall)
+    if min_all_edge_gap is not None and min_all_edge_gap > 0:
+        for corners in check_obbs:
+            dist = obb_to_table_edge_distance(
+                corners, table_width, table_depth
+            )
+            if dist < min_all_edge_gap:
+                return False
+
+    # 2c. All-feature gap (applies to all shapes, not just tall)
+    if min_all_feature_gap is not None and min_all_feature_gap > 0:
+        for pf in other_features:
+            other_obbs = get_world_obbs(pf, objects_by_id)
+            for ca in check_obbs:
+                for cb in other_obbs:
+                    dist = obb_distance(ca, cb)
+                    if dist < min_all_feature_gap:
+                        return False
 
     # Gap checking only for tall geometries (height >= 1")
     check_tall = get_tall_world_obbs(
