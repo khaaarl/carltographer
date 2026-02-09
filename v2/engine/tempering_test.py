@@ -29,7 +29,7 @@ class QuadraticCandidate:
             self._score = -((self.value - self.target) ** 2)
         return self._score
 
-    def step(self, rng: PCG32) -> float:
+    def step(self, rng: PCG32, t_factor: float = 1.0) -> float:
         old_value = self.value
         self.value += (rng.next_float() - 0.5) * 2.0
         self._score = None
@@ -250,7 +250,7 @@ def test_multi_replica_finds_better_solution():
                 )
             return self._score
 
-        def step(self, rng: PCG32) -> float:
+        def step(self, rng: PCG32, t_factor: float = 1.0) -> float:
             old = self.value
             self.value += (rng.next_float() - 0.5) * 2.0
             self._score = None

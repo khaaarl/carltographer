@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .collision import is_valid_placement
 from .prng import PCG32
 from .types import (
@@ -19,6 +21,17 @@ from .types import (
 from .visibility import VisibilityCache, compute_layout_visibility
 
 PHASE2_BASE = 1000.0
+MAX_RETRIES = 100
+RETRY_DECAY = 0.95
+MIN_MOVE_RANGE = 0.1
+
+
+@dataclass
+class StepUndo:
+    action: str  # "noop", "add", "move", "delete", "replace"
+    index: int = -1
+    old_feature: PlacedFeature | None = None
+    prev_next_id: int = 0
 
 
 def _quantize_position(value: float) -> float:
@@ -220,6 +233,255 @@ def _next_feature_id(layout: TerrainLayout) -> int:
     return max_id + 1
 
 
+def _temperature_move(
+    rng: PCG32,
+    old_transform: Transform,
+    table_width: float,
+    table_depth: float,
+    t_factor: float,
+) -> Transform:
+    """Generate a temperature-aware move transform.
+
+    At t_factor=0, displacement is small (±MIN_MOVE_RANGE/2 inches).
+    At t_factor=1, displacement spans the full table.
+    Always consumes exactly 4 PRNG values.
+    """
+    max_dim = max(table_width, table_depth)
+    move_range = MIN_MOVE_RANGE + t_factor * (max_dim - MIN_MOVE_RANGE)
+
+    dx = (rng.next_float() - 0.5) * 2.0 * move_range
+    dz = (rng.next_float() - 0.5) * 2.0 * move_range
+    rotate_check = rng.next_float()
+    rot_angle_raw = rng.next_float()
+
+    new_x = _quantize_position(old_transform.x + dx)
+    new_z = _quantize_position(old_transform.z + dz)
+
+    # Rotation: 0% chance at t=0, 50% chance at t=1
+    if rotate_check < 0.5 * t_factor:
+        rot = _quantize_angle(rot_angle_raw * 360.0)
+    else:
+        rot = old_transform.rotation_deg
+
+    return Transform(new_x, new_z, rot)
+
+
+def _try_single_action(
+    layout: TerrainLayout,
+    rng: PCG32,
+    t_factor: float,
+    next_id: int,
+    catalog_features: list[TerrainFeature],
+    has_catalog: bool,
+    objects_by_id: dict[str, TerrainObject],
+    params: EngineParams,
+) -> tuple[StepUndo, int] | None:
+    """Attempt one mutation action. Returns (undo, new_next_id) or None on failure."""
+    features = layout.placed_features
+    has_features = len(features) > 0
+    feature_counts = _count_features_by_type(layout)
+
+    # Compute action weights: [add, move, delete, replace]
+    add_weight = 1.0 if has_catalog else 0.0
+    move_weight = 1.0 if has_features else 0.0
+    delete_weight = 1.0 if has_features else 0.0
+    replace_weight = 1.0 if (has_features and has_catalog) else 0.0
+
+    # Preference biasing on add/delete only
+    for pref in params.feature_count_preferences:
+        current = feature_counts.get(pref.feature_type, 0)
+        if current < pref.min:
+            shortage = pref.min - current
+            add_weight *= 1.0 + shortage * 2.0
+            delete_weight *= 0.1
+        elif pref.max is not None and current > pref.max:
+            excess = current - pref.max
+            delete_weight *= 1.0 + excess * 2.0
+            add_weight *= 0.1
+
+    weights = [add_weight, move_weight, delete_weight, replace_weight]
+    action = _weighted_choice(rng, weights)
+
+    if action < 0:
+        return None
+
+    if action == 0:
+        # Add
+        template_weights = _compute_template_weights(
+            catalog_features,
+            feature_counts,
+            params.feature_count_preferences,
+        )
+        tidx = _weighted_choice(rng, template_weights)
+        if tidx < 0:
+            return None
+        template = catalog_features[tidx]
+        new_feat = _instantiate_feature(template, next_id)
+        x = _quantize_position(
+            rng.next_float() * params.table_width - params.table_width / 2
+        )
+        z = _quantize_position(
+            rng.next_float() * params.table_depth - params.table_depth / 2
+        )
+        rot = _quantize_angle(rng.next_float() * 360.0)
+        placed = PlacedFeature(new_feat, Transform(x, z, rot))
+        features.append(placed)
+        idx = len(features) - 1
+        if is_valid_placement(
+            features,
+            idx,
+            params.table_width,
+            params.table_depth,
+            objects_by_id,
+            min_feature_gap=params.min_feature_gap_inches,
+            min_edge_gap=params.min_edge_gap_inches,
+            rotationally_symmetric=params.rotationally_symmetric,
+        ):
+            return (
+                StepUndo(action="add", index=idx, prev_next_id=next_id),
+                next_id + 1,
+            )
+        else:
+            features.pop()
+            return None
+
+    elif action == 1:
+        # Move (temperature-aware)
+        idx = rng.next_int(0, len(features) - 1)
+        old = features[idx]
+        new_transform = _temperature_move(
+            rng,
+            old.transform,
+            params.table_width,
+            params.table_depth,
+            t_factor,
+        )
+        features[idx] = PlacedFeature(old.feature, new_transform)
+        if is_valid_placement(
+            features,
+            idx,
+            params.table_width,
+            params.table_depth,
+            objects_by_id,
+            min_feature_gap=params.min_feature_gap_inches,
+            min_edge_gap=params.min_edge_gap_inches,
+            rotationally_symmetric=params.rotationally_symmetric,
+        ):
+            return (
+                StepUndo(action="move", index=idx, old_feature=old),
+                next_id,
+            )
+        else:
+            features[idx] = old
+            return None
+
+    elif action == 2:
+        # Delete
+        delete_weights = _compute_delete_weights(
+            features, feature_counts, params.feature_count_preferences
+        )
+        idx = _weighted_choice(rng, delete_weights)
+        if idx < 0:
+            return None
+        saved = features.pop(idx)
+        return (
+            StepUndo(action="delete", index=idx, old_feature=saved),
+            next_id,
+        )
+
+    elif action == 3:
+        # Replace: remove feature, add different template at same position
+        delete_weights = _compute_delete_weights(
+            features, feature_counts, params.feature_count_preferences
+        )
+        idx = _weighted_choice(rng, delete_weights)
+        if idx < 0:
+            return None
+        template_weights = _compute_template_weights(
+            catalog_features,
+            feature_counts,
+            params.feature_count_preferences,
+        )
+        tidx = _weighted_choice(rng, template_weights)
+        if tidx < 0:
+            return None
+        template = catalog_features[tidx]
+        old = features[idx]
+        new_feat = _instantiate_feature(template, next_id)
+        features[idx] = PlacedFeature(new_feat, old.transform)
+        if is_valid_placement(
+            features,
+            idx,
+            params.table_width,
+            params.table_depth,
+            objects_by_id,
+            min_feature_gap=params.min_feature_gap_inches,
+            min_edge_gap=params.min_edge_gap_inches,
+            rotationally_symmetric=params.rotationally_symmetric,
+        ):
+            return (
+                StepUndo(
+                    action="replace",
+                    index=idx,
+                    old_feature=old,
+                    prev_next_id=next_id,
+                ),
+                next_id + 1,
+            )
+        else:
+            features[idx] = old
+            return None
+
+    return None
+
+
+def _perform_step(
+    layout: TerrainLayout,
+    rng: PCG32,
+    t_factor: float,
+    next_id: int,
+    catalog_features: list[TerrainFeature],
+    has_catalog: bool,
+    objects_by_id: dict[str, TerrainObject],
+    params: EngineParams,
+) -> tuple[StepUndo, int]:
+    """Try mutations with decaying temperature until one succeeds or retries exhausted."""
+    effective_t = t_factor
+    for _ in range(MAX_RETRIES):
+        result = _try_single_action(
+            layout,
+            rng,
+            effective_t,
+            next_id,
+            catalog_features,
+            has_catalog,
+            objects_by_id,
+            params,
+        )
+        if result is not None:
+            return result
+        effective_t *= RETRY_DECAY
+    return StepUndo(action="noop"), next_id
+
+
+def _undo_step(layout: TerrainLayout, undo: StepUndo) -> None:
+    """Revert a mutation using its undo token."""
+    features = layout.placed_features
+    if undo.action == "noop":
+        return
+    elif undo.action == "add":
+        features.pop(undo.index)
+    elif undo.action == "move":
+        assert undo.old_feature is not None
+        features[undo.index] = undo.old_feature
+    elif undo.action == "delete":
+        assert undo.old_feature is not None
+        features.insert(undo.index, undo.old_feature)
+    elif undo.action == "replace":
+        assert undo.old_feature is not None
+        features[undo.index] = undo.old_feature
+
+
 def generate(params: EngineParams) -> EngineResult:
     rng = PCG32(params.seed)
     objects_by_id = _build_object_index(params.catalog)
@@ -259,134 +521,31 @@ def generate(params: EngineParams) -> EngineResult:
     )
 
     for _ in range(params.num_steps):
-        features = layout.placed_features
-        has_features = len(features) > 0
-        feature_counts = _count_features_by_type(layout)
-
-        # Compute action weights with multiplicative biasing across all prefs
-        add_weight = 1.0 if has_catalog else 0.0
-        move_weight = 1.0 if has_features else 0.0
-        delete_weight = 1.0 if has_features else 0.0
-
-        for pref in params.feature_count_preferences:
-            current = feature_counts.get(pref.feature_type, 0)
-            if current < pref.min:
-                shortage = pref.min - current
-                add_weight *= 1.0 + shortage * 2.0
-                delete_weight *= 0.1
-            elif pref.max is not None and current > pref.max:
-                excess = current - pref.max
-                delete_weight *= 1.0 + excess * 2.0
-                add_weight *= 0.1
-
-        weights = [add_weight, move_weight, delete_weight]
-        action = _weighted_choice(rng, weights)
-
-        if action < 0:
-            continue  # All weights were 0
-
-        if action == 0:
-            template_weights = _compute_template_weights(
-                catalog_features,
-                feature_counts,
-                params.feature_count_preferences,
-            )
-            tidx = _weighted_choice(rng, template_weights)
-            if tidx < 0:
-                continue
-            template = catalog_features[tidx]
-            new_feat = _instantiate_feature(template, next_id)
-            x = _quantize_position(
-                rng.next_float() * params.table_width - params.table_width / 2
-            )
-            z = _quantize_position(
-                rng.next_float() * params.table_depth - params.table_depth / 2
-            )
-            rot = _quantize_angle(rng.next_float() * 360.0)
-            placed = PlacedFeature(new_feat, Transform(x, z, rot))
-            features.append(placed)
-            if is_valid_placement(
-                features,
-                len(features) - 1,
-                params.table_width,
-                params.table_depth,
-                objects_by_id,
-                min_feature_gap=params.min_feature_gap_inches,
-                min_edge_gap=params.min_edge_gap_inches,
-                rotationally_symmetric=params.rotationally_symmetric,
-            ):
-                new_score = _compute_score(
-                    layout,
-                    params.feature_count_preferences,
-                    objects_by_id,
-                    params.skip_visibility,
-                    params.scoring_targets,
-                    visibility_cache=vis_cache,
-                )
-                if new_score >= current_score:
-                    current_score = new_score
-                    next_id += 1
-                else:
-                    features.pop()
-            else:
-                features.pop()
-
-        elif action == 1:
-            idx = rng.next_int(0, len(features) - 1)
-            old = features[idx]
-            x = _quantize_position(
-                rng.next_float() * params.table_width - params.table_width / 2
-            )
-            z = _quantize_position(
-                rng.next_float() * params.table_depth - params.table_depth / 2
-            )
-            rot = _quantize_angle(rng.next_float() * 360.0)
-            features[idx] = PlacedFeature(old.feature, Transform(x, z, rot))
-            if is_valid_placement(
-                features,
-                idx,
-                params.table_width,
-                params.table_depth,
-                objects_by_id,
-                min_feature_gap=params.min_feature_gap_inches,
-                min_edge_gap=params.min_edge_gap_inches,
-                rotationally_symmetric=params.rotationally_symmetric,
-            ):
-                new_score = _compute_score(
-                    layout,
-                    params.feature_count_preferences,
-                    objects_by_id,
-                    params.skip_visibility,
-                    params.scoring_targets,
-                    visibility_cache=vis_cache,
-                )
-                if new_score >= current_score:
-                    current_score = new_score
-                else:
-                    features[idx] = old
-            else:
-                features[idx] = old
-
-        elif action == 2:
-            delete_weights = _compute_delete_weights(
-                features, feature_counts, params.feature_count_preferences
-            )
-            idx = _weighted_choice(rng, delete_weights)
-            if idx < 0:
-                continue
-            saved = features.pop(idx)
-            new_score = _compute_score(
-                layout,
-                params.feature_count_preferences,
-                objects_by_id,
-                params.skip_visibility,
-                params.scoring_targets,
-                visibility_cache=vis_cache,
-            )
-            if new_score >= current_score:
-                current_score = new_score
-            else:
-                features.insert(idx, saved)
+        undo, new_next_id = _perform_step(
+            layout,
+            rng,
+            1.0,
+            next_id,
+            catalog_features,
+            has_catalog,
+            objects_by_id,
+            params,
+        )
+        if undo.action == "noop":
+            continue
+        new_score = _compute_score(
+            layout,
+            params.feature_count_preferences,
+            objects_by_id,
+            params.skip_visibility,
+            params.scoring_targets,
+            visibility_cache=vis_cache,
+        )
+        if new_score >= current_score:
+            current_score = new_score
+            next_id = new_next_id
+        else:
+            _undo_step(layout, undo)
 
     if not params.skip_visibility:
         layout.visibility = compute_layout_visibility(

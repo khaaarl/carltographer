@@ -10,6 +10,19 @@ use crate::types::{
 };
 
 const PHASE2_BASE: f64 = 1000.0;
+const MAX_RETRIES: u32 = 100;
+const RETRY_DECAY: f64 = 0.95;
+const MIN_MOVE_RANGE: f64 = 0.1;
+
+/// Undo token for reverting a single mutation step.
+#[derive(Debug)]
+pub enum StepUndo {
+    Noop,
+    Add { index: usize, prev_next_id: u32 },
+    Move { index: usize, old: PlacedFeature },
+    Delete { index: usize, saved: PlacedFeature },
+    Replace { index: usize, old: PlacedFeature, prev_next_id: u32 },
+}
 
 fn build_object_index<'a>(
     catalog: &'a TerrainCatalog,
@@ -285,6 +298,284 @@ fn compute_score(
     PHASE2_BASE + (100.0 - weighted_avg_error)
 }
 
+/// Generate a temperature-aware move transform.
+///
+/// At t_factor=0, displacement is small (±MIN_MOVE_RANGE/2 inches).
+/// At t_factor=1, displacement spans the full table.
+/// Always consumes exactly 4 PRNG values.
+fn temperature_move(
+    rng: &mut Pcg32,
+    old_transform: &Transform,
+    table_width: f64,
+    table_depth: f64,
+    t_factor: f64,
+) -> Transform {
+    let max_dim = table_width.max(table_depth);
+    let move_range = MIN_MOVE_RANGE + t_factor * (max_dim - MIN_MOVE_RANGE);
+
+    let dx = (rng.next_float() - 0.5) * 2.0 * move_range;
+    let dz = (rng.next_float() - 0.5) * 2.0 * move_range;
+    let rotate_check = rng.next_float();
+    let rot_angle_raw = rng.next_float();
+
+    let new_x = quantize_position(old_transform.x_inches + dx);
+    let new_z = quantize_position(old_transform.z_inches + dz);
+
+    // Rotation: 0% chance at t=0, 50% chance at t=1
+    let rot = if rotate_check < 0.5 * t_factor {
+        quantize_angle(rot_angle_raw * 360.0)
+    } else {
+        old_transform.rotation_deg
+    };
+
+    Transform {
+        x_inches: new_x,
+        y_inches: 0.0,
+        z_inches: new_z,
+        rotation_deg: rot,
+    }
+}
+
+/// Attempt one mutation action. Returns (undo, new_next_id) or None on failure.
+fn try_single_action(
+    layout: &mut TerrainLayout,
+    rng: &mut Pcg32,
+    t_factor: f64,
+    next_id: u32,
+    catalog_features: &[&TerrainFeature],
+    has_catalog: bool,
+    objects_by_id: &HashMap<String, &TerrainObject>,
+    params: &EngineParams,
+    prefs: &[FeatureCountPreference],
+) -> Option<(StepUndo, u32)> {
+    let has_features = !layout.placed_features.is_empty();
+    let feature_counts = count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
+
+    // Compute action weights: [add, move, delete, replace]
+    let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
+    let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
+    let mut delete_weight: f64 = if has_features { 1.0 } else { 0.0 };
+    let replace_weight: f64 = if has_features && has_catalog { 1.0 } else { 0.0 };
+
+    // Preference biasing on add/delete only
+    for pref in prefs {
+        let current = feature_counts
+            .get(&pref.feature_type)
+            .copied()
+            .unwrap_or(0);
+        if current < pref.min {
+            let shortage = pref.min - current;
+            add_weight *= 1.0 + shortage as f64 * 2.0;
+            delete_weight *= 0.1;
+        } else if let Some(max) = pref.max {
+            if current > max {
+                let excess = current - max;
+                delete_weight *= 1.0 + excess as f64 * 2.0;
+                add_weight *= 0.1;
+            }
+        }
+    }
+
+    let weights = vec![add_weight, move_weight, delete_weight, replace_weight];
+    let action = match weighted_choice(rng, &weights) {
+        Some(idx) => idx as u32,
+        None => return None,
+    };
+
+    match action {
+        0 => {
+            // Add
+            let template_weights = compute_template_weights(
+                catalog_features,
+                &feature_counts,
+                prefs,
+            );
+            let tidx = match weighted_choice(rng, &template_weights) {
+                Some(i) => i,
+                None => return None,
+            };
+            let template = catalog_features[tidx];
+            let new_feat = instantiate_feature(template, next_id);
+            let x = quantize_position(
+                rng.next_float()
+                    * params.table_width_inches
+                    - params.table_width_inches / 2.0
+            );
+            let z = quantize_position(
+                rng.next_float()
+                    * params.table_depth_inches
+                    - params.table_depth_inches / 2.0
+            );
+            let rot = quantize_angle(rng.next_float() * 360.0);
+            layout.placed_features.push(PlacedFeature {
+                feature: new_feat,
+                transform: Transform {
+                    x_inches: x,
+                    y_inches: 0.0,
+                    z_inches: z,
+                    rotation_deg: rot,
+                },
+            });
+            let idx = layout.placed_features.len() - 1;
+            if is_valid_placement(
+                &layout.placed_features,
+                idx,
+                params.table_width_inches,
+                params.table_depth_inches,
+                objects_by_id,
+                params.min_feature_gap_inches,
+                params.min_edge_gap_inches,
+                params.rotationally_symmetric,
+            ) {
+                Some((StepUndo::Add { index: idx, prev_next_id: next_id }, next_id + 1))
+            } else {
+                layout.placed_features.pop();
+                None
+            }
+        }
+        1 => {
+            // Move (temperature-aware)
+            let idx = rng.next_int(
+                0,
+                layout.placed_features.len() as u32 - 1,
+            ) as usize;
+            let old = layout.placed_features[idx].clone();
+            let new_transform = temperature_move(
+                rng,
+                &old.transform,
+                params.table_width_inches,
+                params.table_depth_inches,
+                t_factor,
+            );
+            layout.placed_features[idx].transform = new_transform;
+            if is_valid_placement(
+                &layout.placed_features,
+                idx,
+                params.table_width_inches,
+                params.table_depth_inches,
+                objects_by_id,
+                params.min_feature_gap_inches,
+                params.min_edge_gap_inches,
+                params.rotationally_symmetric,
+            ) {
+                Some((StepUndo::Move { index: idx, old }, next_id))
+            } else {
+                layout.placed_features[idx] = old;
+                None
+            }
+        }
+        2 => {
+            // Delete
+            let delete_weights = compute_delete_weights(
+                &layout.placed_features,
+                &feature_counts,
+                prefs,
+            );
+            let idx = match weighted_choice(rng, &delete_weights) {
+                Some(i) => i,
+                None => return None,
+            };
+            let saved = layout.placed_features.remove(idx);
+            Some((StepUndo::Delete { index: idx, saved }, next_id))
+        }
+        3 => {
+            // Replace: remove feature, add different template at same position
+            let delete_weights = compute_delete_weights(
+                &layout.placed_features,
+                &feature_counts,
+                prefs,
+            );
+            let idx = match weighted_choice(rng, &delete_weights) {
+                Some(i) => i,
+                None => return None,
+            };
+            let template_weights = compute_template_weights(
+                catalog_features,
+                &feature_counts,
+                prefs,
+            );
+            let tidx = match weighted_choice(rng, &template_weights) {
+                Some(i) => i,
+                None => return None,
+            };
+            let template = catalog_features[tidx];
+            let old = layout.placed_features[idx].clone();
+            let new_feat = instantiate_feature(template, next_id);
+            layout.placed_features[idx] = PlacedFeature {
+                feature: new_feat,
+                transform: old.transform.clone(),
+            };
+            if is_valid_placement(
+                &layout.placed_features,
+                idx,
+                params.table_width_inches,
+                params.table_depth_inches,
+                objects_by_id,
+                params.min_feature_gap_inches,
+                params.min_edge_gap_inches,
+                params.rotationally_symmetric,
+            ) {
+                Some((StepUndo::Replace { index: idx, old, prev_next_id: next_id }, next_id + 1))
+            } else {
+                layout.placed_features[idx] = old;
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Try mutations with decaying temperature until one succeeds or retries exhausted.
+fn perform_step(
+    layout: &mut TerrainLayout,
+    rng: &mut Pcg32,
+    t_factor: f64,
+    next_id: u32,
+    catalog_features: &[&TerrainFeature],
+    has_catalog: bool,
+    objects_by_id: &HashMap<String, &TerrainObject>,
+    params: &EngineParams,
+    prefs: &[FeatureCountPreference],
+) -> (StepUndo, u32) {
+    let mut effective_t = t_factor;
+    for _ in 0..MAX_RETRIES {
+        if let Some(result) = try_single_action(
+            layout,
+            rng,
+            effective_t,
+            next_id,
+            catalog_features,
+            has_catalog,
+            objects_by_id,
+            params,
+            prefs,
+        ) {
+            return result;
+        }
+        effective_t *= RETRY_DECAY;
+    }
+    (StepUndo::Noop, next_id)
+}
+
+/// Revert a mutation using its undo token.
+fn undo_step(layout: &mut TerrainLayout, undo: StepUndo) {
+    match undo {
+        StepUndo::Noop => {}
+        StepUndo::Add { index, .. } => {
+            layout.placed_features.remove(index);
+        }
+        StepUndo::Move { index, old } => {
+            layout.placed_features[index] = old;
+        }
+        StepUndo::Delete { index, saved } => {
+            layout.placed_features.insert(index, saved);
+        }
+        StepUndo::Replace { index, old, .. } => {
+            layout.placed_features[index] = old;
+        }
+    }
+}
+
 pub fn generate(params: &EngineParams) -> EngineResult {
     let mut rng = Pcg32::new(params.seed, 0);
     let objects_by_id = build_object_index(&params.catalog);
@@ -328,173 +619,34 @@ pub fn generate(params: &EngineParams) -> EngineResult {
     let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
 
     for _ in 0..num_steps {
-        let has_features = !layout.placed_features.is_empty();
-        let feature_counts = count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
+        let (undo, new_nid) = perform_step(
+            &mut layout,
+            &mut rng,
+            1.0,
+            nid,
+            &catalog_features,
+            has_catalog,
+            &objects_by_id,
+            params,
+            prefs,
+        );
 
-        // Compute action weights with multiplicative biasing across all prefs
-        let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
-        let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
-        let mut delete_weight: f64 = if has_features { 1.0 } else { 0.0 };
-
-        for pref in prefs {
-            let current = feature_counts
-                .get(&pref.feature_type)
-                .copied()
-                .unwrap_or(0);
-            if current < pref.min {
-                let shortage = pref.min - current;
-                add_weight *= 1.0 + shortage as f64 * 2.0;
-                delete_weight *= 0.1;
-            } else if let Some(max) = pref.max {
-                if current > max {
-                    let excess = current - max;
-                    delete_weight *= 1.0 + excess as f64 * 2.0;
-                    add_weight *= 0.1;
-                }
-            }
+        if matches!(undo, StepUndo::Noop) {
+            continue;
         }
 
-        let weights = vec![add_weight, move_weight, delete_weight];
-        let action = match weighted_choice(&mut rng, &weights) {
-            Some(idx) => idx as u32,
-            None => continue,
-        };
-
-        match action {
-            0 => {
-                let template_weights = compute_template_weights(
-                    &catalog_features,
-                    &feature_counts,
-                    prefs,
-                );
-                let tidx = match weighted_choice(&mut rng, &template_weights) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let template = catalog_features[tidx];
-                let new_feat = instantiate_feature(template, nid);
-                let x = quantize_position(
-                    rng.next_float()
-                        * params.table_width_inches
-                        - params.table_width_inches / 2.0
-                );
-                let z = quantize_position(
-                    rng.next_float()
-                        * params.table_depth_inches
-                        - params.table_depth_inches / 2.0
-                );
-                let rot = quantize_angle(rng.next_float() * 360.0);
-                layout.placed_features.push(PlacedFeature {
-                    feature: new_feat,
-                    transform: Transform {
-                        x_inches: x,
-                        y_inches: 0.0,
-                        z_inches: z,
-                        rotation_deg: rot,
-                    },
-                });
-                let idx = layout.placed_features.len() - 1;
-                if is_valid_placement(
-                    &layout.placed_features,
-                    idx,
-                    params.table_width_inches,
-                    params.table_depth_inches,
-                    &objects_by_id,
-                    params.min_feature_gap_inches,
-                    params.min_edge_gap_inches,
-                    params.rotationally_symmetric,
-                ) {
-                    if let Some(ref mut cache) = vis_cache {
-                        cache.mark_dirty();
-                    }
-                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
-                    if new_score >= current_score {
-                        current_score = new_score;
-                        nid += 1;
-                    } else {
-                        layout.placed_features.pop();
-                        if let Some(ref mut cache) = vis_cache {
-                            cache.mark_dirty();
-                        }
-                    }
-                } else {
-                    layout.placed_features.pop();
-                }
+        if let Some(ref mut cache) = vis_cache {
+            cache.mark_dirty();
+        }
+        let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
+        if new_score >= current_score {
+            current_score = new_score;
+            nid = new_nid;
+        } else {
+            undo_step(&mut layout, undo);
+            if let Some(ref mut cache) = vis_cache {
+                cache.mark_dirty();
             }
-            1 => {
-                let idx = rng.next_int(
-                    0,
-                    layout.placed_features.len() as u32 - 1,
-                ) as usize;
-                let old = layout.placed_features[idx].clone();
-                let x = quantize_position(
-                    rng.next_float()
-                        * params.table_width_inches
-                        - params.table_width_inches / 2.0
-                );
-                let z = quantize_position(
-                    rng.next_float()
-                        * params.table_depth_inches
-                        - params.table_depth_inches / 2.0
-                );
-                let rot = quantize_angle(rng.next_float() * 360.0);
-                layout.placed_features[idx].transform = Transform {
-                    x_inches: x,
-                    y_inches: 0.0,
-                    z_inches: z,
-                    rotation_deg: rot,
-                };
-                if is_valid_placement(
-                    &layout.placed_features,
-                    idx,
-                    params.table_width_inches,
-                    params.table_depth_inches,
-                    &objects_by_id,
-                    params.min_feature_gap_inches,
-                    params.min_edge_gap_inches,
-                    params.rotationally_symmetric,
-                ) {
-                    if let Some(ref mut cache) = vis_cache {
-                        cache.mark_dirty();
-                    }
-                    let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
-                    if new_score >= current_score {
-                        current_score = new_score;
-                    } else {
-                        layout.placed_features[idx] = old;
-                        if let Some(ref mut cache) = vis_cache {
-                            cache.mark_dirty();
-                        }
-                    }
-                } else {
-                    layout.placed_features[idx] = old;
-                }
-            }
-            2 => {
-                let delete_weights = compute_delete_weights(
-                    &layout.placed_features,
-                    &feature_counts,
-                    prefs,
-                );
-                let idx = match weighted_choice(&mut rng, &delete_weights) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let saved = layout.placed_features.remove(idx);
-                if let Some(ref mut cache) = vis_cache {
-                    cache.mark_dirty();
-                }
-                let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
-                if new_score >= current_score {
-                    current_score = new_score;
-                } else {
-                    layout.placed_features.insert(idx, saved);
-                    if let Some(ref mut cache) = vis_cache {
-                        cache.mark_dirty();
-                    }
-                }
-            }
-            _ => unreachable!(),
         }
     }
 
@@ -697,5 +849,33 @@ mod tests {
         params.rotationally_symmetric = true;
         let result = generate(&params);
         assert!(result.layout.rotationally_symmetric);
+    }
+
+    #[test]
+    fn temperature_move_small_t() {
+        let mut rng = Pcg32::new(42, 0);
+        let old = Transform {
+            x_inches: 0.0, y_inches: 0.0, z_inches: 0.0, rotation_deg: 90.0,
+        };
+        for _ in 0..100 {
+            let t = temperature_move(&mut rng, &old, 60.0, 44.0, 0.0);
+            assert!((t.x_inches - old.x_inches).abs() <= MIN_MOVE_RANGE + 0.1);
+            assert!((t.z_inches - old.z_inches).abs() <= MIN_MOVE_RANGE + 0.1);
+            assert_eq!(t.rotation_deg, 90.0); // no rotation at t=0
+        }
+    }
+
+    #[test]
+    fn temperature_move_consumes_4_prng() {
+        let mut rng1 = Pcg32::new(99, 0);
+        let mut rng2 = Pcg32::new(99, 0);
+        let old = Transform {
+            x_inches: 5.0, y_inches: 0.0, z_inches: 3.0, rotation_deg: 30.0,
+        };
+        temperature_move(&mut rng1, &old, 60.0, 44.0, 0.5);
+        for _ in 0..4 {
+            rng2.next_float();
+        }
+        assert_eq!(rng1.next_u32(), rng2.next_u32());
     }
 }

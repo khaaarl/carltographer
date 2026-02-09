@@ -50,7 +50,8 @@ pub trait TemperingCandidate: Clone + Send {
     fn score(&self) -> f64;
 
     /// One mutation step in place. Returns an undo token.
-    fn step(&mut self, rng: &mut Pcg32) -> Self::Undo;
+    /// t_factor controls exploration: 0.0 = minimal, 1.0 = full.
+    fn step(&mut self, rng: &mut Pcg32, t_factor: f64) -> Self::Undo;
 
     /// Revert the last step using the undo token.
     fn undo(&mut self, token: Self::Undo);
@@ -168,12 +169,18 @@ fn attempt_swap<C>(
 fn run_batch<C: TemperingCandidate>(
     replica: &mut ReplicaState<C>,
     batch_size: u32,
+    max_temperature: f64,
     best_score: &mut f64,
     best_candidate: &mut Option<C>,
 ) {
     for _ in 0..batch_size {
         let old_score = replica.candidate.score();
-        let token = replica.candidate.step(&mut replica.rng);
+        let t_factor = if max_temperature > 0.0 {
+            replica.temperature / max_temperature
+        } else {
+            0.0
+        };
+        let token = replica.candidate.step(&mut replica.rng, t_factor);
         let new_score = replica.candidate.score();
 
         if old_score != new_score {
@@ -244,6 +251,7 @@ pub fn run_tempering<C: TemperingCandidate>(
             run_batch(
                 &mut replicas[0],
                 batch_size,
+                params.max_temperature,
                 &mut best_score,
                 &mut Some(best_candidate.clone()),
             );
@@ -265,8 +273,9 @@ pub fn run_tempering<C: TemperingCandidate>(
                     .iter_mut()
                     .zip(per_replica_best.iter_mut())
                     .map(|(replica, prb)| {
+                        let max_temp = params.max_temperature;
                         s.spawn(move || {
-                            run_batch(replica, batch_size, &mut prb.0, &mut prb.1);
+                            run_batch(replica, batch_size, max_temp, &mut prb.0, &mut prb.1);
                         })
                     })
                     .collect();
@@ -336,7 +345,7 @@ mod tests {
                 .unwrap_or_else(|| -((self.value - self.target).powi(2)))
         }
 
-        fn step(&mut self, rng: &mut Pcg32) -> f64 {
+        fn step(&mut self, rng: &mut Pcg32, _t_factor: f64) -> f64 {
             let old = self.value;
             self.value += (rng.next_float() - 0.5) * 2.0;
             self.cached_score = Some(-((self.value - self.target).powi(2)));

@@ -54,8 +54,9 @@ class TemperingCandidate(Protocol):
         """Current score (higher is better). Should be cached."""
         ...
 
-    def step(self, rng: PCG32) -> Any:
+    def step(self, rng: PCG32, t_factor: float = 1.0) -> Any:
         """One mutation step in place. Returns an undo token.
+        t_factor controls exploration: 0.0 = minimal, 1.0 = full.
         May handle internal validation (e.g., revert invalid placements
         before returning). Score updated only if state actually changed."""
         ...
@@ -234,7 +235,12 @@ def run_tempering(
         for replica in replicas:
             for _ in range(batch_size):
                 old_score = replica.candidate.get_score()
-                token = replica.candidate.step(replica.rng)
+                t_factor = (
+                    replica.temperature / params.max_temperature
+                    if params.max_temperature > 0
+                    else 0.0
+                )
+                token = replica.candidate.step(replica.rng, t_factor)
                 new_score = replica.candidate.get_score()
 
                 if old_score != new_score:
