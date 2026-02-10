@@ -1,6 +1,6 @@
 # Rust Visibility Optimization Notes
 
-Status: **merged through rayon parallelism** — future work TBD
+Status: **merged through Z-sorted PIP** — future work TBD
 
 ## Context
 
@@ -56,12 +56,35 @@ Note: rayon parallelism changes the order observers are processed, but the final
 - visibility_100: 1.68s → 551ms (**-67%**)
 - mission_hna: 4.93s → 1.92s (**-61%**)
 
-### Cumulative improvement (all optimizations including parallelism)
-| Benchmark | Original | After ST opts | After rayon | Total improvement |
+### Cumulative improvement (optimizations 1-4: ST opts + parallelism)
+| Benchmark | Original | After ST opts | After rayon | Improvement |
 |---|---|---|---|---|
 | visibility_50 | 872 ms | 476 ms | 178 ms | **-80%** |
 | visibility_100 | 3.80 s | 1.68 s | 551 ms | **-85%** |
 | mission_hna | 5.70 s | 4.93 s | 1.92 s | **-66%** |
+
+### 5. Z-sorted binary search for dz_vis PIP
+
+The profiling data (see below) showed PIP operations dominate at ~94% of mission workload time. The `dz_vis` phase (60% alone) calls `fraction_of_dz_visible_batch` which runs `batch_point_in_polygon` testing ~792 DZ sample points against each observer's visibility polygon.
+
+**Approach**: Pre-sort DZ sample points by Z-coordinate once during DZ setup (before the observer loop). In the PIP edge loop, replace the full O(P) point scan with a binary search per edge to find only points whose Z-coordinate falls in the edge's crossing range [min(zi, zj), max(zi, zj)). This exploits the fact that the edge-crossing test `(zi > pz) != (zj > pz)` can only be true when `pz` is between the edge's Z endpoints.
+
+Data structure: `DzSortedSamples` holds `Vec<(z, x, original_index)>` sorted by z. Uses `slice::partition_point` (binary search) to find the start/end of each edge's Z-range.
+
+Additional micro-optimization: precompute `1.0 / (zj - zi)` once per edge instead of dividing in the inner loop. Skip horizontal edges (zi == zj) entirely since they have no crossings.
+
+Only applied to the `dz_vis` path (`fraction_of_dz_visible_zsorted`). The `cross_dz` and `obj_hide` paths continue using the original `batch_point_in_polygon` because their point sets change per-observer (unseen filtering).
+
+- visibility_50: ~178ms → ~189ms (no DZs — unaffected, within noise)
+- visibility_100: ~551ms → ~582ms (no DZs — unaffected, within noise)
+- **mission_hna: ~1.92s → ~985ms (-49%)**
+
+### Cumulative improvement (all optimizations including Z-sorted PIP)
+| Benchmark | Original | After ST opts | After rayon | After Z-sorted | Total improvement |
+|---|---|---|---|---|---|
+| visibility_50 | 872 ms | 476 ms | 178 ms | ~178 ms | **-80%** |
+| visibility_100 | 3.80 s | 1.68 s | 551 ms | ~551 ms | **-85%** |
+| mission_hna | 5.70 s | 4.93 s | 1.92 s | ~985 ms | **-83%** |
 
 ## Attempted But Abandoned
 
@@ -75,12 +98,19 @@ Precompute `(sx, sz, d_x1, d_z1, num_t)` per segment before the ray loop to avoi
 
 **Result**: Made things **worse** (~+15%). The 40-byte precomputed tuples increased the inner loop's memory footprint. The original 32-byte segment tuples with recomputed arithmetic were faster due to better cache behavior.
 
+### AABB pre-filter on batch_point_in_polygon (Tier 1a from roadmap)
+Compute the bounding box of the visibility polygon and build a candidates list of points inside the AABB. Only run the edge-crossing loop on candidates. The idea was to skip 60-80% of DZ points when the vis polygon is small.
+
+**Result**: No improvement on mission_hna. With the benchmark's sparse terrain (5 small crates on a 60×44" table), each observer's visibility polygon covers nearly the entire table. The vis polygon AABB therefore overlaps almost all DZ sample points (>95%), so the pre-filter skips very few points while adding overhead for building the candidates list and introducing index indirection in the inner loop. The optimization would be effective with denser terrain creating more occlusion, but the benchmark's sparsity makes it counterproductive.
+
+The AABB filter has fundamentally wrong assumptions about the problem structure: in visibility analysis, most observers see most of the table. The vis polygon is usually large (80-95% of table area), making the AABB nearly the full table. A per-edge approach (like Z-sorted binary search) is more effective because it operates on the polygon's edges rather than its bounding box.
+
 ### Pseudoangle (replacing atan2)
 Replace atan2 with a cheap pseudoangle function `p = dx / (|dx| + |dz|)` that maps monotonically to [0, 4). Eliminates all atan2 calls (ray generation + bucket assignment).
 
 **Result**: Mixed. Helped visibility_50 (-19%) and visibility_100 (-14%), but mission_hna regressed (+12%). The pseudoangle maps non-linearly to real angles, causing uneven bucket distribution. Buckets near the cardinal axes become wider (more segments), creating load imbalance. Needs more investigation — the regression may have been noise (other workloads were running on the machine during benchmarking). **Worth retrying with a clean machine.**
 
-## Profiling Results (mission_hna, post-rayon)
+## Profiling Results (mission_hna, post-rayon, pre-Z-sorted)
 
 Instrumented `compute_layout_visibility` with per-phase timing (sum of all thread-nanoseconds). Late-game steps (more terrain, ~730 observers, ~20 segments):
 
@@ -99,45 +129,27 @@ The `dz_vis` phase tests ~792 DZ sample points against each observer's visibilit
 
 ## Future Optimization Ideas (Not Yet Tried)
 
-Organized by expected impact, informed by the profiling results above.
+Organized by expected impact. Updated after Z-sorted PIP optimization.
 
-### Tier 1: PIP optimization (addresses ~94% of mission workload)
+### Tier 1: Remaining PIP optimization (cross_dz + obj_hide paths)
 
-The current `batch_point_in_polygon` is a straightforward edge-crossing algorithm: for each polygon edge, iterate all test points and toggle their inside/outside bit. This is O(E × P) where E = visibility polygon edges (typically 10-40 after raycasting) and P = test points (~792 per DZ). It's called multiple times per observer:
-- `dz_vis`: once per DZ (2 calls × ~792 pts each = ~1584 PIP tests per observer)
-- `cross_dz`: once per cross-DZ pair, but only for unseen points (shrinks over time)
-- `obj_hide`: once per objective per DZ, only for unseen points (~50-100 pts per objective)
+The Z-sorted binary search addressed the `dz_vis` path (~60% of pre-optimization observer time). The `cross_dz` (~27%) and `obj_hide` (~7%) paths still use the original O(E×P) `batch_point_in_polygon`. However, these paths already shrink their point sets via unseen filtering, so the effective P decreases over time. Fresh profiling post-Z-sorted would clarify the new bottleneck distribution.
 
-#### 1a. AABB pre-filter on batch_point_in_polygon
+#### 1a. Z-sorted binary search for cross_dz/obj_hide
 
-**Simplest, try first.** Before the O(E×P) loop, compute the bounding box of the visibility polygon in O(E). Then skip the full PIP test for any point outside the AABB — those are guaranteed outside. Cost: O(E + P) for the filter, plus O(E × P') for the remaining points P' ⊆ P.
+Apply the same Z-sort technique to the cross_dz and obj_hide paths. Challenge: these paths work on `unseen_points` which change per-observer (points are filtered as they become seen). Options:
+- Pre-sort the full DZ points once, then maintain a parallel `unseen` bitmask instead of building `unseen_points` Vec. The Z-sorted PIP would iterate the sorted array, skip seen entries, and only process unseen ones in the Z-range.
+- Or: accept the O(P log P) sort cost per-call. With P shrinking quickly (few hundred → few dozen), the sort is cheap.
 
-Effectiveness depends on how much of the DZ the visibility polygon covers. When terrain blocks most sightlines, the vis polygon is small and the AABB eliminates most DZ points cheaply. In the Hammer and Anvil mission, each DZ is an 18×44" rectangle; a partially-occluded visibility polygon might cover only 20-40% of a DZ's AABB, meaning 60-80% of points could be skipped.
+**Expected impact**: Moderate. The cross_dz/obj_hide paths already benefit from unseen filtering. The Z-sort would help most in early iterations when most points are still unseen.
 
-**Expected impact**: 30-50% reduction in PIP time for mission workloads, or roughly **15-30% on mission_hna overall**. Minimal code change, no parity concerns (Rust-only optimization within a Rust-only parallel code path).
-
-#### 1b. AABB pre-filter on the DZ sample points themselves
-
-Rather than filtering per-observer, precompute a spatial index of DZ sample points (e.g., sort by Z coordinate). Then for each observer's vis polygon AABB, binary-search to find the Z-range of candidate points and only iterate those. This turns the O(P) scan into O(log P + P'), and combined with the X bounds check becomes very tight.
-
-**Expected impact**: Potentially better than 1a for large DZs with small vis polygons. Slightly more setup code.
-
-#### 1c. Horizontal slab decomposition for PIP
+#### 1b. Horizontal slab decomposition for PIP
 
 Preprocess the visibility polygon into horizontal slabs by sorting its vertices by Z coordinate. For each test point, binary-search to find its slab in O(log E), then test against only the 1-2 edges in that slab instead of all E edges. Turns PIP from O(E) per point to O(log E) per point, with O(E log E) setup per observer.
 
-With E=20-40, this turns ~30 edge comparisons into ~5. Combined with AABB pre-filter, this could reduce PIP time by 80-90%.
+With E=20-40, this turns ~30 edge comparisons into ~5. This is complementary to (not competing with) the Z-sorted approach — Z-sorting reduces P per edge, slab decomposition reduces E per point.
 
-**Expected impact**: Significant, but more complex to implement. Worth trying if 1a alone isn't sufficient. Setup cost (O(E log E) per observer) needs to be amortized over enough points — with ~792 DZ points per call this should pay for itself easily.
-
-#### 1d. Restructure dz_vis to track "already fully visible" DZs
-
-Currently `fraction_of_dz_visible_batch` tests all ~792 DZ points for every observer. But once a DZ point has been confirmed visible from enough observers, its contribution to the running average is well-established. We can't use the cross-DZ "unseen" trick directly (since `dz_vis` needs a per-observer fraction, not a boolean), but we could:
-- Track running min/max fraction bounds per DZ
-- Skip DZ fraction computation entirely for observers that can't change the outcome
-- Or: precompute which DZ sample points are definitely inside the vis polygon AABB and only test the borderline ones
-
-This is more speculative — the math is trickier than cross-DZ's boolean tracking.
+**Expected impact**: Moderate improvement on cross_dz/obj_hide. For dz_vis, the Z-sorted approach already handles the P dimension; slab decomposition would help reduce the remaining edge work but with diminishing returns.
 
 ### Tier 2: Raycasting refinements (addresses ~8% of mission, more on non-mission)
 
@@ -195,8 +207,8 @@ Use coarser grid in open areas, finer near terrain or DZ boundaries. Would chang
 
 ### Recommended next steps
 
-1. **Start with 1a (AABB pre-filter)** — simplest change, highest expected impact. Add AABB computation to `batch_point_in_polygon` (or a wrapper) and skip points outside. Benchmark on mission_hna.
-2. If 1a gives good results, try **1b (sorted DZ points)** for further refinement.
-3. If PIP is still the bottleneck after 1a+1b, try **1c (slab decomposition)**.
-4. Once PIP is under control, revisit **2a (pseudoangle hybrid)** for the non-mission benchmarks.
-5. **3a (OBB caching)** is worth doing opportunistically — it's a clean code improvement regardless of performance impact.
+1. **Re-profile mission_hna** to see the new bottleneck distribution post-Z-sorted. The dz_vis path should be dramatically faster; cross_dz and vis_polygon may now be the top targets.
+2. **Try 2a (pseudoangle hybrid)** for the non-mission benchmarks (visibility_50/100). This addresses the raycasting path which is still the bottleneck when DZs are absent.
+3. **Try 1a (Z-sorted cross_dz)** — apply Z-sorted binary search to the cross_dz path using a bitmask approach (skip seen points in the sorted array rather than building unseen_points).
+4. **3a (OBB caching)** is worth doing opportunistically — it's a clean code improvement regardless of performance impact.
+5. **Add a denser benchmark fixture** — the current mission_hna uses sparse 5×2.5" crates. A fixture with 10+ large ruins/obstacles would better represent real-world usage and stress different code paths.

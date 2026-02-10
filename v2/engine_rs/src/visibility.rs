@@ -669,6 +669,88 @@ fn fraction_of_dz_visible_batch(
     count as f64 / dz_sample_points.len() as f64
 }
 
+/// DZ sample points pre-sorted by Z coordinate for efficient binary
+/// search in the PIP inner loop. Built once during DZ setup and reused
+/// for every observer.
+struct DzSortedSamples {
+    /// (z, x, original_index) sorted by z.
+    sorted: Vec<(f64, f64, u32)>,
+    /// Total number of original sample points.
+    count: usize,
+}
+
+impl DzSortedSamples {
+    fn from_points(points: &[(f64, f64)]) -> Self {
+        let mut sorted: Vec<(f64, f64, u32)> = points
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, z))| (z, x, i as u32))
+            .collect();
+        sorted.sort_unstable_by(|a, b| {
+            a.0.partial_cmp(&b.0).unwrap()
+        });
+        Self {
+            count: points.len(),
+            sorted,
+        }
+    }
+}
+
+/// Compute fraction of DZ sample points visible using Z-sorted binary
+/// search. For each polygon edge, binary-searches the sorted points to
+/// find only those in the edge's Z-range, reducing work from O(E×P) to
+/// O(E × (log P + P_range)).
+fn fraction_of_dz_visible_zsorted(
+    vis_poly: &[(f64, f64)],
+    sorted: &DzSortedSamples,
+    inside: &mut Vec<bool>,
+) -> f64 {
+    if sorted.count == 0 || vis_poly.len() < 3 {
+        return 0.0;
+    }
+
+    inside.clear();
+    inside.resize(sorted.count, false);
+
+    let n = vis_poly.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, zi) = vis_poly[i];
+        let (xj, zj) = vis_poly[j];
+
+        // Skip horizontal edges (zi == zj → no Z-crossings possible)
+        if zi == zj {
+            j = i;
+            continue;
+        }
+
+        // Z-range where (zi > pz) != (zj > pz) is true: [z_lo, z_hi)
+        let (z_lo, z_hi) = if zi < zj { (zi, zj) } else { (zj, zi) };
+
+        // Binary search: find range of sorted points with z_lo <= z < z_hi
+        let start =
+            sorted.sorted.partition_point(|s| s.0 < z_lo);
+        let end =
+            sorted.sorted.partition_point(|s| s.0 < z_hi);
+
+        // Process only points in the Z-range
+        let inv_dz = 1.0 / (zj - zi);
+        let dx = xj - xi;
+        for k in start..end {
+            let (pz, px, orig_idx) = sorted.sorted[k];
+            let intersect_x = dx * (pz - zi) * inv_dz + xi;
+            if px < intersect_x {
+                inside[orig_idx as usize] = !inside[orig_idx as usize];
+            }
+        }
+
+        j = i;
+    }
+
+    let count = inside.iter().filter(|&&b| b).count();
+    count as f64 / sorted.count as f64
+}
+
 /// Build the full sample grid for a table + mission (same logic as
 /// the grid generation in `compute_layout_visibility`).
 fn build_sample_grid(layout: &TerrainLayout) -> Vec<(f64, f64)> {
@@ -1019,6 +1101,7 @@ pub fn compute_layout_visibility(
         id: String,
         polys: Vec<Vec<(f64, f64)>>,
         samples: Vec<(f64, f64)>,
+        sorted_samples: DzSortedSamples,
     }
 
     let mut dz_data: Vec<DzData> = Vec::new();
@@ -1035,10 +1118,13 @@ pub fn compute_layout_visibility(
                 })
                 .collect();
             let samples = sample_points_in_dz(dz, 1.0, 0.0);
+            let sorted_samples =
+                DzSortedSamples::from_points(&samples);
             dz_data.push(DzData {
                 id: dz.id.clone(),
                 polys,
                 samples,
+                sorted_samples,
             });
         }
     }
@@ -1262,12 +1348,12 @@ pub fn compute_layout_visibility(
             acc.total_ratio += ratio;
 
             if has_dzs {
-                // Step 1: dz_visibility
+                // Step 1: dz_visibility (Z-sorted binary search)
                 for (di, dd) in dz_data.iter().enumerate() {
                     if obs_dz != Some(di) {
-                        let frac = fraction_of_dz_visible_batch(
+                        let frac = fraction_of_dz_visible_zsorted(
                             &acc.vis_poly,
-                            &dd.samples,
+                            &dd.sorted_samples,
                             &mut acc.pip_buf,
                         );
                         acc.dz_vis_accum[di].0 += frac;
