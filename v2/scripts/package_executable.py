@@ -166,7 +166,7 @@ def find_site_packages() -> str | None:
         [
             str(VENV_PYTHON),
             "-c",
-            "import site; print(site.getsitepackages()[0])",
+            "import sysconfig; print(sysconfig.get_path('purelib'))",
         ],
         capture_output=True,
         text=True,

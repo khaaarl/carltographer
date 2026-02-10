@@ -23,12 +23,13 @@ jobs:
             artifact-name: linux-x86_64
           - os: macos-latest
             artifact-name: mac-arm64
-          - os: macos-13
-            artifact-name: mac-x86_64
           - os: windows-latest
             artifact-name: windows-x86_64
 
     runs-on: ${{ matrix.os }}
+
+    env:
+      PYTHONUTF8: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -62,14 +63,24 @@ jobs:
             .env/bin/pip install -r requirements-dev.txt
           fi
 
-      - name: Build executable
+      - name: Build Rust engine and run parity tests
         shell: bash
         working-directory: v2
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            .env/Scripts/python scripts/package_executable.py
+            .env/Scripts/python scripts/build_rust_engine.py
           else
-            .env/bin/python scripts/package_executable.py
+            .env/bin/python scripts/build_rust_engine.py
+          fi
+
+      - name: Package executable
+        shell: bash
+        working-directory: v2
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            .env/Scripts/python scripts/package_executable.py --skip-rust-build
+          else
+            .env/bin/python scripts/package_executable.py --skip-rust-build
           fi
 
       - name: Upload artifact
