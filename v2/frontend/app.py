@@ -554,13 +554,24 @@ class BattlefieldRenderer:
     """Renders a terrain layout to a Pillow image."""
 
     def __init__(
-        self, table_width, table_depth, ppi, objects_by_id, mission=None
+        self,
+        table_width,
+        table_depth,
+        ppi,
+        objects_by_id,
+        mission=None,
+        line_scale=1,
     ):
         self.table_width = table_width
         self.table_depth = table_depth
         self.ppi = ppi
         self.objects_by_id = objects_by_id
         self.mission = mission
+        self.line_scale = line_scale
+
+    def _lw(self, base_width):
+        """Scale a pixel width by the supersample factor."""
+        return max(1, round(base_width * self.line_scale))
 
     def _to_px(self, x_inches, z_inches):
         """Table coords (center origin) -> pixel coords (top-left origin)."""
@@ -668,12 +679,17 @@ class BattlefieldRenderer:
         if has_mission:
             self._draw_zone_aware_grid(draw, w, h, dz_polys)
         else:
+            glw = self._lw(1)
             for ix in range(1, int(self.table_width)):
                 px = int(ix * self.ppi)
-                draw.line([(px, 0), (px, h - 1)], fill=NO_MANS_LAND_GRID)
+                draw.line(
+                    [(px, 0), (px, h - 1)], fill=NO_MANS_LAND_GRID, width=glw
+                )
             for iz in range(1, int(self.table_depth)):
                 py = int(iz * self.ppi)
-                draw.line([(0, py), (w - 1, py)], fill=NO_MANS_LAND_GRID)
+                draw.line(
+                    [(0, py), (w - 1, py)], fill=NO_MANS_LAND_GRID, width=glw
+                )
 
         # 4. Terrain features
         placed = layout["placed_features"]
@@ -708,13 +724,16 @@ class BattlefieldRenderer:
                 self._draw_objective(draw, obj)
 
         # 6. Table border
-        draw.rectangle([0, 0, w - 1, h - 1], outline=TABLE_BORDER, width=3)
+        draw.rectangle(
+            [0, 0, w - 1, h - 1], outline=TABLE_BORDER, width=self._lw(3)
+        )
         return img
 
     def _draw_zone_aware_grid(self, draw, w, h, dz_polys):
         """Draw grid lines with colors matching the zone they pass through."""
         hw = self.table_width / 2
         hd = self.table_depth / 2
+        glw = self._lw(1)
 
         # Vertical grid lines
         for ix in range(1, int(self.table_width)):
@@ -732,7 +751,7 @@ class BattlefieldRenderer:
                 color = self._grid_color_for_zone(zone)
                 py0 = int((z_breaks_sorted[i] + hd) * self.ppi)
                 py1 = int((z_breaks_sorted[i + 1] + hd) * self.ppi)
-                draw.line([(px, py0), (px, py1)], fill=color)
+                draw.line([(px, py0), (px, py1)], fill=color, width=glw)
 
         # Horizontal grid lines
         for iz in range(1, int(self.table_depth)):
@@ -750,7 +769,7 @@ class BattlefieldRenderer:
                 color = self._grid_color_for_zone(zone)
                 px0 = int((x_breaks_sorted[i] + hw) * self.ppi)
                 px1 = int((x_breaks_sorted[i + 1] + hw) * self.ppi)
-                draw.line([(px0, py), (px1, py)], fill=color)
+                draw.line([(px0, py), (px1, py)], fill=color, width=glw)
 
     def _grid_color_for_zone(self, zone_color_id):
         """Return the grid color for a given zone (or NML if None)."""
@@ -770,7 +789,7 @@ class BattlefieldRenderer:
             [cx - r_px, cy - r_px, cx + r_px, cy + r_px],
             fill=OBJECTIVE_FILL,
             outline=OBJECTIVE_OUTLINE,
-            width=2,
+            width=self._lw(2),
         )
 
         # White skull icon
@@ -832,7 +851,11 @@ class BattlefieldRenderer:
             end = start + arc_angle
             bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
             draw.arc(
-                bbox, start=start, end=end, fill=RANGE_DASH_COLOR, width=2
+                bbox,
+                start=start,
+                end=end,
+                fill=RANGE_DASH_COLOR,
+                width=self._lw(2),
             )
 
     def _draw_placed_feature(self, draw, placed_feature):
@@ -890,7 +913,7 @@ class BattlefieldRenderer:
             px_corners,
             fill=None,
             outline=HIGHLIGHT_COLOR,
-            width=3,
+            width=self._lw(3),
         )
 
     def _draw_rect(self, draw, shape, tf, fill, outline):
@@ -913,7 +936,7 @@ class BattlefieldRenderer:
             px_corners,
             fill=fill,
             outline=outline,
-            width=2 if outline else 0,
+            width=self._lw(2) if outline else 0,
         )
 
 
@@ -1594,12 +1617,24 @@ class App:
         self._img_offset_y = ch / 2 - img_h / 2
 
         mission = self.controls.selected_mission
+
+        # Render at 4x resolution for antialiasing, then downsample with
+        # LANCZOS.  This gives 16x SSAA (4x per axis) which eliminates
+        # the jagged polygon edges from PIL's non-antialiased drawing.
+        supersample = 4
+        render_ppi = ppi * supersample
         renderer = BattlefieldRenderer(
-            tw, td, ppi, self.objects_by_id, mission
+            tw,
+            td,
+            render_ppi,
+            self.objects_by_id,
+            mission,
+            line_scale=supersample,
         )
         img = renderer.render(
             self.layout, highlight_index=self._selected_feature_idx
         )
+        img = img.resize((img_w, img_h), Image.Resampling.LANCZOS)
 
         self._photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
@@ -2126,10 +2161,19 @@ class App:
         temp_placed.pop(self._move_feature_idx)
 
         mission = self.controls.selected_mission
+
+        supersample = 4
+        render_ppi = ppi * supersample
         renderer = BattlefieldRenderer(
-            tw, td, ppi, self.objects_by_id, mission
+            tw,
+            td,
+            render_ppi,
+            self.objects_by_id,
+            mission,
+            line_scale=supersample,
         )
         img = renderer.render(temp_layout)
+        img = img.resize((img_w, img_h), Image.Resampling.LANCZOS)
 
         self._move_base_photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
@@ -2529,10 +2573,20 @@ class App:
         ppi = 20
 
         mission = self.controls.selected_mission
+        supersample = 4
+        render_ppi = ppi * supersample
         renderer = BattlefieldRenderer(
-            tw, td, ppi, self.objects_by_id, mission
+            tw,
+            td,
+            render_ppi,
+            self.objects_by_id,
+            mission,
+            line_scale=supersample,
         )
         img = renderer.render(self.layout)
+        img = img.resize(
+            (int(tw * ppi), int(td * ppi)), Image.Resampling.LANCZOS
+        )
         save_layout_png(img, self.layout, path)
 
     def _on_load(self):
