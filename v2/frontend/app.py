@@ -1142,6 +1142,28 @@ class App:
         # Debounced visibility recompute timer
         self._vis_recompute_after_id = None
 
+        # Feature grid state
+        self._feature_grid_visible = False
+        self._feature_grid_frame = None
+        self._feature_grid_window_id = None
+        self._feature_thumbnails = []  # prevent GC of PhotoImage refs
+
+        # Add Terrain button (placed on canvas by _place_add_terrain_button)
+        self._add_terrain_btn = tk.Button(
+            self.canvas,
+            text="+ Add Terrain",
+            command=self._on_add_terrain,
+            bg="#336633",
+            fg="white",
+            activebackground="#448844",
+            activeforeground="white",
+            padx=8,
+            pady=4,
+            relief="raised",
+            borderwidth=2,
+        )
+        self._add_terrain_btn_window_id = None
+
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
@@ -1150,6 +1172,9 @@ class App:
         self.controls.rotation_granularity_var.trace_add(
             "write", self._on_granularity_changed
         )
+
+        # Dismiss feature grid on catalog change and rebuild object index
+        self.controls.catalog_var.trace_add("write", self._on_catalog_changed)
 
         # Log which engine will be used
         self._log_engine_selection()
@@ -1219,6 +1244,8 @@ class App:
     def _render(self):
         if self._move_mode:
             return
+        if self._feature_grid_visible:
+            return
 
         if hasattr(self, "_popup_window_id"):
             self._dismiss_popup()
@@ -1273,6 +1300,19 @@ class App:
         self.canvas.delete("all")
         self.canvas.create_image(
             cw / 2, ch / 2, image=self._photo, anchor="center"
+        )
+        self._place_add_terrain_button()
+
+    def _place_add_terrain_button(self):
+        """Place the '+ Add Terrain' button at bottom-left of the canvas."""
+        if self._add_terrain_btn_window_id is not None:
+            self.canvas.delete(self._add_terrain_btn_window_id)
+            self._add_terrain_btn_window_id = None
+        self._add_terrain_btn_window_id = self.canvas.create_window(
+            10,
+            self.canvas.winfo_height() - 10,
+            window=self._add_terrain_btn,
+            anchor="sw",
         )
 
     # -- coordinate conversion & hit testing --
@@ -1501,6 +1541,8 @@ class App:
     def _on_canvas_click(self, event):
         """Handle click on canvas: select/deselect features."""
         if self._move_mode:
+            return
+        if self._feature_grid_visible:
             return
         self._dismiss_popup()
 
@@ -2196,6 +2238,317 @@ class App:
         self.root.unbind("<Left>")
         self.root.unbind("<Right>")
 
+    # -- add terrain / feature grid --
+
+    def _on_add_terrain(self):
+        """Open the feature selection grid overlay."""
+        if self._move_mode or self._feature_grid_visible:
+            return
+        self._show_feature_grid()
+
+    def _on_catalog_changed(self, *_args):
+        """Handle catalog dropdown change: dismiss grid and rebuild object index."""
+        if self._feature_grid_visible:
+            self._dismiss_feature_grid()
+        catalog_name = self.controls.catalog_var.get()
+        if catalog_name in TERRAIN_CATALOGS:
+            self.objects_by_id = _build_object_index(
+                TERRAIN_CATALOGS[catalog_name]
+            )
+
+    def _show_feature_grid(self):
+        """Show the feature selection grid overlay on the canvas."""
+        catalog_name = self.controls.catalog_var.get()
+        if catalog_name not in TERRAIN_CATALOGS:
+            return
+        catalog = TERRAIN_CATALOGS[catalog_name]
+        features = catalog.get("features", [])
+        if not features:
+            return
+
+        self._feature_grid_visible = True
+        self._feature_thumbnails = []
+
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+
+        # Outer frame with dark background
+        outer = tk.Frame(
+            self.canvas, bg="#2a2a2a", relief="raised", borderwidth=2
+        )
+
+        # Title bar
+        title_bar = tk.Frame(outer, bg="#333333")
+        title_bar.pack(side=tk.TOP, fill=tk.X)
+        tk.Label(
+            title_bar,
+            text=f"Add Terrain — {catalog_name}",
+            bg="#333333",
+            fg="white",
+            font=("TkDefaultFont", 11, "bold"),
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            title_bar,
+            text="Cancel",
+            command=self._dismiss_feature_grid,
+            bg="#cc3333",
+            fg="white",
+            activebackground="#ff4444",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        ).pack(side=tk.RIGHT, padx=8, pady=4)
+
+        # Scrollable inner area
+        scroll_frame = tk.Frame(outer, bg="#2a2a2a")
+        scroll_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        scroll_canvas = tk.Canvas(
+            scroll_frame, bg="#2a2a2a", highlightthickness=0
+        )
+        scrollbar = ttk.Scrollbar(
+            scroll_frame, orient="vertical", command=scroll_canvas.yview
+        )
+        inner = tk.Frame(scroll_canvas, bg="#2a2a2a")
+
+        inner.bind(
+            "<Configure>",
+            lambda e: scroll_canvas.configure(
+                scrollregion=scroll_canvas.bbox("all")
+            ),
+        )
+        scroll_canvas.create_window((0, 0), window=inner, anchor="nw")
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+
+        scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Bind mousewheel scrolling
+        def _on_mousewheel(event):
+            scroll_canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+        def _on_scroll_up(_event):
+            scroll_canvas.yview_scroll(-3, "units")
+
+        def _on_scroll_down(_event):
+            scroll_canvas.yview_scroll(3, "units")
+
+        scroll_canvas.bind("<MouseWheel>", _on_mousewheel)
+        scroll_canvas.bind("<Button-4>", _on_scroll_up)
+        scroll_canvas.bind("<Button-5>", _on_scroll_down)
+
+        # Build grid cells — 3 columns
+        thumb_size = 120
+        cols = 3
+        for i, entry in enumerate(features):
+            feat = entry["item"]
+            row = i // cols
+            col = i % cols
+
+            cell = tk.Frame(
+                inner, bg="#3a3a3a", relief="groove", borderwidth=1
+            )
+            cell.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+
+            # Thumbnail
+            thumb = self._render_feature_thumbnail(feat, thumb_size)
+            if thumb is not None:
+                self._feature_thumbnails.append(thumb)
+                thumb_label = tk.Label(cell, image=thumb, bg="#3a3a3a")
+                thumb_label.pack(padx=4, pady=(4, 2))
+                thumb_label.bind(
+                    "<Button-1>",
+                    lambda _e, f=feat: self._on_feature_selected(f),
+                )
+            else:
+                tk.Label(
+                    cell,
+                    text="[no preview]",
+                    bg="#3a3a3a",
+                    fg="#888888",
+                    width=thumb_size // 8,
+                    height=thumb_size // 20,
+                ).pack(padx=4, pady=(4, 2))
+
+            # Name + type label
+            feat_id = feat.get("id", "?")
+            feat_type = feat.get("feature_type", "")
+            tk.Label(
+                cell,
+                text=f"{feat_id}\n({feat_type})",
+                bg="#3a3a3a",
+                fg="white",
+                font=("TkDefaultFont", 9),
+                justify="center",
+            ).pack(padx=4, pady=2)
+
+            # Place button
+            tk.Button(
+                cell,
+                text="Place",
+                command=lambda f=feat: self._on_feature_selected(f),
+                bg="#336699",
+                fg="white",
+                activebackground="#4488bb",
+                activeforeground="white",
+                padx=6,
+                pady=1,
+            ).pack(padx=4, pady=(2, 4))
+
+        for c in range(cols):
+            inner.columnconfigure(c, weight=1)
+
+        # Size the overlay to ~80% of canvas
+        overlay_w = int(cw * 0.8)
+        overlay_h = int(ch * 0.8)
+        outer.configure(width=overlay_w, height=overlay_h)
+
+        x = (cw - overlay_w) // 2
+        y = (ch - overlay_h) // 2
+
+        win_id = self.canvas.create_window(
+            x, y, window=outer, anchor="nw", width=overlay_w, height=overlay_h
+        )
+        self._feature_grid_frame = outer
+        self._feature_grid_window_id = win_id
+
+    def _render_feature_thumbnail(self, feature_dict, size):
+        """Render a PIL thumbnail of a feature at its local origin.
+
+        Returns an ImageTk.PhotoImage, or None if no shapes found.
+        """
+        # Collect all shape corners in local feature space
+        all_corners = []
+        draw_commands = []  # (polygon_corners, fill, outline)
+
+        for comp in feature_dict.get("components", []):
+            obj = self.objects_by_id.get(comp.get("object_id"))
+            if obj is None:
+                continue
+            comp_tf = _get_tf(comp.get("transform"))
+            fill = obj.get("fill_color") or DEFAULT_FILL
+            outline = obj.get("outline_color")
+
+            for shape in obj.get("shapes", []):
+                offset_tf = _get_tf(shape.get("offset"))
+                combined = _compose(comp_tf, offset_tf)
+                cx, cz, rot_deg = combined
+                hw = shape["width_inches"] / 2
+                hd = shape["depth_inches"] / 2
+                local_corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+                rad = math.radians(rot_deg)
+                cos_r = math.cos(rad)
+                sin_r = math.sin(rad)
+
+                world_corners = []
+                for lx, lz in local_corners:
+                    wx = cx + lx * cos_r - lz * sin_r
+                    wz = cz + lx * sin_r + lz * cos_r
+                    world_corners.append((wx, wz))
+                    all_corners.append((wx, wz))
+
+                draw_commands.append((world_corners, fill, outline))
+
+        if not all_corners:
+            return None
+
+        # Compute bounding box
+        xs = [c[0] for c in all_corners]
+        zs = [c[1] for c in all_corners]
+        min_x, max_x = min(xs), max(xs)
+        min_z, max_z = min(zs), max(zs)
+        span_x = max_x - min_x
+        span_z = max_z - min_z
+        if span_x < 0.01:
+            span_x = 1.0
+        if span_z < 0.01:
+            span_z = 1.0
+
+        # Auto-scale to fit thumbnail with padding
+        padding = 8
+        draw_size = size - 2 * padding
+        scale = min(draw_size / span_x, draw_size / span_z)
+        center_x = (min_x + max_x) / 2
+        center_z = (min_z + max_z) / 2
+
+        img = Image.new("RGB", (size, size), "#3a3a3a")
+        draw = ImageDraw.Draw(img)
+
+        for corners, fill, outline in draw_commands:
+            px_corners = []
+            for wx, wz in corners:
+                px = padding + (wx - center_x) * scale + draw_size / 2
+                py = padding + (wz - center_z) * scale + draw_size / 2
+                px_corners.append((px, py))
+            draw.polygon(px_corners, fill=fill, outline=outline, width=1)
+
+        return ImageTk.PhotoImage(img)
+
+    def _dismiss_feature_grid(self):
+        """Remove the feature grid overlay from canvas."""
+        if self._feature_grid_window_id is not None:
+            self.canvas.delete(self._feature_grid_window_id)
+            self._feature_grid_window_id = None
+        if self._feature_grid_frame is not None:
+            self._feature_grid_frame.destroy()
+            self._feature_grid_frame = None
+        self._feature_grid_visible = False
+        self._feature_thumbnails = []
+
+    def _on_feature_selected(self, feature_dict):
+        """Bridge from feature grid to the existing placement pipeline."""
+        self._dismiss_feature_grid()
+
+        # Construct a placed_feature dict at origin
+        pf_dict = {
+            "feature": copy.deepcopy(feature_dict),
+            "transform": {
+                "x_inches": 0.0,
+                "z_inches": 0.0,
+                "rotation_deg": 0.0,
+            },
+        }
+
+        # Ensure referenced objects are in self.objects_by_id
+        for comp in feature_dict.get("components", []):
+            obj_id = comp.get("object_id")
+            if obj_id and obj_id not in self.objects_by_id:
+                # Rebuild from current catalog
+                catalog_name = self.controls.catalog_var.get()
+                if catalog_name in TERRAIN_CATALOGS:
+                    self.objects_by_id = _build_object_index(
+                        TERRAIN_CATALOGS[catalog_name]
+                    )
+                break
+
+        # Append to placed_features
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        placed.append(pf_dict)
+        new_idx = len(placed) - 1
+
+        # Set up move/copy mode identically to _on_copy_selected
+        self._move_original_pf_dict = None  # no original to revert to
+        self._move_feature_idx = new_idx
+        self._move_mode = True
+        self._move_is_copy = True  # so cancel removes the feature
+        self._move_last_valid_pos = None  # no valid position yet
+        self._move_current_rotation = 0.0
+
+        self._dismiss_popup()
+        self._selected_feature_idx = None
+        self._selected_is_mirror = False
+
+        self._move_typed_features, self._move_typed_objects = (
+            self._build_typed_validation_context(new_idx)
+        )
+
+        self._render_move_base()
+        self._create_move_overlay()
+        self._bind_move_events()
+
     # -- canvas resize --
 
     def _on_canvas_configure(self, _event):
@@ -2203,6 +2556,8 @@ class App:
         if self._move_mode:
             self._on_move_cancel()
             return
+        if self._feature_grid_visible:
+            self._dismiss_feature_grid()
         self._dismiss_popup()
         self._selected_feature_idx = None
         self._render()
