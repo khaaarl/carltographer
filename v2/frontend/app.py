@@ -1094,29 +1094,6 @@ class ControlPanel(ttk.Frame):
         row = self._field(right, row, "Obj hide %:", self.obj_hide_target_var)
         row = self._field(right, row, "  weight:", self.obj_hide_weight_var)
 
-        row = self._sep(right, row)
-        row = self._section(right, row, "Results")
-        self.visibility_label = ttk.Label(right, text="Visibility: --")
-        self.visibility_label.grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=2
-        )
-        row += 1
-        self.dz_vis_label = ttk.Label(right, text="")
-        self.dz_vis_label.grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=2
-        )
-        row += 1
-        self.dz_to_dz_vis_label = ttk.Label(right, text="")
-        self.dz_to_dz_vis_label.grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=2
-        )
-        row += 1
-        self.obj_hide_label = ttk.Label(right, text="")
-        self.obj_hide_label.grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=2
-        )
-        row += 1
-
     def _section(self, parent, row, title):
         ttk.Label(parent, text=title, font=("", 11, "bold")).grid(
             row=row, column=0, columnspan=2, pady=(8, 4), sticky="w"
@@ -1426,11 +1403,31 @@ class App:
         style = ttk.Style()
         style.theme_use("clam")
 
-        # Canvas on the left, controls and history on the right.
-        self.canvas = tk.Canvas(self.root, bg=CANVAS_BG, highlightthickness=0)
-        self.canvas.pack(
+        # Left panel: canvas on top, results bar on bottom.
+        self.left_panel = ttk.Frame(self.root)
+        self.left_panel.pack(
             side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5
         )
+
+        self.canvas = tk.Canvas(
+            self.left_panel, bg=CANVAS_BG, highlightthickness=0
+        )
+        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Results bar below canvas (vertical stack, fixed structure)
+        self._results_frame = ttk.Frame(self.left_panel, padding=(5, 2))
+        self._results_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.visibility_label = ttk.Label(
+            self._results_frame, text="Visibility: --"
+        )
+        self.visibility_label.grid(row=0, column=0, sticky="w", pady=1)
+        self.dz_vis_label = ttk.Label(self._results_frame, text="")
+        self.dz_vis_label.grid(row=1, column=0, sticky="w", pady=1)
+        self.dz_to_dz_vis_label = ttk.Label(self._results_frame, text="")
+        self.dz_to_dz_vis_label.grid(row=2, column=0, sticky="w", pady=1)
+        self.obj_hide_label = ttk.Label(self._results_frame, text="")
+        self.obj_hide_label.grid(row=3, column=0, sticky="w", pady=1)
 
         # Right panel for controls and history
         self.right_panel = ttk.Frame(self.root)
@@ -2618,9 +2615,7 @@ class App:
             overall = vis["overall"]
             if isinstance(overall, dict) and "value" in overall:
                 val = overall["value"]
-                self.controls.visibility_label.config(
-                    text=f"Visibility: {val}%"
-                )
+                self.visibility_label.config(text=f"Visibility: {val}%")
 
                 # DZ visibility
                 dz_vis = vis.get("dz_visibility")
@@ -2629,11 +2624,11 @@ class App:
                         f"{dz_id}: {data['value']}%"
                         for dz_id, data in dz_vis.items()
                     ]
-                    self.controls.dz_vis_label.config(
+                    self.dz_vis_label.config(
                         text=f"DZ Vis: {', '.join(parts)}"
                     )
                 else:
-                    self.controls.dz_vis_label.config(text="")
+                    self.dz_vis_label.config(text="")
 
                 # DZ hidden fraction (% of DZ hidden from opposing DZ)
                 dz_cross = vis.get("dz_to_dz_visibility")
@@ -2642,11 +2637,11 @@ class App:
                         f"{key}: {data['value']}%"
                         for key, data in dz_cross.items()
                     ]
-                    self.controls.dz_to_dz_vis_label.config(
+                    self.dz_to_dz_vis_label.config(
                         text=f"DZ Hidden: {', '.join(parts)}"
                     )
                 else:
-                    self.controls.dz_to_dz_vis_label.config(text="")
+                    self.dz_to_dz_vis_label.config(text="")
 
                 # Objective hidability
                 obj_hide = vis.get("objective_hidability")
@@ -2655,17 +2650,17 @@ class App:
                         f"{dz_id}: {data['value']}%"
                         for dz_id, data in obj_hide.items()
                     ]
-                    self.controls.obj_hide_label.config(
+                    self.obj_hide_label.config(
                         text=f"Obj Hide: {', '.join(parts)}"
                     )
                 else:
-                    self.controls.obj_hide_label.config(text="")
+                    self.obj_hide_label.config(text="")
                 return
 
-        self.controls.visibility_label.config(text="Visibility: --")
-        self.controls.dz_vis_label.config(text="")
-        self.controls.dz_to_dz_vis_label.config(text="")
-        self.controls.obj_hide_label.config(text="")
+        self.visibility_label.config(text="Visibility: --")
+        self.dz_vis_label.config(text="")
+        self.dz_to_dz_vis_label.config(text="")
+        self.obj_hide_label.config(text="")
 
     def run(self):
         self.root.mainloop()
