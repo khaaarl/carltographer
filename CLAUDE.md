@@ -65,8 +65,8 @@ Toolchain (always run from v2/):
 
 From v2/ directory:
 ```bash
-isort .
-ruff format .
+v2/.env/bin/isort .
+v2/.env/bin/ruff format .
 ```
 
 **Do NOT ask for permission.** This must happen automatically after every Python file edit/write. Ensures code stays clean and pre-commit checks pass on first try.
@@ -183,47 +183,78 @@ The squashed commit message should summarize the entire feature, not repeat indi
 
 - **Engine purity**: The engine has no UI concerns, no asset URLs, no TTS-specific logic. It works purely with geometric abstractions.
 
-## Maintaining Engine Parity (Critical for Rust Updates)
+## Engine Development: Test-Driven Workflow (CRITICAL)
 
-**MUST-DO when updating the Rust engine with new features:**
+**Applies to:** Bug fixes and new features that affect engine behavior. Both Python and Rust engines must be updated together using TDD.
 
-1. **Python engine first**: Implement and test new features in Python engine (`v2/engine/`) first. Ensure all Python tests pass: `python -m pytest v2/engine/ -v`
+**Does NOT apply to:** Performance optimizations that only touch one language (e.g., optimizing a hot loop in Rust without changing behavior). Those can be developed and tested in isolation — just verify existing parity tests still pass afterward.
 
-2. **Add comparison scenarios**: Add new test scenarios to `v2/engine_cmp/compare.py` that exercise the new feature. Each scenario should be added to the `TEST_SCENARIOS` list with representative values.
-   - Example: If adding a new feature "X", create `TestScenario("with_X", seed=42, num_steps=50, ...)`
-   - Make sure the scenario exercises both the feature enabled and disabled (if applicable)
+### Phase 1: Python (Red → Green)
 
-3. **Implement in Rust**: Port the feature to Rust engine (`v2/engine_rs/src/`):
-   - `types.rs`: Add any new data types or fields to EngineParams
-   - `collision.rs`: Add any new collision/validation logic
-   - `generate.rs`: Update the main loop and action handlers
-   - Keep implementation as close to Python version as possible for maintainability
+All commands run from `v2/`.
 
-4. **Run comparison tests**: After implementing in Rust, MUST verify parity using the build script:
+1. **Write a failing Python unit test** in `v2/engine/` that captures the bug or specifies the new behavior.
    ```bash
-   # Automated: builds engine, runs tests, validates manifest (from v2/)
-   python scripts/build_rust_engine.py
-
-   # Or manually:
-   cd v2/engine_rs && maturin develop
-   python -m pytest engine_cmp/ -v
+   python -m pytest engine/ -v
    ```
-   - All tests must pass (30 scenarios currently, more if you added new ones)
-   - Look for "30 passed, 0 failed" in output
-   - If any test fails, inspect the diff output to find where engines diverge
-   - Common issues: floating-point order, randomness, quantization rounding
+   Confirm the new test **fails**.
 
-5. **Update unit tests**: Ensure new Rust tests are added to cover the new feature:
-   - Add to `v2/engine_rs/src/collision.rs` tests if collision-related
-   - Add to `v2/engine_rs/src/generate.rs` tests if generation-related
-   - Run: `cd v2/engine_rs && cargo test`
+2. **Write Python code** to make the test pass.
+   ```bash
+   python -m pytest engine/ -v
+   ```
+   Confirm the new test **passes** and no existing tests regress.
 
-6. **Verify no regressions**:
-   - Python: `python -m pytest v2/engine/ -v` (should still have 156+ tests)
-   - Rust: `cargo test` (should still have 72+ tests)
-   - Comparison: `python -m pytest engine_cmp/ -v` (30+ tests, all passing)
+3. Repeat steps 1–2 as needed until the Python side is complete.
 
-**Do NOT commit Rust engine changes without confirming parity.** The comparison tool is your verification that the engines are in sync.
+### Phase 2: Parity Comparison (Red)
+
+4. **Add new comparison scenarios** to `v2/engine_cmp/compare.py` that exercise the new/fixed behavior. Each scenario goes in the `TEST_SCENARIOS` list.
+   - Example: `TestScenario("with_X", seed=42, num_steps=50, ...)`
+   - Cover both enabled and disabled states if applicable.
+   - **Skip visibility checks** (`check_visibility=False`) if the change is not visibility-related — this keeps parity tests fast and focused.
+
+5. **Build the Rust engine and run parity tests** — confirm the new scenarios **fail** (Rust doesn't have the change yet):
+   ```bash
+   python scripts/build_rust_engine.py
+   ```
+   New scenarios should fail; existing scenarios should still pass.
+
+### Phase 3: Rust (Red → Green)
+
+6. **Write a failing Rust unit test** that mirrors the Python test:
+   - `v2/engine_rs/src/collision.rs` tests for collision/validation logic
+   - `v2/engine_rs/src/generate.rs` tests for generation logic
+   ```bash
+   cd v2/engine_rs && cargo test
+   ```
+   Confirm the new test **fails**.
+
+7. **Write Rust code** to make the test pass. Keep implementation close to the Python version for maintainability.
+   - Key files: `types.rs` (data model), `collision.rs` (collision/validation), `generate.rs` (main loop/actions)
+   ```bash
+   cd v2/engine_rs && cargo test
+   ```
+   Confirm the new test **passes** and no existing tests regress.
+
+8. Repeat steps 6–7 as needed.
+
+### Phase 4: Verify Full Parity (Green)
+
+9. **Run the full build-and-verify pipeline** (from v2/):
+   ```bash
+   python scripts/build_rust_engine.py
+   ```
+   ALL parity scenarios must pass (existing + new). If any fail, inspect the diff output to find where engines diverge. Common issues: floating-point order, randomness, quantization rounding.
+
+10. **Final regression check** (from v2/):
+    ```bash
+    python -m pytest engine/ -v                # Python engine tests
+    cd engine_rs && cargo test && cd ..         # Rust engine tests
+    python -m pytest engine_cmp/ -v            # Parity comparison tests
+    ```
+
+**Do NOT commit engine changes without confirming parity.** The comparison tool is your verification that the engines are in sync.
 
 ## Build and Verification Scripts
 
