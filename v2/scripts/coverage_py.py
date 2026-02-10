@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Run Python tests with coverage and generate reports.
+"""Run Python unit tests (engine + frontend) with coverage.
 
-Produces a terminal summary and an HTML report in v2/htmlcov/.
+Produces a terminal summary and an HTML report.
 Works on Linux, macOS, and Windows.
 
 Usage:
-    python v2/scripts/run_coverage.py            # terminal + HTML report
-    python v2/scripts/run_coverage.py --html     # open HTML report in browser after
+    python scripts/coverage_py.py            # terminal + HTML report
+    python scripts/coverage_py.py --html     # also open HTML report in browser
 """
 
 import subprocess
@@ -15,6 +15,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 V2_DIR = SCRIPT_DIR.parent
+COV_DIR = V2_DIR / "coverage_py"
 
 
 def find_venv_python() -> Path:
@@ -35,23 +36,23 @@ def find_venv_python() -> Path:
 
 def run(python: Path, *args: str) -> None:
     """Run a command via the venv Python, exiting on failure."""
-    result = subprocess.run(
-        [str(python), *args],
-        cwd=str(V2_DIR),
-    )
+    result = subprocess.run([str(python), *args], cwd=str(V2_DIR))
     if result.returncode != 0:
         sys.exit(result.returncode)
 
 
 def main() -> None:
     venv_python = find_venv_python()
+    data_file = str(COV_DIR / ".coverage")
 
-    print("Running tests with coverage...")
+    print("Running Python unit tests with coverage...")
     run(
         venv_python,
         "-m",
         "coverage",
         "run",
+        f"--data-file={data_file}",
+        "--source=engine,frontend",
         "-m",
         "pytest",
         "engine/",
@@ -59,18 +60,26 @@ def main() -> None:
     )
 
     print("\n=== Coverage Report ===")
-    run(venv_python, "-m", "coverage", "report")
+    run(venv_python, "-m", "coverage", "report", f"--data-file={data_file}")
 
+    html_dir = str(COV_DIR / "html")
     print("\nGenerating HTML report...")
-    run(venv_python, "-m", "coverage", "html")
+    run(
+        venv_python,
+        "-m",
+        "coverage",
+        "html",
+        f"--data-file={data_file}",
+        f"--directory={html_dir}",
+    )
 
-    htmlcov = V2_DIR / "htmlcov" / "index.html"
-    print(f"HTML report: {htmlcov}")
+    index = COV_DIR / "html" / "index.html"
+    print(f"HTML report: {index}")
 
     if "--html" in sys.argv[1:]:
         import webbrowser
 
-        webbrowser.open(htmlcov.as_uri())
+        webbrowser.open(index.as_uri())
 
 
 if __name__ == "__main__":
