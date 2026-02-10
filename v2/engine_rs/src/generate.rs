@@ -138,22 +138,12 @@ fn compute_score(
         total_weight += targets.overall_visibility_weight;
     }
 
-    // 2. DZ visibility (per-DZ error from target, then averaged)
-    if let Some(target) = targets.dz_visibility_target {
-        if let Some(dz_vis) = vis.get("dz_visibility").and_then(|v| v.as_object()) {
-            if let Some(avg_error) = avg_metric_error(dz_vis, target) {
-                total_weighted_error += targets.dz_visibility_weight * avg_error;
-                total_weight += targets.dz_visibility_weight;
-            }
-        }
-    }
-
-    // 3. DZ hidden from opponent (per-pair error from target, then averaged)
-    if let Some(target) = targets.dz_hidden_target {
-        if let Some(dz_cross) = vis.get("dz_to_dz_visibility").and_then(|v| v.as_object()) {
-            if let Some(avg_error) = avg_metric_error(dz_cross, target) {
-                total_weighted_error += targets.dz_hidden_weight * avg_error;
-                total_weight += targets.dz_hidden_weight;
+    // 2. DZ hideability (per-DZ error from target, then averaged)
+    if let Some(target) = targets.dz_hideability_target {
+        if let Some(dz_hide) = vis.get("dz_hideability").and_then(|v| v.as_object()) {
+            if let Some(avg_error) = avg_metric_error(dz_hide, target) {
+                total_weighted_error += targets.dz_hideability_weight * avg_error;
+                total_weight += targets.dz_hideability_weight;
             }
         }
     }

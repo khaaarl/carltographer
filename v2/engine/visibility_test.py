@@ -399,9 +399,9 @@ class TestFractionOfDzVisible:
 # -- DZ integration tests --
 
 
-class TestDzVisibility:
-    def test_empty_table_dz_visible(self):
-        """No terrain: DZs should be ~100% visible from outside."""
+class TestDzHideability:
+    def test_empty_table_hideability_zero(self):
+        """No terrain: all DZ observers can see opponent DZ -> 0% hidden."""
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
         mission = _make_simple_mission([green_dz, red_dz])
@@ -414,21 +414,20 @@ class TestDzVisibility:
         )
         result = compute_layout_visibility(layout, {})
 
-        assert "dz_visibility" in result
-        assert "green" in result["dz_visibility"]
-        assert "red" in result["dz_visibility"]
-        # With no terrain, DZs should be 100% visible
-        assert result["dz_visibility"]["green"]["value"] == 100.0
-        assert result["dz_visibility"]["red"]["value"] == 100.0
+        assert "dz_hideability" in result
+        assert "green" in result["dz_hideability"]
+        assert "red" in result["dz_hideability"]
+        # With no terrain, nothing hidden -> 0%
+        assert result["dz_hideability"]["green"]["value"] == 0.0
+        assert result["dz_hideability"]["red"]["value"] == 0.0
 
-    def test_blocker_reduces_dz_visibility(self):
-        """Tall terrain near a DZ reduces its visibility."""
-        # Green DZ on left, Red DZ on right
+    def test_blocker_increases_hideability(self):
+        """Tall terrain between DZs increases hideability."""
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
         mission = _make_simple_mission([green_dz, red_dz])
 
-        # Place a tall wall right in front of green DZ
+        # Place a tall wall between the DZs
         obj = _make_object("wall", 2, 40, 5)
         feat = _make_feature("f1", "wall", "obstacle")
         pf = _place(feat, -18, 0)
@@ -442,46 +441,20 @@ class TestDzVisibility:
         objects_by_id = {"wall": obj}
 
         result = compute_layout_visibility(layout, objects_by_id)
-        # Green DZ should have reduced visibility due to the wall
-        assert result["dz_visibility"]["green"]["value"] < 100.0
-
-    def test_dz_to_dz_empty_table(self):
-        """With no terrain, nothing is hidden (0% hidden fraction)."""
-        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
-        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
-        mission = _make_simple_mission([green_dz, red_dz])
-
-        layout = TerrainLayout(
-            table_width=60,
-            table_depth=44,
-            placed_features=[],
-            mission=mission,
-        )
-        result = compute_layout_visibility(layout, {})
-
-        assert "dz_to_dz_visibility" in result
-        cross = result["dz_to_dz_visibility"]
-        assert "red_from_green" in cross
-        assert "green_from_red" in cross
-        # No terrain -> nothing hidden -> 0%
-        assert cross["red_from_green"]["value"] == 0.0
-        assert cross["green_from_red"]["value"] == 0.0
-        assert cross["red_from_green"]["hidden_count"] == 0
-        assert cross["green_from_red"]["hidden_count"] == 0
+        # Wall near green DZ should hide some green observers from red
+        assert result["dz_hideability"]["green"]["value"] > 0.0
 
     def test_no_mission_no_dz_keys(self):
         """When no mission, DZ keys should be absent."""
         layout = _make_layout(60, 44, [])
         result = compute_layout_visibility(layout, {})
-        assert "dz_visibility" not in result
-        assert "dz_to_dz_visibility" not in result
+        assert "dz_hideability" not in result
 
-    def test_asymmetric_hidden_fraction_differs(self):
-        """Hidden fraction is asymmetric with off-center terrain.
+    def test_asymmetric_hideability_differs(self):
+        """Hideability is asymmetric with off-center terrain.
 
-        Wall near green DZ creates asymmetric hiding: the hidden fractions
-        from opposing DZ observers differ. With DZ expansion (6"), green's
-        expanded observers can see around the wall, so red_hidden is low.
+        Wall near green DZ blocks some green observers' view of red DZ,
+        but red observers can still see green DZ mostly unobstructed.
         """
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
@@ -502,28 +475,21 @@ class TestDzVisibility:
         objects_by_id = {"wall": obj}
 
         result = compute_layout_visibility(layout, objects_by_id)
-        cross = result["dz_to_dz_visibility"]
+        hide = result["dz_hideability"]
 
-        green_hidden = cross["green_from_red"]["value"]
-        red_hidden = cross["red_from_green"]["value"]
+        green_hide = hide["green"]["value"]
+        red_hide = hide["red"]["value"]
 
-        # Wall blocks red's view of green DZ -> green_hidden is substantial
-        assert green_hidden > 50.0, (
-            f"green_hidden ({green_hidden}) should be substantial"
-        )
-        # With expanded DZ, green's expanded observers bypass the wall
-        # so the hidden fractions are asymmetric
-        assert green_hidden > red_hidden, (
-            f"green_hidden ({green_hidden}) should exceed red_hidden ({red_hidden})"
+        # Wall near green DZ blocks green observers' view of red DZ
+        # -> green hideability should be substantial
+        assert green_hide > 0.0, f"green_hide ({green_hide}) should be > 0"
+        # Hideability should be asymmetric
+        assert green_hide != red_hide, (
+            f"green_hide ({green_hide}) should differ from red_hide ({red_hide})"
         )
 
     def test_symmetric_dz_values_close(self):
-        """With symmetric layout + mission, both DZ values are close.
-
-        Without symmetry optimization, small floating-point differences
-        from observer iteration order are expected, so we use a loose tolerance.
-        """
-        # Create symmetric DZs (180-degree rotational)
+        """With symmetric layout + mission, both DZ hideability values are close."""
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
         mission = _make_simple_mission([green_dz, red_dz], symmetric=True)
@@ -543,8 +509,8 @@ class TestDzVisibility:
         objects_by_id = {"box": obj}
 
         result = compute_layout_visibility(layout, objects_by_id)
-        green_val = result["dz_visibility"]["green"]["value"]
-        red_val = result["dz_visibility"]["red"]["value"]
+        green_val = result["dz_hideability"]["green"]["value"]
+        red_val = result["dz_hideability"]["red"]["value"]
         # Values should be close but not necessarily identical due to
         # floating-point differences in observer iteration order
         assert abs(green_val - red_val) < 1.0
@@ -867,12 +833,8 @@ class TestExpandedDZ:
         """DZ_EXPANSION_INCHES is 6.0."""
         assert DZ_EXPANSION_INCHES == 6.0
 
-    def test_expanded_dz_increases_observer_count(self):
-        """With expanded DZ, cross-DZ observer count increases vs original.
-
-        Using a wall in the middle of the table: expanded DZ captures observers
-        that were previously not contributing to cross-DZ metrics.
-        """
+    def test_wall_between_dzs_increases_hideability(self):
+        """A wall between DZs increases hideability above zero."""
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
         mission = _make_simple_mission([green_dz, red_dz])
@@ -891,11 +853,11 @@ class TestExpandedDZ:
         objects_by_id = {"wall": obj}
 
         result = compute_layout_visibility(layout, objects_by_id)
-        cross = result["dz_to_dz_visibility"]
+        hide = result["dz_hideability"]
 
-        # With expanded DZ, observer_count should be > 0 for both directions
-        assert cross["red_from_green"]["observer_count"] > 0
-        assert cross["green_from_red"]["observer_count"] > 0
+        # Both DZs should have some hideability from the center wall
+        assert hide["green"]["total_count"] > 0
+        assert hide["red"]["total_count"] > 0
 
 
 # -- Infantry visibility (dual-height LOS) tests --
@@ -1086,8 +1048,8 @@ class TestInfantryVisibility:
         )
         assert result_infantry["overall"]["value"] < 100.0
 
-    def test_infantry_with_dz_visibility(self):
-        """Infantry pass with DZs produces sub-dicts in dz_visibility."""
+    def test_infantry_with_dz_hideability(self):
+        """Infantry pass with DZs produces sub-dicts in dz_hideability."""
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
         mission = _make_simple_mission([green_dz, red_dz])
@@ -1113,18 +1075,10 @@ class TestInfantryVisibility:
         assert "standard" in result["overall"]
         assert "infantry" in result["overall"]
 
-        # DZ visibility should also have sub-dicts
-        assert "dz_visibility" in result
+        # DZ hideability should also have sub-dicts
+        assert "dz_hideability" in result
         for dz_id in ["green", "red"]:
-            dz_entry = result["dz_visibility"][dz_id]
+            dz_entry = result["dz_hideability"][dz_id]
             assert "standard" in dz_entry
             assert "infantry" in dz_entry
             assert "value" in dz_entry
-
-        # DZ-to-DZ should also have sub-dicts
-        assert "dz_to_dz_visibility" in result
-        for key in result["dz_to_dz_visibility"]:
-            entry = result["dz_to_dz_visibility"][key]
-            assert "standard" in entry
-            assert "infantry" in entry
-            assert "value" in entry

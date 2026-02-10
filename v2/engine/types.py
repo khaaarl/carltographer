@@ -368,22 +368,28 @@ class FeatureCountPreference:
 class ScoringTargets:
     overall_visibility_target: float | None = None
     overall_visibility_weight: float = 1.0
-    dz_visibility_target: float | None = None
-    dz_visibility_weight: float = 1.0
-    dz_hidden_target: float | None = None
-    dz_hidden_weight: float = 1.0
+    dz_hideability_target: float | None = None
+    dz_hideability_weight: float = 1.0
     objective_hidability_target: float | None = None
     objective_hidability_weight: float = 1.0
 
     @staticmethod
     def from_dict(d: dict) -> ScoringTargets:
+        # Backward compat: map old key names
+        dz_hide_target = d.get("dz_hideability_target")
+        if dz_hide_target is None:
+            dz_hide_target = d.get("dz_hidden_target")
+        if dz_hide_target is None:
+            dz_hide_target = d.get("dz_visibility_target")
+        dz_hide_weight = d.get(
+            "dz_hideability_weight",
+            d.get("dz_hidden_weight", d.get("dz_visibility_weight", 1.0)),
+        )
         return ScoringTargets(
             overall_visibility_target=d.get("overall_visibility_target"),
             overall_visibility_weight=d.get("overall_visibility_weight", 1.0),
-            dz_visibility_target=d.get("dz_visibility_target"),
-            dz_visibility_weight=d.get("dz_visibility_weight", 1.0),
-            dz_hidden_target=d.get("dz_hidden_target"),
-            dz_hidden_weight=d.get("dz_hidden_weight", 1.0),
+            dz_hideability_target=dz_hide_target,
+            dz_hideability_weight=dz_hide_weight,
             objective_hidability_target=d.get("objective_hidability_target"),
             objective_hidability_weight=d.get(
                 "objective_hidability_weight", 1.0
@@ -395,12 +401,9 @@ class ScoringTargets:
         if self.overall_visibility_target is not None:
             d["overall_visibility_target"] = self.overall_visibility_target
             d["overall_visibility_weight"] = self.overall_visibility_weight
-        if self.dz_visibility_target is not None:
-            d["dz_visibility_target"] = self.dz_visibility_target
-            d["dz_visibility_weight"] = self.dz_visibility_weight
-        if self.dz_hidden_target is not None:
-            d["dz_hidden_target"] = self.dz_hidden_target
-            d["dz_hidden_weight"] = self.dz_hidden_weight
+        if self.dz_hideability_target is not None:
+            d["dz_hideability_target"] = self.dz_hideability_target
+            d["dz_hideability_weight"] = self.dz_hideability_weight
         if self.objective_hidability_target is not None:
             d["objective_hidability_target"] = self.objective_hidability_target
             d["objective_hidability_weight"] = self.objective_hidability_weight

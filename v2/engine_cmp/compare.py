@@ -31,6 +31,7 @@ from engine.types import (
     Transform,
     TuningParams,
 )
+from engine.visibility import DZ_EXPANSION_INCHES, _expand_dz_polygons
 from frontend.missions import get_mission
 
 from .hash_manifest import compute_engine_hashes, write_manifest
@@ -197,57 +198,32 @@ def compare_visibility(
     # Compare standard/infantry sub-passes on overall
     diffs.extend(_compare_sub_passes(o1, o2, "overall", tolerance))
 
-    # Compare DZ visibility
-    dz1 = vis1.get("dz_visibility")
-    dz2 = vis2.get("dz_visibility")
+    # Compare DZ hideability
+    dz1 = vis1.get("dz_hideability")
+    dz2 = vis2.get("dz_hideability")
     if (dz1 is None) != (dz2 is None):
         diffs.append(
-            f"dz_visibility: one is None, other is not "
+            f"dz_hideability: one is None, other is not "
             f"(py={dz1 is not None}, rs={dz2 is not None})"
         )
     elif dz1 is not None and dz2 is not None:
         for key in set(list(dz1.keys()) + list(dz2.keys())):
             if key not in dz1:
-                diffs.append(f"dz_visibility[{key}]: missing in Python")
+                diffs.append(f"dz_hideability[{key}]: missing in Python")
             elif key not in dz2:
-                diffs.append(f"dz_visibility[{key}]: missing in Rust")
+                diffs.append(f"dz_hideability[{key}]: missing in Rust")
             else:
                 dv1 = dz1[key].get("value", 0.0)
                 dv2 = dz2[key].get("value", 0.0)
                 if abs(dv1 - dv2) > tolerance:
-                    diffs.append(f"dz_visibility[{key}] value: {dv1} vs {dv2}")
-                diffs.extend(
-                    _compare_sub_passes(
-                        dz1[key], dz2[key], f"dz_visibility[{key}]", tolerance
-                    )
-                )
-
-    # Compare DZ-to-DZ visibility
-    cross1 = vis1.get("dz_to_dz_visibility")
-    cross2 = vis2.get("dz_to_dz_visibility")
-    if (cross1 is None) != (cross2 is None):
-        diffs.append(
-            f"dz_to_dz_visibility: one is None, other is not "
-            f"(py={cross1 is not None}, rs={cross2 is not None})"
-        )
-    elif cross1 is not None and cross2 is not None:
-        for key in set(list(cross1.keys()) + list(cross2.keys())):
-            if key not in cross1:
-                diffs.append(f"dz_to_dz_visibility[{key}]: missing in Python")
-            elif key not in cross2:
-                diffs.append(f"dz_to_dz_visibility[{key}]: missing in Rust")
-            else:
-                cv1 = cross1[key].get("value", 0.0)
-                cv2 = cross2[key].get("value", 0.0)
-                if abs(cv1 - cv2) > tolerance:
                     diffs.append(
-                        f"dz_to_dz_visibility[{key}] value: {cv1} vs {cv2}"
+                        f"dz_hideability[{key}] value: {dv1} vs {dv2}"
                     )
                 diffs.extend(
                     _compare_sub_passes(
-                        cross1[key],
-                        cross2[key],
-                        f"dz_to_dz_visibility[{key}]",
+                        dz1[key],
+                        dz2[key],
+                        f"dz_hideability[{key}]",
                         tolerance,
                     )
                 )
@@ -1058,8 +1034,7 @@ TEST_SCENARIOS = [
         mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
         scoring_targets=ScoringTargets(
             overall_visibility_target=30.0,
-            dz_visibility_target=20.0,
-            dz_hidden_target=40.0,
+            dz_hideability_target=40.0,
             objective_hidability_target=40.0,
         ),
     ),
@@ -1332,6 +1307,23 @@ TEST_SCENARIOS = [
 ]
 
 
+def _mission_to_json_with_expanded(mission: Mission) -> dict:
+    """Serialize a Mission to JSON, adding precomputed expanded DZ polygons.
+
+    The Rust engine receives expanded DZ polygons via JSON rather than computing
+    them itself (avoids reimplementing shapely's buffer() in Rust).
+    """
+    d = mission.to_dict()
+    for i, dz in enumerate(mission.deployment_zones):
+        polys_tuples = [[(p.x, p.z) for p in poly] for poly in dz.polygons]
+        expanded = _expand_dz_polygons(polys_tuples, DZ_EXPANSION_INCHES)
+        d["deployment_zones"][i]["expanded_polygons"] = [
+            [{"x_inches": x, "z_inches": z} for x, z in ring]
+            for ring in expanded
+        ]
+    return d
+
+
 def params_to_json_dict(params: EngineParams) -> dict:
     """Convert EngineParams to the JSON-compatible dict expected by the Rust engine."""
     return {
@@ -1446,7 +1438,7 @@ def params_to_json_dict(params: EngineParams) -> dict:
             else {}
         ),
         **(
-            {"mission": params.mission.to_dict()}
+            {"mission": _mission_to_json_with_expanded(params.mission)}
             if params.mission is not None
             else {}
         ),

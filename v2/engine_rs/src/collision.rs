@@ -156,6 +156,98 @@ pub fn segments_intersect(
     0.0 < ub && ub < 1.0
 }
 
+/// Test if two line segments intersect (including endpoints).
+///
+/// Uses parametric line intersection algorithm with closed interval [0, 1].
+pub fn segments_intersect_inclusive(
+    x1: f64,
+    z1: f64,
+    x2: f64,
+    z2: f64,
+    x3: f64,
+    z3: f64,
+    x4: f64,
+    z4: f64,
+) -> bool {
+    let denominator = (z4 - z3) * (x2 - x1) - (x4 - x3) * (z2 - z1);
+
+    if denominator == 0.0 {
+        return false;
+    }
+
+    let ua = ((x4 - x3) * (z1 - z3) - (z4 - z3) * (x1 - x3)) / denominator;
+    if !(0.0..=1.0).contains(&ua) {
+        return false;
+    }
+
+    let ub = ((x2 - x1) * (z1 - z3) - (z2 - z1) * (x1 - x3)) / denominator;
+    (0.0..=1.0).contains(&ub)
+}
+
+/// Ray-casting point-in-polygon test.
+pub fn point_in_polygon(px: f64, pz: f64, vertices: &[(f64, f64)]) -> bool {
+    let n = vertices.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, zi) = vertices[i];
+        let (xj, zj) = vertices[j];
+        if (zi > pz) != (zj > pz) {
+            let intersect_x = (xj - xi) * (pz - zi) / (zj - zi) + xi;
+            if px < intersect_x {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Test if two polygons overlap (share any interior area).
+///
+/// Checks:
+/// 1. Edge-edge intersections (inclusive of endpoints)
+/// 2. Containment of any vertex of A inside B
+/// 3. Containment of any vertex of B inside A
+pub fn polygons_overlap(poly_a: &[(f64, f64)], poly_b: &[(f64, f64)]) -> bool {
+    let n_a = poly_a.len();
+    let n_b = poly_b.len();
+    if n_a < 3 || n_b < 3 {
+        return false;
+    }
+
+    // 1. Edge-edge intersection
+    for i in 0..n_a {
+        let j = (i + 1) % n_a;
+        let (ax1, az1) = poly_a[i];
+        let (ax2, az2) = poly_a[j];
+        for k in 0..n_b {
+            let m = (k + 1) % n_b;
+            let (bx1, bz1) = poly_b[k];
+            let (bx2, bz2) = poly_b[m];
+            if segments_intersect_inclusive(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2) {
+                return true;
+            }
+        }
+    }
+
+    // 2. Any vertex of A inside B
+    for &(px, pz) in poly_a {
+        if point_in_polygon(px, pz, poly_b) {
+            return true;
+        }
+    }
+
+    // 3. Any vertex of B inside A
+    for &(px, pz) in poly_b {
+        if point_in_polygon(px, pz, poly_a) {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Compute minimum distance between two oriented bounding boxes.
 ///
 /// Returns 0 if rectangles intersect or touch. Otherwise returns
@@ -881,5 +973,90 @@ mod tests {
             index.insert(co.item.id.clone(), &co.item);
         }
         index
+    }
+
+    // -- segments_intersect_inclusive tests --
+
+    #[test]
+    fn inclusive_crossing() {
+        assert!(segments_intersect_inclusive(
+            -1.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0
+        ));
+    }
+
+    #[test]
+    fn inclusive_endpoint_touch() {
+        // T-junction: endpoint of one segment touches midpoint of other
+        assert!(segments_intersect_inclusive(
+            0.0, 0.0, 1.0, 0.0, 0.5, -1.0, 0.5, 0.0
+        ));
+    }
+
+    #[test]
+    fn inclusive_parallel_no_touch() {
+        assert!(!segments_intersect_inclusive(
+            -1.0, 0.0, 1.0, 0.0, -1.0, 1.0, 1.0, 1.0
+        ));
+    }
+
+    #[test]
+    fn inclusive_shared_endpoint() {
+        // Two segments sharing an endpoint
+        assert!(segments_intersect_inclusive(
+            0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0, 1.0
+        ));
+    }
+
+    // -- point_in_polygon tests --
+
+    #[test]
+    fn pip_inside_square() {
+        let sq = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        assert!(point_in_polygon(5.0, 5.0, &sq));
+    }
+
+    #[test]
+    fn pip_outside_square() {
+        let sq = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        assert!(!point_in_polygon(15.0, 5.0, &sq));
+    }
+
+    // -- polygons_overlap tests --
+
+    #[test]
+    fn polys_no_overlap() {
+        let a = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let b = vec![(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0)];
+        assert!(!polygons_overlap(&a, &b));
+    }
+
+    #[test]
+    fn polys_edge_crossing() {
+        let a = vec![(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
+        let b = vec![(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)];
+        assert!(polygons_overlap(&a, &b));
+    }
+
+    #[test]
+    fn polys_full_containment() {
+        let big = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let small = vec![(3.0, 3.0), (4.0, 3.0), (4.0, 4.0), (3.0, 4.0)];
+        assert!(polygons_overlap(&big, &small));
+        assert!(polygons_overlap(&small, &big));
+    }
+
+    #[test]
+    fn polys_shared_vertex() {
+        let a = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let b = vec![(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)];
+        // Touching at a single vertex: segments_intersect_inclusive detects this
+        assert!(polygons_overlap(&a, &b));
+    }
+
+    #[test]
+    fn polys_degenerate() {
+        let a = vec![(0.0, 0.0), (1.0, 0.0)]; // only 2 vertices
+        let b = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert!(!polygons_overlap(&a, &b));
     }
 }

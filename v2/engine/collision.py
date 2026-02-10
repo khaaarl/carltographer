@@ -166,6 +166,33 @@ def point_to_segment_distance_squared(
         return min(dist_to_start, dist_to_end)
 
 
+def segments_intersect_inclusive(
+    x1: float,
+    z1: float,
+    x2: float,
+    z2: float,
+    x3: float,
+    z3: float,
+    x4: float,
+    z4: float,
+) -> bool:
+    """Test if two line segments intersect (including endpoints).
+
+    Uses parametric line intersection algorithm with closed interval [0, 1].
+    """
+    denominator = (z4 - z3) * (x2 - x1) - (x4 - x3) * (z2 - z1)
+
+    if denominator == 0:
+        return False
+
+    ua = ((x4 - x3) * (z1 - z3) - (z4 - z3) * (x1 - x3)) / denominator
+    if ua < 0 or ua > 1:
+        return False
+
+    ub = ((x2 - x1) * (z1 - z3) - (z2 - z1) * (x1 - x3)) / denominator
+    return 0 <= ub <= 1
+
+
 def segments_intersect(
     x1: float,
     z1: float,
@@ -404,3 +431,64 @@ def is_valid_placement(
                         return False
 
     return True
+
+
+def point_in_polygon(
+    px: float, pz: float, vertices: list[tuple[float, float]]
+) -> bool:
+    """Ray-casting point-in-polygon test."""
+    n = len(vertices)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, zi = vertices[i]
+        xj, zj = vertices[j]
+        if (zi > pz) != (zj > pz):
+            intersect_x = (xj - xi) * (pz - zi) / (zj - zi) + xi
+            if px < intersect_x:
+                inside = not inside
+        j = i
+    return inside
+
+
+def polygons_overlap(
+    poly_a: list[tuple[float, float]],
+    poly_b: list[tuple[float, float]],
+) -> bool:
+    """Test if two polygons overlap (share any interior area).
+
+    Checks:
+    1. Edge-edge intersections (inclusive of endpoints)
+    2. Containment of any vertex of A inside B
+    3. Containment of any vertex of B inside A
+    """
+    n_a = len(poly_a)
+    n_b = len(poly_b)
+    if n_a < 3 or n_b < 3:
+        return False
+
+    # 1. Edge-edge intersection
+    for i in range(n_a):
+        j = (i + 1) % n_a
+        ax1, az1 = poly_a[i]
+        ax2, az2 = poly_a[j]
+        for k in range(n_b):
+            m = (k + 1) % n_b
+            bx1, bz1 = poly_b[k]
+            bx2, bz2 = poly_b[m]
+            if segments_intersect_inclusive(
+                ax1, az1, ax2, az2, bx1, bz1, bx2, bz2
+            ):
+                return True
+
+    # 2. Any vertex of A inside B
+    for px, pz in poly_a:
+        if point_in_polygon(px, pz, poly_b):
+            return True
+
+    # 3. Any vertex of B inside A
+    for px, pz in poly_b:
+        if point_in_polygon(px, pz, poly_a):
+            return True
+
+    return False

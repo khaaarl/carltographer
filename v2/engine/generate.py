@@ -97,11 +97,10 @@ def _compute_score(
     if skip_visibility:
         return phase2_base
 
-    # Skip expensive DZ/objective PIP tests during scoring when those
-    # metrics aren't needed — saves ~60% per visibility call.
+    # Skip expensive DZ/objective metrics during scoring when those
+    # metrics aren't needed.
     needs_dz = scoring_targets is not None and (
-        scoring_targets.dz_visibility_target is not None
-        or scoring_targets.dz_hidden_target is not None
+        scoring_targets.dz_hideability_target is not None
         or scoring_targets.objective_hidability_target is not None
     )
 
@@ -128,25 +127,14 @@ def _compute_score(
         total_weighted_error += w * error
         total_weight += w
 
-    if scoring_targets.dz_visibility_target is not None:
-        dz_vis = vis.get("dz_visibility")
-        if dz_vis and len(dz_vis) > 0:
-            target = scoring_targets.dz_visibility_target
+    if scoring_targets.dz_hideability_target is not None:
+        dz_hide = vis.get("dz_hideability")
+        if dz_hide and len(dz_hide) > 0:
+            target = scoring_targets.dz_hideability_target
             avg_error = sum(
-                abs(d["value"] - target) for d in dz_vis.values()
-            ) / len(dz_vis)
-            w = scoring_targets.dz_visibility_weight
-            total_weighted_error += w * avg_error
-            total_weight += w
-
-    if scoring_targets.dz_hidden_target is not None:
-        dz_cross = vis.get("dz_to_dz_visibility")
-        if dz_cross and len(dz_cross) > 0:
-            target = scoring_targets.dz_hidden_target
-            avg_error = sum(
-                abs(d["value"] - target) for d in dz_cross.values()
-            ) / len(dz_cross)
-            w = scoring_targets.dz_hidden_weight
+                abs(d["value"] - target) for d in dz_hide.values()
+            ) / len(dz_hide)
+            w = scoring_targets.dz_hideability_weight
             total_weighted_error += w * avg_error
             total_weight += w
 

@@ -66,6 +66,7 @@ import itertools
 import math
 
 import numpy as np
+from shapely.geometry import Polygon as ShapelyPolygon
 
 from .collision import (
     _is_at_origin,
@@ -76,6 +77,7 @@ from .collision import (
     obb_corners,
     obbs_overlap,
     point_to_segment_distance_squared,
+    polygons_overlap,
 )
 from .types import (
     DeploymentZone,
@@ -88,6 +90,40 @@ from .types import (
 Segment = tuple[float, float, float, float]  # (x1, z1, x2, z2)
 
 DZ_EXPANSION_INCHES = 6.0
+
+
+def _expand_dz_polygons(
+    dz_polygons: list[list[tuple[float, float]]],
+    expansion: float,
+) -> list[list[tuple[float, float]]]:
+    """Expand deployment zone polygons outward by the given distance.
+
+    Uses shapely's buffer() to handle convex and concave shapes correctly.
+    Returns expanded polygon(s) as lists of coordinate tuples.
+    """
+    if expansion <= 0:
+        return dz_polygons
+
+    result: list[list[tuple[float, float]]] = []
+    for ring in dz_polygons:
+        if len(ring) < 3:
+            continue
+        sp = ShapelyPolygon(ring)
+        buffered = sp.buffer(expansion)
+        if buffered.is_empty:
+            continue
+        if buffered.geom_type == "MultiPolygon":
+            for geom in buffered.geoms:
+                coords = list(geom.exterior.coords)
+                if coords and coords[-1] == coords[0]:
+                    coords = coords[:-1]
+                result.append(coords)
+        else:
+            coords = list(buffered.exterior.coords)
+            if coords and coords[-1] == coords[0]:
+                coords = coords[:-1]
+            result.append(coords)
+    return result
 
 
 def _polygon_area(vertices: list[tuple[float, float]]) -> float:
@@ -913,27 +949,16 @@ def _merge_dual_pass_results(
     # Overall
     result["overall"] = _merge_entry(standard["overall"], infantry["overall"])
 
-    # DZ visibility (per-DZ entries)
-    if "dz_visibility" in standard and "dz_visibility" in infantry:
+    # DZ hideability (per-DZ entries)
+    if "dz_hideability" in standard and "dz_hideability" in infantry:
         merged_dz: dict = {}
-        for key in standard["dz_visibility"]:
-            if key in infantry["dz_visibility"]:
+        for key in standard["dz_hideability"]:
+            if key in infantry["dz_hideability"]:
                 merged_dz[key] = _merge_entry(
-                    standard["dz_visibility"][key],
-                    infantry["dz_visibility"][key],
+                    standard["dz_hideability"][key],
+                    infantry["dz_hideability"][key],
                 )
-        result["dz_visibility"] = merged_dz
-
-    # DZ-to-DZ visibility (per-pair entries)
-    if "dz_to_dz_visibility" in standard and "dz_to_dz_visibility" in infantry:
-        merged_cross: dict = {}
-        for key in standard["dz_to_dz_visibility"]:
-            if key in infantry["dz_to_dz_visibility"]:
-                merged_cross[key] = _merge_entry(
-                    standard["dz_to_dz_visibility"][key],
-                    infantry["dz_to_dz_visibility"][key],
-                )
-        result["dz_to_dz_visibility"] = merged_cross
+        result["dz_hideability"] = merged_dz
 
     # Objective hidability (per-DZ entries)
     if (
@@ -1055,24 +1080,23 @@ def compute_layout_visibility(
 
     # -- DZ pre-loop setup --
     # When overall_only=True (e.g. during scoring), skip DZ/objective work
-    # to avoid the expensive per-observer PIP tests (~173ms per call).
+    # to avoid the expensive per-observer polygon intersection tests.
     has_dzs = (
         not overall_only
         and layout.mission is not None
         and len(layout.mission.deployment_zones) > 0
     )
+    # (dz_id, polygon_tuples, expanded_polygons)
     dz_data: list[
-        tuple[str, list[list[tuple[float, float]]], list[tuple[float, float]]]
-    ] = []  # (dz_id, polygon_tuples, sample_points)
+        tuple[
+            str,
+            list[list[tuple[float, float]]],
+            list[list[tuple[float, float]]],
+        ]
+    ] = []
 
-    # Accumulators for dz_visibility: {dz_id: [total_fraction, observer_count]}
-    dz_vis_accum: dict[str, list[float]] = {}
-    # Cross-DZ: bool mask tracking which target samples have been seen
-    dz_cross_seen: dict[str, np.ndarray] = {}
-    dz_cross_obs_count: dict[str, int] = {}
-    # Numpy arrays for vectorized PIP on DZ sample points
-    dz_np_x: dict[str, np.ndarray] = {}
-    dz_np_z: dict[str, np.ndarray] = {}
+    # DZ hideability accumulators: {dz_id: [hidden_count, total_count]}
+    dz_hide_accum: dict[str, list[int]] = {}
 
     if has_dzs:
         mission = layout.mission
@@ -1080,16 +1104,9 @@ def compute_layout_visibility(
 
         for dz in dzs:
             polys_tuples = [[(p.x, p.z) for p in poly] for poly in dz.polygons]
-            dz_samples = _sample_points_in_dz(dz, 1.0, 0.0)
-            dz_data.append((dz.id, polys_tuples, dz_samples))
-            dz_vis_accum[dz.id] = [0.0, 0]  # [total_fraction, observer_count]
-            dz_np_x[dz.id] = np.array([p[0] for p in dz_samples])
-            dz_np_z[dz.id] = np.array([p[1] for p in dz_samples])
-            for other_dz in dzs:
-                if other_dz.id != dz.id:
-                    key = f"{dz.id}_from_{other_dz.id}"
-                    dz_cross_seen[key] = np.zeros(len(dz_samples), dtype=bool)
-                    dz_cross_obs_count[key] = 0
+            expanded = _expand_dz_polygons(polys_tuples, DZ_EXPANSION_INCHES)
+            dz_data.append((dz.id, polys_tuples, expanded))
+            dz_hide_accum[dz.id] = [0, 0]  # [hidden_count, total_count]
 
     # -- Objective hidability pre-loop setup --
     has_objectives = (
@@ -1145,29 +1162,20 @@ def compute_layout_visibility(
 
         if not segments:
             total_ratio += 1.0
+            # No blocking segments = full visibility. For DZ hideability,
+            # an observer with full visibility is NOT hidden (vis poly = table).
             if has_dzs:
-                # Full visibility: all DZ samples visible
-                for dz_id, dz_polys, dz_samples in dz_data:
-                    observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
-                    observer_in_expanded_dz = (
-                        observer_in_dz
-                        or _point_near_any_polygon(
-                            sx, sz, dz_polys, DZ_EXPANSION_INCHES
-                        )
-                    )
-                    if not observer_in_dz:
-                        dz_vis_accum[dz_id][0] += 1.0
-                        dz_vis_accum[dz_id][1] += 1
-                    if observer_in_expanded_dz:
-                        for other_id, _, _ in dz_data:
+                for dz_id, dz_polys, expanded_polys in dz_data:
+                    if _point_in_any_polygon(sx, sz, dz_polys):
+                        # Observer inside this DZ: check vs opponent expanded DZ
+                        dz_hide_accum[dz_id][1] += 1
+                        # Full visibility -> overlaps opponent -> not hidden
+                    if has_objectives:
+                        for other_id, _, other_exp in dz_data:
                             if other_id != dz_id:
-                                key = f"{other_id}_from_{dz_id}"
-                                if key in dz_cross_seen:
-                                    dz_cross_obs_count[key] += 1
-                                    dz_cross_seen[key][:] = True
-                        if has_objectives:
-                            for oi in range(len(obj_sample_points)):
-                                obj_seen_from_dz[dz_id][oi][:] = True
+                                if _point_in_any_polygon(sx, sz, dz_polys):
+                                    for oi in range(len(obj_sample_points)):
+                                        obj_seen_from_dz[dz_id][oi][:] = True
             continue
 
         vis_poly = _compute_visibility_polygon(
@@ -1176,96 +1184,51 @@ def compute_layout_visibility(
         if len(vis_poly) < 3:
             total_ratio += 1.0
             if has_dzs:
-                for dz_id, dz_polys, dz_samples in dz_data:
-                    observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
-                    observer_in_expanded_dz = (
-                        observer_in_dz
-                        or _point_near_any_polygon(
-                            sx, sz, dz_polys, DZ_EXPANSION_INCHES
-                        )
-                    )
-                    if not observer_in_dz:
-                        dz_vis_accum[dz_id][0] += 1.0
-                        dz_vis_accum[dz_id][1] += 1
-                    if observer_in_expanded_dz:
-                        for other_id, _, _ in dz_data:
+                for dz_id, dz_polys, expanded_polys in dz_data:
+                    if _point_in_any_polygon(sx, sz, dz_polys):
+                        dz_hide_accum[dz_id][1] += 1
+                    if has_objectives:
+                        for other_id, _, other_exp in dz_data:
                             if other_id != dz_id:
-                                key = f"{other_id}_from_{dz_id}"
-                                if key in dz_cross_seen:
-                                    dz_cross_obs_count[key] += 1
-                                    dz_cross_seen[key][:] = True
-                        if has_objectives:
-                            for oi in range(len(obj_sample_points)):
-                                obj_seen_from_dz[dz_id][oi][:] = True
+                                if _point_in_any_polygon(sx, sz, dz_polys):
+                                    for oi in range(len(obj_sample_points)):
+                                        obj_seen_from_dz[dz_id][oi][:] = True
             continue
 
         vis_area = _polygon_area(vis_poly)
         ratio = min(vis_area / table_area, 1.0)
         total_ratio += ratio
 
-        # DZ visibility accumulation (single batched PIP per observer)
+        # DZ hideability + objective hidability (polygon intersection)
         if has_dzs:
-            # Determine DZ membership for this observer
-            obs_in_dz: dict[str, bool] = {}
-            obs_in_expanded: dict[str, bool] = {}
-            for dz_id, dz_polys, _ in dz_data:
-                in_dz = _point_in_any_polygon(sx, sz, dz_polys)
-                obs_in_dz[dz_id] = in_dz
-                obs_in_expanded[dz_id] = in_dz or _point_near_any_polygon(
-                    sx, sz, dz_polys, DZ_EXPANSION_INCHES
-                )
+            for dz_id, dz_polys, expanded_polys in dz_data:
+                if not _point_in_any_polygon(sx, sz, dz_polys):
+                    continue
+                # This observer is inside DZ dz_id.
+                # Find opponent expanded DZ polygons and test overlap.
+                for other_id, _, other_exp in dz_data:
+                    if other_id == dz_id:
+                        continue
+                    # DZ hideability: does this observer's vis poly
+                    # overlap the opponent's expanded DZ?
+                    dz_hide_accum[dz_id][1] += 1
+                    overlaps = any(
+                        polygons_overlap(vis_poly, ep) for ep in other_exp
+                    )
+                    if not overlaps:
+                        dz_hide_accum[dz_id][0] += 1
 
-            # Build combined point arrays + slice metadata
-            batch_x: list[np.ndarray] = []
-            batch_z: list[np.ndarray] = []
-            # Each entry: (purpose, key, n_points)
-            # key type varies by purpose: str for frac/cross, tuple for obj
-            batch_info: list[tuple[str, str | tuple[str, int], int]] = []
-
-            for dz_id, _, dz_samples in dz_data:
-                if not obs_in_dz[dz_id]:
-                    n = len(dz_np_x[dz_id])
-                    batch_x.append(dz_np_x[dz_id])
-                    batch_z.append(dz_np_z[dz_id])
-                    batch_info.append(("frac", dz_id, n))
-                if obs_in_expanded[dz_id]:
-                    for other_id, _, _ in dz_data:
-                        if other_id != dz_id:
-                            key = f"{other_id}_from_{dz_id}"
-                            if key in dz_cross_seen:
-                                dz_cross_obs_count[key] += 1
-                                n = len(dz_np_x[other_id])
-                                batch_x.append(dz_np_x[other_id])
-                                batch_z.append(dz_np_z[other_id])
-                                batch_info.append(("cross", key, n))
-                    if has_objectives:
-                        for oi in range(len(obj_sample_points)):
-                            n = len(obj_np_x[oi])
-                            batch_x.append(obj_np_x[oi])
-                            batch_z.append(obj_np_z[oi])
-                            batch_info.append(("obj", (dz_id, oi), n))
-
-            if batch_x:
-                all_x = np.concatenate(batch_x)
-                all_z = np.concatenate(batch_z)
-                all_mask = _vectorized_pip_mask(all_x, all_z, vis_poly)
-
-                offset = 0
-                for purpose, batch_key, n in batch_info:
-                    chunk = all_mask[offset : offset + n]
-                    if purpose == "frac":
-                        assert isinstance(batch_key, str)
-                        frac = int(np.sum(chunk)) / n if n > 0 else 0.0
-                        dz_vis_accum[batch_key][0] += frac
-                        dz_vis_accum[batch_key][1] += 1
-                    elif purpose == "cross":
-                        assert isinstance(batch_key, str)
-                        dz_cross_seen[batch_key] |= chunk
-                    elif purpose == "obj":
-                        assert isinstance(batch_key, tuple)
-                        dz_id_obj, oi = batch_key
-                        obj_seen_from_dz[dz_id_obj][oi] |= chunk
-                    offset += n
+                # Objective hidability: for each objective, test if vis poly
+                # overlaps each opposing expanded DZ
+                if has_objectives:
+                    for oi in range(len(obj_sample_points)):
+                        obj_x_arr = obj_np_x[oi]
+                        obj_z_arr = obj_np_z[oi]
+                        # Mark which objective sample points this observer can see
+                        mask = _vectorized_pip_mask(
+                            obj_x_arr, obj_z_arr, vis_poly
+                        )
+                        obj_seen_from_dz[dz_id][oi] |= mask
 
     avg_visibility = total_ratio / len(sample_points)
     value = round(avg_visibility * 100.0, 2)
@@ -1278,52 +1241,27 @@ def compute_layout_visibility(
         }
     }
 
-    # Build DZ visibility results
+    # Build DZ hideability results
     if has_dzs:
         mission = layout.mission
         dzs = mission.deployment_zones
 
-        dz_visibility: dict = {}
-        dz_to_dz_visibility: dict = {}
+        dz_hideability: dict = {}
 
-        for dz_id, accum in dz_vis_accum.items():
-            total_frac, obs_count = accum
-            avg = total_frac / obs_count if obs_count > 0 else 0.0
-            dz_samples_count = 0
-            for did, _dp, ds in dz_data:
-                if did == dz_id:
-                    dz_samples_count = len(ds)
-                    break
-            dz_visibility[dz_id] = {
-                "value": round(avg * 100.0, 2),
-                "dz_sample_count": dz_samples_count,
-                "observer_count": obs_count,
-            }
-
-        for key, seen_mask in dz_cross_seen.items():
-            # Extract target_id from key (format: "target_from_observer")
-            parts = key.split("_from_")
-            target_id = parts[0]
-            target_samples_count = 0
-            for did, _dp, ds in dz_data:
-                if did == target_id:
-                    target_samples_count = len(ds)
-                    break
-            hidden_count = target_samples_count - int(np.sum(seen_mask))
-            hidden_pct = (
-                round(hidden_count / target_samples_count * 100.0, 2)
-                if target_samples_count > 0
+        for dz_id, accum in dz_hide_accum.items():
+            hidden_count, total_count = accum
+            pct = (
+                round(hidden_count / total_count * 100.0, 2)
+                if total_count > 0
                 else 0.0
             )
-            dz_to_dz_visibility[key] = {
-                "value": hidden_pct,
+            dz_hideability[dz_id] = {
+                "value": pct,
                 "hidden_count": hidden_count,
-                "target_sample_count": target_samples_count,
-                "observer_count": dz_cross_obs_count.get(key, 0),
+                "total_count": total_count,
             }
 
-        result["dz_visibility"] = dz_visibility
-        result["dz_to_dz_visibility"] = dz_to_dz_visibility
+        result["dz_hideability"] = dz_hideability
 
         # Build objective hidability results
         if has_objectives:

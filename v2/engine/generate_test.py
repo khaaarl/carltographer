@@ -836,15 +836,24 @@ class TestScoringTargets:
         pd["scoring_targets"] = {
             "overall_visibility_target": 30.0,
             "overall_visibility_weight": 2.0,
-            "dz_hidden_target": 40.0,
+            "dz_hideability_target": 40.0,
         }
         params = EngineParams.from_dict(pd)
         assert params.scoring_targets is not None
         assert params.scoring_targets.overall_visibility_target == 30.0
         assert params.scoring_targets.overall_visibility_weight == 2.0
-        assert params.scoring_targets.dz_visibility_target is None
-        assert params.scoring_targets.dz_hidden_target == 40.0
-        assert params.scoring_targets.dz_hidden_weight == 1.0
+        assert params.scoring_targets.dz_hideability_target == 40.0
+        assert params.scoring_targets.dz_hideability_weight == 1.0
+
+    def test_scoring_targets_from_dict_backward_compat(self):
+        """Old dz_hidden_target key maps to dz_hideability_target."""
+        pd = _make_params_dict(seed=42, num_steps=50)
+        pd["scoring_targets"] = {
+            "dz_hidden_target": 40.0,
+        }
+        params = EngineParams.from_dict(pd)
+        assert params.scoring_targets is not None
+        assert params.scoring_targets.dz_hideability_target == 40.0
 
     def test_scoring_targets_to_dict(self):
         """to_dict only includes set targets."""
@@ -855,8 +864,7 @@ class TestScoringTargets:
         d = st.to_dict()
         assert d["overall_visibility_target"] == 30.0
         assert d["overall_visibility_weight"] == 2.0
-        assert "dz_visibility_target" not in d
-        assert "dz_hidden_target" not in d
+        assert "dz_hideability_target" not in d
 
     def test_phase1_unaffected_by_targets(self):
         """Phase 1 scoring is unchanged by scoring targets."""

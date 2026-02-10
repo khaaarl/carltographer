@@ -107,6 +107,10 @@ pub struct DeploymentZone {
     pub id: String,
     #[serde(default)]
     pub polygons: Vec<Vec<Point2D>>,
+    /// Precomputed expanded DZ polygons (from Python via shapely buffer).
+    /// Each inner Vec is a ring of (x, z) coordinates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded_polygons: Vec<Vec<Point2D>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,14 +190,14 @@ pub struct ScoringTargets {
     pub overall_visibility_target: Option<f64>,
     #[serde(default = "default_weight")]
     pub overall_visibility_weight: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dz_visibility_target: Option<f64>,
-    #[serde(default = "default_weight")]
-    pub dz_visibility_weight: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dz_hidden_target: Option<f64>,
-    #[serde(default = "default_weight")]
-    pub dz_hidden_weight: f64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "dz_visibility_target"
+    )]
+    pub dz_hideability_target: Option<f64>,
+    #[serde(default = "default_weight", alias = "dz_visibility_weight")]
+    pub dz_hideability_weight: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objective_hidability_target: Option<f64>,
     #[serde(default = "default_weight")]

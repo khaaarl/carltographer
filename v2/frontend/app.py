@@ -19,6 +19,7 @@ from ..engine import generate_json
 from ..engine.collision import is_valid_placement
 from ..engine.types import PlacedFeature as TypedPlacedFeature
 from ..engine.types import TerrainObject as TypedTerrainObject
+from ..engine.visibility import DZ_EXPANSION_INCHES, _expand_dz_polygons
 from ..engine_cmp.hash_manifest import verify_engine_unchanged
 from .catalogs import TERRAIN_CATALOGS
 from .layout_io import load_layout, save_layout_png
@@ -31,6 +32,31 @@ try:
 except ImportError:
     _engine_rs = None  # type: ignore
     _HAS_RUST_ENGINE = False
+
+
+def _enrich_params_for_rust(params: dict) -> dict:
+    """Add expanded DZ polygons to params dict for the Rust engine.
+
+    The Rust engine receives precomputed expanded DZ polygons via JSON
+    (avoids reimplementing shapely buffer() in Rust).
+    """
+    mission = params.get("mission")
+    if mission and "deployment_zones" in mission:
+        for dz in mission["deployment_zones"]:
+            if "expanded_polygons" not in dz:
+                polys = dz.get("polygons", [])
+                polys_tuples = [
+                    [(p["x_inches"], p["z_inches"]) for p in poly]
+                    for poly in polys
+                ]
+                expanded = _expand_dz_polygons(
+                    polys_tuples, DZ_EXPANSION_INCHES
+                )
+                dz["expanded_polygons"] = [
+                    [{"x_inches": x, "z_inches": z} for x, z in ring]
+                    for ring in expanded
+                ]
+    return params
 
 
 def _should_use_rust_engine() -> bool:
@@ -597,10 +623,8 @@ class ControlPanel(ttk.Frame):
         # Scoring target variables
         self.overall_vis_target_var = tk.StringVar(value="30")
         self.overall_vis_weight_var = tk.StringVar(value="1.0")
-        self.dz_vis_target_var = tk.StringVar(value="20")
-        self.dz_vis_weight_var = tk.StringVar(value="1.0")
-        self.dz_hidden_target_var = tk.StringVar(value="70")
-        self.dz_hidden_weight_var = tk.StringVar(value="5.0")
+        self.dz_hide_target_var = tk.StringVar(value="70")
+        self.dz_hide_weight_var = tk.StringVar(value="5.0")
         self.obj_hide_target_var = tk.StringVar(value="50")
         self.obj_hide_weight_var = tk.StringVar(value="5.0")
 
@@ -728,12 +752,8 @@ class ControlPanel(ttk.Frame):
             right, row, "Overall vis %:", self.overall_vis_target_var
         )
         row = self._field(right, row, "  weight:", self.overall_vis_weight_var)
-        row = self._field(right, row, "DZ vis %:", self.dz_vis_target_var)
-        row = self._field(right, row, "  weight:", self.dz_vis_weight_var)
-        row = self._field(
-            right, row, "DZ hidden %:", self.dz_hidden_target_var
-        )
-        row = self._field(right, row, "  weight:", self.dz_hidden_weight_var)
+        row = self._field(right, row, "DZ hide %:", self.dz_hide_target_var)
+        row = self._field(right, row, "  weight:", self.dz_hide_weight_var)
         row = self._field(right, row, "Obj hide %:", self.obj_hide_target_var)
         row = self._field(right, row, "  weight:", self.obj_hide_weight_var)
 
@@ -911,16 +931,13 @@ class ControlPanel(ttk.Frame):
             # Build scoring targets if any target is set
             overall_vis_t = parse_float(self.overall_vis_target_var.get())
             overall_vis_w = parse_float(self.overall_vis_weight_var.get())
-            dz_vis_t = parse_float(self.dz_vis_target_var.get())
-            dz_vis_w = parse_float(self.dz_vis_weight_var.get())
-            dz_hidden_t = parse_float(self.dz_hidden_target_var.get())
-            dz_hidden_w = parse_float(self.dz_hidden_weight_var.get())
+            dz_hide_t = parse_float(self.dz_hide_target_var.get())
+            dz_hide_w = parse_float(self.dz_hide_weight_var.get())
             obj_hide_t = parse_float(self.obj_hide_target_var.get())
             obj_hide_w = parse_float(self.obj_hide_weight_var.get())
 
             has_any_target = any(
-                t is not None
-                for t in [overall_vis_t, dz_vis_t, dz_hidden_t, obj_hide_t]
+                t is not None for t in [overall_vis_t, dz_hide_t, obj_hide_t]
             )
             if has_any_target:
                 scoring_targets = {}
@@ -932,14 +949,10 @@ class ControlPanel(ttk.Frame):
                         scoring_targets["overall_visibility_weight"] = (
                             overall_vis_w
                         )
-                if dz_vis_t is not None:
-                    scoring_targets["dz_visibility_target"] = dz_vis_t
-                    if dz_vis_w is not None:
-                        scoring_targets["dz_visibility_weight"] = dz_vis_w
-                if dz_hidden_t is not None:
-                    scoring_targets["dz_hidden_target"] = dz_hidden_t
-                    if dz_hidden_w is not None:
-                        scoring_targets["dz_hidden_weight"] = dz_hidden_w
+                if dz_hide_t is not None:
+                    scoring_targets["dz_hideability_target"] = dz_hide_t
+                    if dz_hide_w is not None:
+                        scoring_targets["dz_hideability_weight"] = dz_hide_w
                 if obj_hide_t is not None:
                     scoring_targets["objective_hidability_target"] = obj_hide_t
                     if obj_hide_w is not None:
@@ -1065,12 +1078,10 @@ class App:
             self._results_frame, text="Visibility: --"
         )
         self.visibility_label.grid(row=0, column=0, sticky="w", pady=1)
-        self.dz_vis_label = ttk.Label(self._results_frame, text="")
-        self.dz_vis_label.grid(row=1, column=0, sticky="w", pady=1)
-        self.dz_to_dz_vis_label = ttk.Label(self._results_frame, text="")
-        self.dz_to_dz_vis_label.grid(row=2, column=0, sticky="w", pady=1)
+        self.dz_hide_label = ttk.Label(self._results_frame, text="")
+        self.dz_hide_label.grid(row=1, column=0, sticky="w", pady=1)
         self.obj_hide_label = ttk.Label(self._results_frame, text="")
-        self.obj_hide_label.grid(row=3, column=0, sticky="w", pady=1)
+        self.obj_hide_label.grid(row=2, column=0, sticky="w", pady=1)
 
         # Right panel for controls and history
         self.right_panel = ttk.Frame(self.root)
@@ -1192,7 +1203,9 @@ class App:
         params["initial_layout"] = self.layout
 
         if _should_use_rust_engine():
-            result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
+            result_json = _engine_rs.generate_json(  # type: ignore[union-attr]
+                json.dumps(_enrich_params_for_rust(params))
+            )
             result = json.loads(result_json)
         else:
             result = generate_json(params)
@@ -1635,7 +1648,9 @@ class App:
             params["initial_layout"] = self.layout
 
             if _should_use_rust_engine():
-                result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
+                result_json = _engine_rs.generate_json(  # type: ignore[union-attr]
+                    json.dumps(_enrich_params_for_rust(params))
+                )
                 result = json.loads(result_json)
             else:
                 result = generate_json(params)
@@ -2310,7 +2325,9 @@ class App:
 
         # Auto-select engine based on manifest verification
         if _should_use_rust_engine():
-            result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
+            result_json = _engine_rs.generate_json(  # type: ignore[union-attr]
+                json.dumps(_enrich_params_for_rust(params))
+            )
             result = json.loads(result_json)
         else:
             result = generate_json(params)
@@ -2329,31 +2346,18 @@ class App:
                 val = overall["value"]
                 self.visibility_label.config(text=f"Visibility: {val}%")
 
-                # DZ visibility
-                dz_vis = vis.get("dz_visibility")
-                if isinstance(dz_vis, dict) and dz_vis:
+                # DZ hideability
+                dz_hide = vis.get("dz_hideability")
+                if isinstance(dz_hide, dict) and dz_hide:
                     parts = [
                         f"{dz_id}: {data['value']}%"
-                        for dz_id, data in dz_vis.items()
+                        for dz_id, data in dz_hide.items()
                     ]
-                    self.dz_vis_label.config(
-                        text=f"DZ Vis: {', '.join(parts)}"
+                    self.dz_hide_label.config(
+                        text=f"DZ Hide: {', '.join(parts)}"
                     )
                 else:
-                    self.dz_vis_label.config(text="")
-
-                # DZ hidden fraction (% of DZ hidden from opposing DZ)
-                dz_cross = vis.get("dz_to_dz_visibility")
-                if isinstance(dz_cross, dict) and dz_cross:
-                    parts = [
-                        f"{key}: {data['value']}%"
-                        for key, data in dz_cross.items()
-                    ]
-                    self.dz_to_dz_vis_label.config(
-                        text=f"DZ Hidden: {', '.join(parts)}"
-                    )
-                else:
-                    self.dz_to_dz_vis_label.config(text="")
+                    self.dz_hide_label.config(text="")
 
                 # Objective hidability
                 obj_hide = vis.get("objective_hidability")
@@ -2370,8 +2374,7 @@ class App:
                 return
 
         self.visibility_label.config(text="Visibility: --")
-        self.dz_vis_label.config(text="")
-        self.dz_to_dz_vis_label.config(text="")
+        self.dz_hide_label.config(text="")
         self.obj_hide_label.config(text="")
 
     def run(self):
