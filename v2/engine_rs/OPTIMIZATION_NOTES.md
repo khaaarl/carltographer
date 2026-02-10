@@ -17,6 +17,19 @@ Baseline numbers (with corrected 5" crates, before any optimization):
 - `visibility_100`: 3.80 s
 - `mission_hna`: 5.70 s
 
+### Benchmark fixtures
+
+| Benchmark | Table | Catalog | Mission | Steps | Visibility |
+|---|---|---|---|---|---|
+| `basic_100` | 60×44 | crates (2") | none | 100 | off |
+| `all_features` | 60×44 | crates (2") | none | 100 | off |
+| `visibility_50` | 60×44 | crates (5") | none | 50 | on |
+| `visibility_100` | 60×44 | crates (5") | none | 100 | on |
+| `mission_hna` | 60×44 | crates (5") | HnA | 50 | on + DZ |
+| `mission_ruins` | 44×30 | crates + ruins + walls | HnA | 50 | on + DZ |
+
+The `mission_ruins` fixture uses the WTC-style catalog matching the parity test default: 5" crates, 10×6" ruin bases (obscuring), and 6×0.5×5" opaque walls within ruins. This exercises multi-component features, obscuring segment generation, and a denser terrain mix on a smaller table.
+
 ## Committed Optimizations (3 commits)
 
 ### 1. Angular bucketing (commit `47e451c`)
@@ -26,42 +39,46 @@ Partition segments by angular extent into 64 buckets. Each ray only tests segmen
 - visibility_100: 3.80s → 2.19s (**-42%**)
 - mission_hna: 5.70s → 4.76s (**-16%**)
 
-### 2. Trig reduction in ray generation (commit `43c1bfa`)
-Replace 6 cos/sin calls per endpoint with 1 sqrt (normalization) + small-angle rotation for ±epsilon rays. Still uses atan2 for the sort key.
-
-- visibility_50: 688ms → 548ms (**-20%**)
-- visibility_100: 2.19s → 2.17s (~same, intersection-dominated)
-- mission_hna: 4.76s → 4.82s (~same)
+### 2. ~~Trig reduction in ray generation~~ (commit `43c1bfa`, **reverted**)
+Originally replaced 6 cos/sin calls per endpoint with 1 sqrt + small-angle rotation matrix for ±epsilon rays. **Reverted for FP parity**: the rotation matrix `ndx * cos_eps ± ndz * sin_eps` produces different IEEE 754 results than Python's `cos(angle ± eps)` / `sin(angle ± eps)`, causing visibility polygon vertex differences that propagated into DZ PIP boundary tests. The code now uses `cos(angle ± eps)` / `sin(angle ± eps)` (4 trig calls per endpoint) to match Python exactly.
 
 ### 3. Inlined intersection + removed polygon buffer (commit `dfd7351`)
 Inline `ray_segment_intersection` in the hot loop to enable early exit when `t >= min_t` (skips u computation). Eliminate intermediate `polygon` Vec, write directly to result.
 
-- visibility_50: 548ms → 476ms (**-13%**)
-- visibility_100: 2.17s → 1.68s (**-23%**)
-- mission_hna: 4.82s → 4.93s (~same)
+- visibility_50: 688ms → 583ms (**-15%**)
+- visibility_100: 2.19s → 1.84s (**-16%**)
+- mission_hna: 4.76s → 4.88s (~same)
+
+*Note: numbers updated to reflect opt #2 revert (baseline is post-bucketing, not post-trig-reduction).*
 
 ### Cumulative improvement (single-threaded optimizations)
 | Benchmark | Before | After | Improvement |
 |---|---|---|---|
-| visibility_50 | 872 ms | 476 ms | **-45%** |
-| visibility_100 | 3.80 s | 1.68 s | **-56%** |
-| mission_hna | 5.70 s | 4.93 s | **-14%** |
+| visibility_50 | 872 ms | ~583 ms | **-33%** |
+| visibility_100 | 3.80 s | ~1.84 s | **-52%** |
+| mission_hna | 5.70 s | ~4.88 s | **-14%** |
+
+*Note: cumulative ST improvement is lower than originally reported because opt #2 (trig reduction) was reverted.*
 
 ### 4. Rayon parallel observer loop (commit `3f719bc`)
 Parallelize the observer loop in `compute_layout_visibility` using `rayon::par_iter().fold().reduce()`. Each thread gets a `Box<ThreadAccum>` with its own working buffers (segments, vis_bufs, vis_poly, pip_buf, etc.) and accumulators (total_ratio, dz_vis_accum, dz_cross_seen, obj_seen_from_dz). Merge via sum for ratios/counts and OR for boolean seen arrays.
 
 Note: rayon parallelism changes the order observers are processed, but the final result is mathematically identical (addition is commutative). Parity with Python engine is maintained.
 
-- visibility_50: 476ms → 178ms (**-63%**)
-- visibility_100: 1.68s → 551ms (**-67%**)
-- mission_hna: 4.93s → 1.92s (**-61%**)
+*Numbers below estimated relative to the adjusted ST baseline (post opt #2 revert):*
 
-### Cumulative improvement (optimizations 1-4: ST opts + parallelism)
+- visibility_50: ~583ms → ~218ms (**-63%**)
+- visibility_100: ~1.84s → ~606ms (**-67%**)
+- mission_hna: ~4.88s → ~1.90s (**-61%**)
+
+### Cumulative improvement (optimizations 1, 3, 4: ST opts + parallelism)
 | Benchmark | Original | After ST opts | After rayon | Improvement |
 |---|---|---|---|---|
-| visibility_50 | 872 ms | 476 ms | 178 ms | **-80%** |
-| visibility_100 | 3.80 s | 1.68 s | 551 ms | **-85%** |
-| mission_hna | 5.70 s | 4.93 s | 1.92 s | **-66%** |
+| visibility_50 | 872 ms | ~583 ms | ~218 ms | **-75%** |
+| visibility_100 | 3.80 s | ~1.84 s | ~606 ms | **-84%** |
+| mission_hna | 5.70 s | ~4.88 s | ~1.90 s | **-67%** |
+
+*Note: opt #2 (trig reduction) was reverted for FP parity, so ST improvement is slightly less than originally reported.*
 
 ### 5. Z-sorted binary search for dz_vis PIP
 
@@ -71,7 +88,7 @@ The profiling data (see below) showed PIP operations dominate at ~94% of mission
 
 Data structure: `DzSortedSamples` holds `Vec<(z, x, original_index)>` sorted by z. Uses `slice::partition_point` (binary search) to find the start/end of each edge's Z-range.
 
-Additional micro-optimization: precompute `1.0 / (zj - zi)` once per edge instead of dividing in the inner loop. Skip horizontal edges (zi == zj) entirely since they have no crossings.
+~~Additional micro-optimization: precompute `1.0 / (zj - zi)` once per edge instead of dividing in the inner loop.~~ **Reverted**: the precomputed `1.0 / dz` then `dx * (pz - zi) * inv_dz` produces different IEEE 754 results than direct division `dx * (pz - zi) / dz` for boundary points, causing PIP in/out flips. Now uses direct division to match Python and the batch PIP path. Skip horizontal edges (zi == zj) entirely since they have no crossings.
 
 Initially applied only to the `dz_vis` path (`fraction_of_dz_visible_zsorted`). The `cross_dz` and `obj_hide` paths continued using the original `batch_point_in_polygon`.
 
@@ -99,11 +116,27 @@ Objective sample points are also pre-sorted during setup (`obj_sorted_samples`).
 - **mission_hna: ~985ms → ~584ms (-41%)**
 
 ### Cumulative improvement (all optimizations)
-| Benchmark | Original | After ST opts | After rayon | After Z-sorted (dz_vis) | After Z-sorted (all PIP) | Total |
-|---|---|---|---|---|---|---|
-| visibility_50 | 872 ms | 476 ms | 178 ms | ~178 ms | ~191 ms | **-78%** |
-| visibility_100 | 3.80 s | 1.68 s | 551 ms | ~551 ms | ~586 ms | **-85%** |
-| mission_hna | 5.70 s | 4.93 s | 1.92 s | ~985 ms | **~584 ms** | **-90%** |
+| Benchmark | Original | Current | Total improvement |
+|---|---|---|---|
+| visibility_50 | 872 ms | **~201 ms** | **-77%** |
+| visibility_100 | 3.80 s | **~719 ms** | **-81%** |
+| mission_hna | 5.70 s | **~629 ms** | **-89%** |
+
+*Measured February 2026 after all optimizations including FP parity reversions.*
+
+A new `mission_ruins` benchmark was added with the WTC-style catalog (crates + ruins + opaque walls, 44×30" table, Hammer and Anvil mission). Baseline: **~371 ms** (50 steps). This exercises multi-component obscuring features and a denser, more realistic terrain mix than the crate-only `mission_hna`.
+
+### FP parity reversions (post-optimization correctness fixes)
+
+Three micro-optimizations were reverted because they produced different IEEE 754 floating-point results than the Python engine, breaking bit-identical parity:
+
+1. **Trig reduction (opt #2)**: Rotation matrix for ±eps rays → reverted to `cos(angle ± eps)` / `sin(angle ± eps)`. Cost: +4 trig calls per endpoint.
+2. **Precomputed inv_dz (opt #5 micro-opt)**: `1.0 / (zj - zi)` then multiply → reverted to direct division `/ (zj - zi)`. Cost: 1 division per edge per Z-range point instead of 1 multiply.
+3. **Ray normalization inv_len**: `dx * (1.0 / len)` → reverted to `dx / len`. Cost: negligible (1 division vs 1 multiply, once per endpoint).
+
+Net performance impact of reversions: ~8% regression on visibility_50 (201ms vs 178ms), ~23% on visibility_100 (719ms vs 586ms), ~8% on mission_hna (629ms vs 584ms). The visibility_100 regression is largest because raycasting (where trig reduction helped most) is a bigger fraction of non-mission workloads.
+
+**Lesson learned**: Any arithmetic expression that produces values used in boundary tests (PIP edge crossings, visibility polygon vertices fed to DZ PIP) must use the exact same FP expression order as Python. `a * b * (1/c)` ≠ `a * b / c` and `cos(atan2(y,x) ± eps)` ≠ rotation matrix at IEEE 754 level.
 
 ## Attempted But Abandoned
 
@@ -182,7 +215,9 @@ With E=20-40, this turns ~30 edge comparisons into ~5. This is complementary to 
 These would have been high priority before the profiling showed PIP dominance. Still worth pursuing for `visibility_50` and `visibility_100` benchmarks where DZ scoring is absent.
 
 #### 2a. Pseudoangle hybrid
-Use pseudoangle `p = dx / (|dx| + |dz|)` for ray sorting (avoids atan2 in ray generation) but keep atan2 for bucket assignment (uniform bucket distribution). Gets most of the atan2 savings without the uneven-bucket regression that the full pseudoangle approach showed. The pure pseudoangle version improved visibility_50 by 19% and visibility_100 by 14% — this hybrid should capture most of that while avoiding the mission_hna regression.
+Use pseudoangle `p = dx / (|dx| + |dz|)` for ray sorting (avoids atan2 in ray generation) but keep atan2 for bucket assignment (uniform bucket distribution). Gets most of the atan2 savings without the uneven-bucket regression that the full pseudoangle approach showed.
+
+**Note**: Since the trig reduction (opt #2) was reverted, ray generation now does `atan2 + 4×cos/sin + 1×sqrt + 2×division` per endpoint. Pseudoangle could replace the atan2 for sort-key computation (but the 4 cos/sin calls for ±eps rays must stay for FP parity). The potential savings are smaller than originally estimated since atan2 is now a smaller fraction of ray generation cost.
 
 #### 2b. Faster endpoint deduplication
 The `HashSet<(u64, u64)>` for endpoint dedup uses SipHash (DoS-resistant but slow). With rayon, each thread has its own HashSet, so cost is multiplied by thread count. Options:
@@ -233,7 +268,7 @@ Use coarser grid in open areas, finer near terrain or DZ boundaries. Would chang
 
 ### Recommended next steps
 
-1. **Re-profile mission_hna** post-all-Z-sorted to see new bottleneck. vis_polygon (~15-18%) is likely the top target now, since all PIP paths have been optimized.
-2. **Try 2a (pseudoangle hybrid)** — addresses raycasting for both mission and non-mission benchmarks. vis_polygon is now a larger fraction of mission time.
+1. **Re-profile** post-parity-reversions to see updated bottleneck distribution. The trig revert likely shifted more time back into ray generation (vis_polygon phase).
+2. **Try 1a (slab decomposition)** — the Z-sorted PIP paths are the proven winner; slab decomposition would further reduce edge work per point and is complementary.
 3. **3a (OBB caching)** is worth doing opportunistically — it's a clean code improvement regardless of performance impact.
-4. **Add a denser benchmark fixture** — the current mission_hna uses sparse 5×2.5" crates. A fixture with 10+ large ruins/obstacles would better represent real-world usage and stress different code paths.
+4. **Use the `mission_ruins` benchmark** for more realistic profiling — it has obscuring features with multi-component terrain (ruins + walls) and a smaller table (44×30"), matching the updated parity test catalog.

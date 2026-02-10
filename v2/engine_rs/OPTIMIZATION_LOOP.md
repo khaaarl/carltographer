@@ -35,10 +35,11 @@ cd v2/engine_rs && cargo bench
 ```
 
 Record the numbers for the key benchmarks. The main ones (as of writing):
-- `visibility_50` — pure visibility, no DZs
-- `visibility_100` — pure visibility, no DZs, more features
-- `mission_hna` — full mission workload with DZs and objectives
-- `basic_100` / `all_features` — mutation-heavy, less visibility
+- `visibility_50` — pure visibility, no DZs (60×44, crates only)
+- `visibility_100` — pure visibility, no DZs, more features (60×44, crates only)
+- `mission_hna` — full mission workload with DZs and objectives (60×44, crates only)
+- `mission_ruins` — mission workload with mixed terrain (44×30, crates + ruins + walls)
+- `basic_100` / `all_features` — mutation-heavy, no visibility
 
 If your optimization targets a path not covered by existing benchmarks, consider adding a benchmark. But keep it simple — don't spend your whole attempt on benchmark infrastructure.
 

@@ -218,6 +218,127 @@ const MISSION_HNA_JSON: &str = r#"{
   }
 }"#;
 
+/// 50 steps on a 44×30" table with mixed terrain catalog (crates + ruins + walls)
+/// and Hammer and Anvil mission. Exercises multi-component obscuring features,
+/// angular sweep with blocking + obscuring segments, and all DZ/objective scoring.
+const MISSION_RUINS_JSON: &str = r#"{
+  "seed": 42,
+  "table_width_inches": 44.0,
+  "table_depth_inches": 30.0,
+  "catalog": {
+    "objects": [
+      {
+        "item": {
+          "id": "crate_5x2.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 5.0,
+              "depth_inches": 2.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Crate (double-stack)"
+        }
+      },
+      {
+        "item": {
+          "id": "ruins_10x6",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 10.0,
+              "depth_inches": 6.0,
+              "height_inches": 0.0
+            }
+          ],
+          "name": "Ruins (base)"
+        }
+      },
+      {
+        "item": {
+          "id": "opaque_wall_6x0.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 6.0,
+              "depth_inches": 0.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Opaque Wall"
+        }
+      }
+    ],
+    "features": [
+      {
+        "item": {
+          "id": "crate",
+          "feature_type": "obstacle",
+          "components": [
+            { "object_id": "crate_5x2.5" }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "bare_ruin",
+          "feature_type": "obscuring",
+          "components": [
+            { "object_id": "ruins_10x6" }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "ruin_with_wall",
+          "feature_type": "obscuring",
+          "components": [
+            { "object_id": "ruins_10x6" },
+            {
+              "object_id": "opaque_wall_6x0.5",
+              "transform": { "x_inches": 2.0, "z_inches": 0.0, "rotation_deg": 0.0 }
+            }
+          ]
+        }
+      }
+    ],
+    "name": "WTC-style Catalog"
+  },
+  "num_steps": 50,
+  "mission": {
+    "name": "Hammer and Anvil",
+    "objectives": [
+      { "id": "1", "position": { "x_inches": 0.0, "z_inches": 0.0 }, "range_inches": 3.0 },
+      { "id": "2", "position": { "x_inches": 0.0, "z_inches": -9.0 }, "range_inches": 3.0 },
+      { "id": "3", "position": { "x_inches": 0.0, "z_inches": 9.0 }, "range_inches": 3.0 },
+      { "id": "4", "position": { "x_inches": -12.0, "z_inches": 0.0 }, "range_inches": 3.0 },
+      { "id": "5", "position": { "x_inches": 12.0, "z_inches": 0.0 }, "range_inches": 3.0 }
+    ],
+    "deployment_zones": [
+      {
+        "id": "green",
+        "polygons": [[
+          { "x_inches": -22.0, "z_inches": -15.0 },
+          { "x_inches": -4.0, "z_inches": -15.0 },
+          { "x_inches": -4.0, "z_inches": 15.0 },
+          { "x_inches": -22.0, "z_inches": 15.0 }
+        ]]
+      },
+      {
+        "id": "red",
+        "polygons": [[
+          { "x_inches": 4.0, "z_inches": -15.0 },
+          { "x_inches": 22.0, "z_inches": -15.0 },
+          { "x_inches": 22.0, "z_inches": 15.0 },
+          { "x_inches": 4.0, "z_inches": 15.0 }
+        ]]
+      }
+    ],
+    "rotationally_symmetric": true
+  }
+}"#;
+
 fn bench_basic_100(c: &mut Criterion) {
     let params: EngineParams = serde_json::from_str(BASIC_100_JSON).unwrap();
     c.bench_function("generate_basic_100_steps", |b| {
@@ -256,12 +377,20 @@ fn bench_with_mission(c: &mut Criterion) {
     });
 }
 
+fn bench_mission_ruins(c: &mut Criterion) {
+    let params: EngineParams = serde_json::from_str(MISSION_RUINS_JSON).unwrap();
+    c.bench_function("generate_mission_ruins", |b| {
+        b.iter(|| generate(&params));
+    });
+}
+
 criterion_group!(
     benches,
     bench_basic_100,
     bench_all_features,
     bench_with_visibility,
     bench_with_visibility_100,
-    bench_with_mission
+    bench_with_mission,
+    bench_mission_ruins
 );
 criterion_main!(benches);
