@@ -151,6 +151,9 @@ def _compute_delete_weights(
     pref_by_type = {p.feature_type: p for p in preferences}
     weights = []
     for pf in features:
+        if pf.locked:
+            weights.append(0.0)
+            continue
         pref = pref_by_type.get(pf.feature.feature_type)
         w = 1.0
         if pref is not None:
@@ -389,6 +392,8 @@ def _try_single_action(
         # Move (temperature-aware)
         idx = rng.next_int(0, len(features) - 1)
         old = features[idx]
+        if old.locked:
+            return None
         new_transform = _temperature_move(
             rng,
             old.transform,
@@ -496,6 +501,8 @@ def _try_single_action(
         # Rotate: pick random feature, assign new quantized angle
         idx = rng.next_int(0, len(features) - 1)
         old = features[idx]
+        if old.locked:
+            return None
         new_rot = _quantize_angle(
             rng.next_float() * 360.0, params.rotation_granularity_deg
         )

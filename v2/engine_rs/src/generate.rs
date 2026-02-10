@@ -849,6 +849,7 @@ mod tests {
                     z_inches: 5.0,
                     rotation_deg: 0.0,
                 },
+                locked: false,
             }],
             terrain_objects: vec![big_block_obj],
             rotationally_symmetric: false,

@@ -140,19 +140,24 @@ class TerrainFeature:
 class PlacedFeature:
     feature: TerrainFeature
     transform: Transform
+    locked: bool = False
 
     @staticmethod
     def from_dict(d: dict) -> PlacedFeature:
         return PlacedFeature(
             feature=TerrainFeature.from_dict(d["feature"]),
             transform=Transform.from_dict(d.get("transform")),
+            locked=d.get("locked", False),
         )
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "feature": self.feature.to_dict(),
             "transform": self.transform.to_dict(),
         }
+        if self.locked:
+            d["locked"] = True
+        return d
 
 
 @dataclass

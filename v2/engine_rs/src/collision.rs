@@ -19,6 +19,7 @@ pub fn mirror_placed_feature(pf: &PlacedFeature) -> PlacedFeature {
             z_inches: -pf.transform.z_inches,
             rotation_deg: pf.transform.rotation_deg + 180.0,
         },
+        locked: pf.locked,
     }
 }
 
@@ -547,6 +548,7 @@ mod tests {
                 z_inches: 0.0,
                 rotation_deg: 0.0,
             },
+            locked: false,
         });
 
         // This should fail with min_edge_gap_inches=2.0
@@ -595,6 +597,7 @@ mod tests {
                 z_inches: 0.0,
                 rotation_deg: 0.0,
             },
+            locked: false,
         });
 
         features.push(PlacedFeature {
@@ -613,6 +616,7 @@ mod tests {
                 z_inches: 0.0,
                 rotation_deg: 0.0,
             },
+            locked: false,
         });
 
         // Gap is ~4 inches, so should fail with min_feature_gap_inches=5.0
@@ -694,6 +698,7 @@ mod tests {
                 z_inches: 0.0,
                 rotation_deg: 0.0,
             },
+            locked: false,
         }];
 
         // Tall-only edge gap should pass (feature is short)
@@ -768,6 +773,7 @@ mod tests {
                     z_inches: 0.0,
                     rotation_deg: 0.0,
                 },
+                locked: false,
             },
             PlacedFeature {
                 feature: TerrainFeature {
@@ -785,6 +791,7 @@ mod tests {
                     z_inches: 0.0,
                     rotation_deg: 0.0,
                 },
+                locked: false,
             },
         ];
 

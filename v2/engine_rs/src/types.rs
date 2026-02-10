@@ -59,10 +59,16 @@ pub struct TerrainFeature {
     pub tags: Vec<String>,
 }
 
+fn is_false(v: &bool) -> bool {
+    !v
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlacedFeature {
     pub feature: TerrainFeature,
     pub transform: Transform,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
 }
 
 // -- Mission / Deployment ------------------------------------------

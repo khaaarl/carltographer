@@ -118,6 +118,12 @@ def compare_layouts(layout1: dict, layout2: dict) -> tuple[bool, list[str]]:
         if tags1 != tags2:
             diffs.append(f"Feature {i} tags: {tags1} vs {tags2}")
 
+        # Compare locked state
+        locked1 = f1.get("locked", False)
+        locked2 = f2.get("locked", False)
+        if locked1 != locked2:
+            diffs.append(f"Feature {i} locked: {locked1} vs {locked2}")
+
         # Compare transform
         t1 = f1.get("transform", {})
         t2 = f2.get("transform", {})
@@ -929,6 +935,41 @@ TEST_SCENARIOS = [
                     shapes=[
                         Shape(width=10.0, depth=10.0, height=3.0),
                     ],
+                ),
+            ],
+        ),
+    ),
+    # -- Feature locking ---
+    TestScenario(
+        "locked_features",
+        seed=42,
+        num_steps=100,
+        catalog=make_test_catalog(),
+        skip_visibility=True,
+        initial_layout=TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="feature_locked",
+                        feature_type="obstacle",
+                        components=[
+                            FeatureComponent(object_id="crate_5x2.5"),
+                        ],
+                    ),
+                    transform=Transform(x=5.0, z=5.0, rotation_deg=0.0),
+                    locked=True,
+                ),
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="feature_unlocked",
+                        feature_type="obstacle",
+                        components=[
+                            FeatureComponent(object_id="crate_5x2.5"),
+                        ],
+                    ),
+                    transform=Transform(x=-10.0, z=-5.0, rotation_deg=45.0),
                 ),
             ],
         ),

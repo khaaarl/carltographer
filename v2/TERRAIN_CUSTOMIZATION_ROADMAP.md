@@ -197,15 +197,17 @@ UI for users to select a terrain feature from the catalog and place it on the ba
 
 ### D2. Pinning / Locking
 
-**Status:** Not Started
+**Status:** Done
 **Blocked by:** D1
 
-Mark manually-placed (or engine-placed) features as "pinned" so the engine treats them as immovable constraints during generation.
+Mark manually-placed (or engine-placed) features as "locked" so the engine treats them as immovable constraints during generation.
 
-- Pin/unpin toggle per feature in the UI
-- Pinned features are excluded from move/delete/replace/rotate mutations
-- Pinned features still count toward feature count preferences and visibility scoring
-- Data model: add a `pinned: bool` field to placed features (or a separate pinned-feature list in engine params)
+- Lock/unlock toggle per feature in the UI context menu (gold button)
+- Locked features are excluded from move/delete/replace/rotate mutations
+- Locked features still count toward feature count preferences and visibility scoring
+- Data model: `locked: bool` field on `PlacedFeature` (Python + Rust, with JSON schema)
+- Visual indicator: padlock icon drawn at center of locked features
+- Parity: both engines produce identical output with locked features
 
 ### D3. Hybrid Generation
 

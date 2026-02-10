@@ -1568,6 +1568,7 @@ mod tests {
                 z_inches: z,
                 rotation_deg: 0.0,
             },
+            locked: false,
         }
     }
 

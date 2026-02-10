@@ -165,6 +165,10 @@ fn compute_delete_weights(
         .collect();
     let mut weights = Vec::with_capacity(features.len());
     for pf in features {
+        if pf.locked {
+            weights.push(0.0);
+            continue;
+        }
         let mut w = 1.0;
         if let Some(pref) = pref_by_type.get(pf.feature.feature_type.as_str()) {
             let current = feature_counts
@@ -411,6 +415,7 @@ fn try_single_action(
                     z_inches: z,
                     rotation_deg: rot,
                 },
+                locked: false,
             });
             let idx = layout.placed_features.len() - 1;
             if is_valid_placement(
@@ -435,6 +440,9 @@ fn try_single_action(
             // Move (temperature-aware)
             let idx = rng.next_int(0, layout.placed_features.len() as u32 - 1) as usize;
             let old = layout.placed_features[idx].clone();
+            if old.locked {
+                return None;
+            }
             let new_transform = temperature_move(
                 rng,
                 &old.transform,
@@ -504,6 +512,7 @@ fn try_single_action(
             layout.placed_features[idx] = PlacedFeature {
                 feature: new_feat,
                 transform: old.transform.clone(),
+                locked: false,
             };
             if is_valid_placement(
                 &layout.placed_features,
@@ -527,6 +536,9 @@ fn try_single_action(
             // Rotate: pick random feature, assign new quantized angle
             let idx = rng.next_int(0, layout.placed_features.len() as u32 - 1) as usize;
             let old = layout.placed_features[idx].clone();
+            if old.locked {
+                return None;
+            }
             let new_rot = quantize_angle(rng.next_float() * 360.0, params.rotation_granularity_deg);
             layout.placed_features[idx].transform = Transform {
                 x_inches: old.transform.x_inches,

@@ -140,6 +140,11 @@
         "transform": {
           "$ref": "#/$defs/transform",
           "description": "Position and rotation on the table. Coordinates relative to table center."
+        },
+        "locked": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, the engine will not move, delete, replace, or rotate this feature during generation."
         }
       },
       "required": ["feature", "transform"],

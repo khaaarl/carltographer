@@ -726,6 +726,16 @@ class BattlefieldRenderer:
                         draw, _mirror_pf_dict(pf)
                     )
 
+        # 4c. Padlock icons on locked features
+        for pf in placed:
+            if pf.get("locked", False):
+                tf = pf.get("transform", {})
+                cx = tf.get("x_inches", 0.0)
+                cz = tf.get("z_inches", 0.0)
+                self._draw_padlock(draw, cx, cz)
+                if is_symmetric and (cx != 0.0 or cz != 0.0):
+                    self._draw_padlock(draw, -cx, -cz)
+
         # 5. Objective markers (on top of terrain)
         if mission is not None:
             for obj in mission.get("objectives", []):
@@ -850,6 +860,46 @@ class BattlefieldRenderer:
                 fill=OBJECTIVE_FILL,
                 width=max(1, int(s * 0.06)),
             )
+
+    def _draw_padlock(self, draw, table_x, table_z):
+        """Draw a padlock icon at the given table coordinates."""
+        px, py = self._to_px(table_x, table_z)
+        # Fixed size ~0.8" in table space
+        s = self.ppi * 0.4  # half-size in pixels
+
+        outline_color = "#333333"
+        fill_color = "#ffffff"
+        lw = max(1, int(s * 0.15))
+
+        # Lock body (filled rectangle)
+        bw = s * 0.8  # body width
+        bh = s * 0.7  # body height
+        body_top = py
+        draw.rectangle(
+            [px - bw, body_top, px + bw, body_top + bh],
+            fill=fill_color,
+            outline=outline_color,
+            width=lw,
+        )
+
+        # Shackle (arc above the body)
+        shackle_r = bw * 0.65
+        shackle_cy = body_top
+        bbox = [
+            px - shackle_r,
+            shackle_cy - shackle_r,
+            px + shackle_r,
+            shackle_cy + shackle_r,
+        ]
+        draw.arc(bbox, start=180, end=360, fill=outline_color, width=lw)
+
+        # Keyhole (small circle in center of body)
+        kr = s * 0.15
+        kcy = body_top + bh * 0.45
+        draw.ellipse(
+            [px - kr, kcy - kr, px + kr, kcy + kr],
+            fill=outline_color,
+        )
 
     def _draw_dashed_circle(self, draw, cx, cy, radius, dash_count=36):
         """Draw a dashed circle as alternating arc segments."""
@@ -1949,6 +1999,27 @@ class App:
             pady=2,
         )
         delete_btn.pack(side=tk.LEFT, padx=(2, 2), pady=4)
+
+        # Lock/Unlock button
+        placed = list(self.layout.get("placed_features", []))  # type: ignore[arg-type]
+        idx = self._selected_feature_idx
+        is_locked = False
+        if idx is not None and 0 <= idx < len(placed):
+            is_locked = placed[idx].get("locked", False)
+        lock_label = "Unlock" if is_locked else "Lock"
+        lock_btn = tk.Button(
+            frame,
+            text=lock_label,
+            command=self._on_lock_selected,
+            bg="#cc9900",
+            fg="white",
+            activebackground="#ddaa22",
+            activeforeground="white",
+            padx=8,
+            pady=2,
+        )
+        lock_btn.pack(side=tk.LEFT, padx=(2, 2), pady=4)
+
         cancel_btn = tk.Button(
             frame,
             text="Cancel",
@@ -1965,7 +2036,7 @@ class App:
         # Clamp popup position to stay within canvas bounds
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
-        popup_w = 300  # approximate width
+        popup_w = 370  # approximate width
         popup_h = 40  # approximate height
         x = min(canvas_x, cw - popup_w)
         y = min(canvas_y, ch - popup_h)
@@ -2029,6 +2100,23 @@ class App:
         self._selected_feature_idx = None
         self._dismiss_popup()
         self._rerun_engine_zero_steps()
+
+    # -- lock action --
+
+    def _on_lock_selected(self):
+        """Toggle locked state on the selected feature."""
+        idx = self._selected_feature_idx
+        if idx is None:
+            return
+
+        placed: list = self.layout["placed_features"]  # type: ignore[assignment]
+        if idx < 0 or idx >= len(placed):
+            return
+
+        placed[idx]["locked"] = not placed[idx].get("locked", False)
+        self._selected_feature_idx = None
+        self._dismiss_popup()
+        self._render()
 
     # -- move action --
 
