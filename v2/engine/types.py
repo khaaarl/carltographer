@@ -1,4 +1,56 @@
-"""Data types matching the carltographer JSON schema."""
+"""Data types for the engine, mirroring the carltographer JSON schema.
+
+This is the shared vocabulary for the entire engine — every other module
+(``generate.py``, ``mutation.py``, ``collision.py``, ``visibility.py``,
+``tempering.py``) imports its types from here. The key dataclasses, roughly
+from low-level to high-level:
+
+  **Geometry / physical pieces:**
+    ``Transform`` — position (x, z in inches from table center) and rotation.
+    ``Shape`` — axis-aligned bounding box for a single physical piece, with
+    optional opacity height override for LOS calculations.
+    ``TerrainObject`` — a named physical piece with one or more shapes.
+
+  **Features (logical groupings):**
+    ``FeatureComponent`` — binds a ``TerrainObject`` to an optional local
+    offset, so multi-piece features (e.g., an L-shaped ruin) can be defined.
+    ``TerrainFeature`` — a logical terrain feature with a type tag (obstacle,
+    ruins, etc.) and a list of components.
+    ``PlacedFeature`` — a feature placed on the table at a specific transform,
+    optionally locked (immune to mutations).
+
+  **Layout and catalog:**
+    ``TerrainLayout`` — the full table state: dimensions, placed features,
+    visibility results, mission data.
+    ``TerrainCatalog`` — the pool of available objects and features (with
+    optional quantity limits) that the engine draws from.
+
+  **Engine configuration:**
+    ``EngineParams`` — everything the engine needs to run: seed, table size,
+    catalog, step count, gap constraints, symmetry, mission, scoring targets,
+    tempering config, and tuning knobs.
+    ``TuningParams`` — hyperparameters for the optimization (retry counts,
+    temperature decay, weighting factors). Kept separate so they can be
+    omitted for sensible defaults.
+    ``ScoringTargets`` — per-metric targets and weights for phase-2 scoring.
+    ``FeatureCountPreference`` — soft min/max constraints on feature types.
+
+  **Mission data:**
+    ``Mission``, ``DeploymentZone``, ``ObjectiveMarker``, ``Point2D`` —
+    deployment zones (as polygon lists) and objective positions for
+    10th Edition missions.
+
+  **Output:**
+    ``EngineResult`` — the final layout, score, and step count.
+
+Every dataclass has ``from_dict`` / ``to_dict`` methods for JSON round-
+tripping. The JSON schema is the interchange format between the engine, the
+frontend, and saved layout files.
+
+Subject to the Rust-parity constraint: ``engine_rs/src/types.rs`` defines
+identical structures, and any field additions or renames must be mirrored
+there.
+"""
 
 from __future__ import annotations
 

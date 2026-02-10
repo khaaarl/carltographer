@@ -85,6 +85,19 @@ cd v2/engine_rs && cargo fmt
 
 The Rust engine is configured with `warnings = "deny"` and `clippy::all = "deny"` in `Cargo.toml [lints]`, so compiler warnings and clippy lints are compile errors. Pre-commit hooks also run `cargo fmt --check`, `cargo clippy`, and `cargo test` on Rust file changes.
 
+## Module Docstrings
+
+Every Python file should have a top-level docstring that helps someone new to the codebase orient themselves. Cover:
+
+- **What the file does** — its purpose and scope.
+- **How it fits into the system** — which sibling modules it delegates to or depends on, and what role it plays in the larger architecture. Use `.py` extensions when referencing files (e.g., ``tempering.py``, not ``tempering``) so it's clear these are files, not abstract concepts.
+- **Notable or surprising algorithms** — anything non-obvious that a reader might need context for (e.g., angular-sweep visibility, OBB collision via SAT).
+- **Critical constraints** — if the file is subject to the determinism/Rust-parity requirement, say so explicitly. A newcomer who doesn't know about parity can easily break it.
+
+Keep it proportional to the file's complexity. A 50-line utility doesn't need a paragraph; an 800-line engine core does. Test files can be brief.
+
+When making changes to a file, consider whether documentation elsewhere needs updating — module docstrings in sibling files that reference the changed module, the architecture overview in this file, etc. A renamed function or shifted responsibility can leave other files' docstrings silently wrong.
+
 ## Branching (CRITICAL — DO THIS FIRST)
 
 **NEVER make code changes directly on `main`.** Before writing ANY code, you MUST:

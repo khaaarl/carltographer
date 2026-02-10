@@ -1,4 +1,13 @@
-"""Save and load terrain layouts as PNG (with embedded metadata) or JSON."""
+"""Save and load terrain layouts as PNG (with embedded metadata) or JSON.
+
+The primary format is PNG: the rendered layout image is saved with the full
+layout JSON embedded in a PNG tEXt chunk (key: ``carltographer_layout``).
+This means a saved file is both a shareable image and a complete,
+machine-readable layout that can be loaded back into the app. JSON files
+are also supported as a plain-text alternative.
+
+Used by ``app.py`` for its Save/Load buttons.
+"""
 
 import json
 

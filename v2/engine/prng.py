@@ -1,6 +1,11 @@
-"""PCG32 pseudorandom number generator.
+"""PCG32 pseudorandom number generator (PCG-XSH-RR variant).
 
-Implements the PCG-XSH-RR variant (32-bit output, 64-bit state).
+Hand-rolled instead of using Python's ``random`` module because the engine
+requires exact cross-language reproducibility — given the same seed, this
+must produce the identical sequence as the Rust implementation in
+``engine_rs``. Python's stdlib PRNG is not portable across versions or
+languages.
+
 Reference: https://www.pcg-random.org/
 """
 

@@ -1,4 +1,37 @@
-"""Terrain layout mutation actions and undo logic."""
+"""Terrain layout mutation actions and undo logic.
+
+Each optimization step in ``generate.py`` calls ``_perform_step`` to mutate
+the layout, then either keeps or reverts the change via ``_undo_step``.
+There are five mutation actions:
+
+  * **Add** — pick a catalog template (weighted by feature-count preferences
+    and catalog quantity limits), place it in a tile-biased random position,
+    accept if collision/gap checks pass.
+  * **Move** — nudge a random feature by a temperature-scaled displacement
+    (small at cold temperatures, table-spanning at hot). Always consumes
+    exactly 4 PRNG values regardless of outcome to keep the random stream
+    aligned.
+  * **Delete** — remove a feature, weighted toward types that exceed their
+    max count preference.
+  * **Replace** — swap a feature's template in-place (same position, new
+    geometry). Combines delete-weighting for the victim with add-weighting
+    for the replacement.
+  * **Rotate** — assign a new quantized angle to a random feature.
+
+All mutations operate in-place on ``layout.placed_features`` and return a
+``StepUndo`` token that records exactly what changed. Reverting is O(1) — no
+deep copies of the layout are needed. If a mutation fails validation (e.g.,
+collision), it is rolled back immediately and returns ``None``, so the caller
+never sees an invalid state.
+
+When ``_perform_step`` fails to find a valid mutation, it retries with
+exponentially decaying temperature (``retry_decay``) up to ``max_retries``
+times before returning a no-op.
+
+Uses ``collision.py`` for placement validation and ``prng.py`` for all
+randomness. Subject to the determinism/Rust-parity constraint — the number
+and order of PRNG calls per action must match ``engine_rs`` exactly.
+"""
 
 from __future__ import annotations
 

@@ -1,7 +1,32 @@
-"""Carltographer terrain layout viewer.
+"""Tkinter GUI for Carltographer.
 
-Displays a 2D top-down view of a Warhammer 40k terrain layout
-with a control panel for engine parameters.
+This is the main application file — it wires together the engine, terrain
+catalogs, and mission data into an interactive desktop tool. The major
+classes are:
+
+  * ``BattlefieldRenderer`` — draws the 2D top-down table view on a Tk
+    Canvas. Handles rendering of terrain OBBs (with rotation), deployment
+    zones, objective markers, grid lines, and the mirror-ghost overlay for
+    rotationally symmetric layouts. Also supports click-to-select and
+    drag-to-move for manual feature placement.
+  * ``ControlPanel`` — the left sidebar with all engine parameters (table
+    size, seed, steps, gap constraints, feature count preferences, scoring
+    targets, mission selection). Reads widget state into an ``EngineParams``
+    dict for the engine, and exposes callbacks for generate/clear/save/load.
+  * ``HistoryPanel`` — the right sidebar showing a scrollable log of
+    generation results with clickable thumbnail previews.
+  * ``App`` — the top-level window that composes the above, manages the
+    results bar (visibility/DZ/objective metrics), the "+ Add Terrain"
+    button, and the generate-in-background threading.
+
+The engine is called via ``generate_json()`` (either the Python
+implementation or the Rust one if available via ``engine_rs``). The Rust
+engine is preferred when present; a hash manifest check
+(``hash_manifest.py``) warns if the Rust build is stale.
+
+Terrain catalogs come from ``catalogs.py`` and mission/deployment-zone
+data from ``missions.py``. Layout persistence (save as PNG with embedded
+JSON, or load from PNG/JSON) is handled by ``layout_io.py``.
 """
 
 import copy

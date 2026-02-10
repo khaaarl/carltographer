@@ -1,4 +1,51 @@
-"""Terrain layout generation engine."""
+"""Terrain layout generation engine.
+
+Orchestrates the full optimization loop that turns a terrain catalog into a
+scored layout. Two strategies are available:
+
+  * **Hill-climbing** (single replica) — a simple simulated-annealing loop
+    used when ``num_replicas <= 1``.
+  * **Parallel tempering** (multiple replicas at different temperatures with
+    periodic replica exchange) — the default. Cold replicas exploit good
+    solutions while hot ones explore freely, with temperature-aware mutation
+    distances so hot chains make large moves.
+
+Both strategies share the same two-phase scoring function:
+
+  1. **Phase 1 (feature counts):** Score is driven by how close the layout is
+     to satisfying feature-count preferences (min/max obstacles, ruins, etc.).
+     No visibility computation happens here—mutations are cheap.
+  2. **Phase 2 (visibility):** Once counts are satisfied, score shifts to a
+     weighted combination of line-of-sight metrics (overall visibility %,
+     per-deployment-zone hideability, objective hidability). Each metric has a
+     user-specified target and weight.
+
+This module is the orchestrator—it owns the outer loop and scoring but
+delegates heavily:
+
+  * ``mutation.py`` — the five mutation actions (add/move/delete/replace/
+    rotate) and their undo logic. Rejected mutations are rolled back
+    in-place via ``StepUndo`` rather than cloning the layout.
+  * ``tempering.py`` — temperature schedule computation and the Metropolis
+    accept/reject criterion (``sa_accept``). This module builds the replica
+    array and drives the swap logic, but the SA math lives there.
+  * ``visibility.py`` — line-of-sight analysis (angular-sweep algorithm with
+    caching). Called during phase-2 scoring to evaluate overall, per-DZ,
+    and objective hidability metrics.
+  * ``collision.py`` — OBB overlap and gap validation, used by mutations to
+    check placement legality.
+
+**Determinism and Rust parity:** This entire ``engine/`` package has a
+bit-identical Rust twin in ``engine_rs/``. Given the same seed, both must
+produce exactly the same layout. All randomness flows through a seeded PCG32
+PRNG (``prng.py``), so the order of PRNG calls matters—reordering loops,
+adding early exits, or using nondeterministic iteration (``set``, ``dict``
+before 3.7) will silently break parity. After any behavioral change here,
+run ``engine_cmp/`` to verify the engines still agree.
+
+The public API is ``generate(params)`` which returns an ``EngineResult``,
+and ``generate_json(dict)`` for the Rust-engine-compatible JSON interface.
+"""
 
 from __future__ import annotations
 

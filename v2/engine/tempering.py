@@ -1,5 +1,10 @@
 """Parallel tempering (replica exchange) with simulated annealing.
 
+Called by ``generate.py`` to run the multi-replica optimization loop. This
+module provides the SA math (accept/reject via ``sa_accept``, temperature
+schedules via ``compute_temperatures``) while ``generate.py`` owns the
+replica array, scoring, and swap orchestration.
+
 The existing terrain engine uses pure hill-climbing: try a random mutation,
 keep it if the score improves, revert it otherwise. This gets stuck in local
 optima — a layout that's pretty good but can't reach a better one because
@@ -35,6 +40,10 @@ Key design decisions:
   temperatures, preserving determinism.
 - A dedicated swap PRNG (sequence = num_replicas) ensures swap decisions
   are deterministic and independent of replica stepping.
+
+Subject to the Rust-parity constraint — ``engine_rs/src/generate.rs``
+reimplements this logic inline rather than as a separate module, but the
+SA math and swap criteria must match exactly.
 """
 
 from __future__ import annotations

@@ -1,7 +1,35 @@
-"""Oriented bounding box (OBB) collision and bounds checking.
+"""Oriented bounding box (OBB) collision, gap enforcement, and bounds checking.
 
-Uses the Separating Axis Theorem for overlap detection between
-rotated rectangles on the 2D table surface.
+The central question this module answers: "is this feature placement legal?"
+Every mutation in ``mutation.py`` calls ``is_valid_placement`` after
+tentatively placing or moving a feature. The check enforces:
+
+  * **No overlap** — OBBs of the placed feature (and its rotational mirror,
+    if symmetric) must not intersect any other feature's OBBs. Overlap
+    detection uses the Separating Axis Theorem (SAT) on pairs of rotated
+    rectangles.
+  * **Table bounds** — all OBB corners must lie within the table.
+  * **Tall-terrain gaps** — features with any shape height >= 1" must keep a
+    minimum distance from other tall features (``min_feature_gap``) and from
+    table edges (``min_edge_gap``). Distance is measured between OBB edges,
+    not centers.
+  * **All-terrain gaps** — optional stricter gaps (``min_all_feature_gap``,
+    ``min_all_edge_gap``) that apply to every feature regardless of height.
+
+Also provides geometric utilities used elsewhere in the engine:
+
+  * ``compose_transform`` / ``obb_corners`` / ``get_world_obbs`` — transform
+    composition and OBB computation, used by ``mutation.py`` for tile-weight
+    occupancy and by ``app.py``'s renderer for drawing.
+  * ``_mirror_placed_feature`` / ``_is_at_origin`` — rotational symmetry
+    helpers (180° mirroring), used by mutations and visibility.
+  * ``obb_distance`` / ``obb_to_table_edge_distance`` — edge-to-edge distance
+    for gap enforcement.
+  * ``point_in_polygon`` / ``polygons_overlap`` — used by ``visibility.py``
+    for deployment zone analysis.
+
+Subject to the Rust-parity constraint — ``engine_rs/src/collision.rs``
+mirrors this module.
 """
 
 from __future__ import annotations
