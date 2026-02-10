@@ -62,6 +62,10 @@ fn point_in_polygon(px: f64, pz: f64, vertices: &[(f64, f64)]) -> bool {
 /// at once, iterating polygon edges in the outer loop. This keeps edge data
 /// in registers while linearly scanning the points array (good cache locality,
 /// LLVM can autovectorize the inner loop).
+///
+/// Superseded by `fraction_of_dz_visible_zsorted` and
+/// `pip_zsorted_update_seen` in production code. Retained for tests.
+#[cfg(test)]
 fn batch_point_in_polygon(
     points: &[(f64, f64)],
     polygon: &[(f64, f64)],
@@ -92,6 +96,7 @@ fn batch_point_in_polygon(
 
 /// Find parameter t where ray (ox+t*dx, oz+t*dz) hits segment.
 /// Returns Some(t) if hit (t >= 0), None if miss or parallel.
+#[cfg(test)]
 fn ray_segment_intersection(
     ox: f64,
     oz: f64,
@@ -653,6 +658,7 @@ fn fraction_of_dz_visible(
 }
 
 /// Batch version that reuses an external buffer to avoid allocation.
+#[cfg(test)]
 fn fraction_of_dz_visible_batch(
     vis_poly: &[(f64, f64)],
     dz_sample_points: &[(f64, f64)],

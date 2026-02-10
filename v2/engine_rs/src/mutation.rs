@@ -19,10 +19,10 @@ pub(crate) const TILE_SIZE: f64 = 2.0;
 #[derive(Debug)]
 pub(crate) enum StepUndo {
     Noop,
-    Add { index: usize, prev_next_id: u32 },
+    Add { index: usize },
     Move { index: usize, old: PlacedFeature },
     Delete { index: usize, saved: PlacedFeature },
-    Replace { index: usize, old: PlacedFeature, prev_next_id: u32 },
+    Replace { index: usize, old: PlacedFeature },
     Rotate { index: usize, old: PlacedFeature },
 }
 
@@ -410,7 +410,7 @@ fn try_single_action(
                 params.min_all_feature_gap_inches,
                 params.min_all_edge_gap_inches,
             ) {
-                Some((StepUndo::Add { index: idx, prev_next_id: next_id }, next_id + 1))
+                Some((StepUndo::Add { index: idx }, next_id + 1))
             } else {
                 layout.placed_features.pop();
                 None
@@ -506,7 +506,7 @@ fn try_single_action(
                 params.min_all_feature_gap_inches,
                 params.min_all_edge_gap_inches,
             ) {
-                Some((StepUndo::Replace { index: idx, old, prev_next_id: next_id }, next_id + 1))
+                Some((StepUndo::Replace { index: idx, old }, next_id + 1))
             } else {
                 layout.placed_features[idx] = old;
                 None
