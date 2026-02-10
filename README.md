@@ -135,6 +135,11 @@ python scripts/build_rust_engine.py
 # Format code
 isort . && ruff format .
 
+# Coverage reports (each outputs to its own directory)
+python scripts/coverage_py.py       # Python unit tests → coverage_py/
+python scripts/coverage_rs.py       # Rust unit tests → coverage_rs/
+python scripts/coverage_cmp.py      # Parity tests → coverage_cmp/
+
 # Package standalone executable
 python scripts/package_executable.py
 ```

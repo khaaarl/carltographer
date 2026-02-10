@@ -59,6 +59,13 @@ Toolchain (always run from v2/):
 - **ruff format**: `ruff format .` (auto-fixes)
 - **isort** for import sorting: `isort .` (auto-fixes)
 
+Coverage scripts (all run from v2/, output to separate directories):
+- **Python coverage**: `python scripts/coverage_py.py` — runs engine + frontend unit tests → `coverage_py/`
+- **Rust coverage**: `python scripts/coverage_rs.py` — runs Rust unit tests via cargo-tarpaulin → `coverage_rs/`
+- **Parity coverage**: `python scripts/coverage_cmp.py` — runs engine_cmp parity tests, measures Python engine coverage → `coverage_cmp/`
+
+All three accept `--html` to open the HTML report in a browser after generating.
+
 ## Formatting and Linting (AUTONOMOUS, NO PERMISSION NEEDED)
 
 **CRITICAL: After modifying ANY Python files, immediately and automatically run formatters WITHOUT asking.**
