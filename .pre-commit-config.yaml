@@ -27,5 +27,4 @@ repos:
         entry: bash -c 'cd v2 && .env/bin/python -m pytest --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
         language: system
         pass_filenames: false
-        files: ^v2/.*\.py$
-        always_run: true
+        files: (^v2/.*\.py$|requirements.*\.txt$)
