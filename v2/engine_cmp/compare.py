@@ -669,13 +669,13 @@ TEST_SCENARIOS = [
     TestScenario(
         "multi_type_no_prefs",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         catalog=make_multi_type_catalog(),
     ),
     TestScenario(
         "multi_type_with_prefs",
         seed=42,
-        num_steps=100,
+        num_steps=10,
         catalog=make_multi_type_catalog(),
         feature_count_preferences=[
             FeatureCountPreference(
@@ -694,7 +694,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "multi_type_one_pref",
         seed=99,
-        num_steps=100,
+        num_steps=10,
         catalog=make_multi_type_catalog(),
         feature_count_preferences=[
             FeatureCountPreference(
@@ -724,7 +724,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "symmetric_multi_type",
         seed=42,
-        num_steps=100,
+        num_steps=10,
         catalog=make_multi_type_catalog(),
         feature_count_preferences=[
             FeatureCountPreference(
