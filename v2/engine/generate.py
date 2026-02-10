@@ -118,28 +118,34 @@ def _compute_score(
     if scoring_targets.dz_visibility_target is not None:
         dz_vis = vis.get("dz_visibility")
         if dz_vis and len(dz_vis) > 0:
-            avg = sum(d["value"] for d in dz_vis.values()) / len(dz_vis)
-            error = abs(avg - scoring_targets.dz_visibility_target)
+            target = scoring_targets.dz_visibility_target
+            avg_error = sum(
+                abs(d["value"] - target) for d in dz_vis.values()
+            ) / len(dz_vis)
             w = scoring_targets.dz_visibility_weight
-            total_weighted_error += w * error
+            total_weighted_error += w * avg_error
             total_weight += w
 
     if scoring_targets.dz_hidden_target is not None:
         dz_cross = vis.get("dz_to_dz_visibility")
         if dz_cross and len(dz_cross) > 0:
-            avg = sum(d["value"] for d in dz_cross.values()) / len(dz_cross)
-            error = abs(avg - scoring_targets.dz_hidden_target)
+            target = scoring_targets.dz_hidden_target
+            avg_error = sum(
+                abs(d["value"] - target) for d in dz_cross.values()
+            ) / len(dz_cross)
             w = scoring_targets.dz_hidden_weight
-            total_weighted_error += w * error
+            total_weighted_error += w * avg_error
             total_weight += w
 
     if scoring_targets.objective_hidability_target is not None:
         obj_hide = vis.get("objective_hidability")
         if obj_hide and len(obj_hide) > 0:
-            avg = sum(d["value"] for d in obj_hide.values()) / len(obj_hide)
-            error = abs(avg - scoring_targets.objective_hidability_target)
+            target = scoring_targets.objective_hidability_target
+            avg_error = sum(
+                abs(d["value"] - target) for d in obj_hide.values()
+            ) / len(obj_hide)
             w = scoring_targets.objective_hidability_weight
-            total_weighted_error += w * error
+            total_weighted_error += w * avg_error
             total_weight += w
 
     if total_weight <= 0:

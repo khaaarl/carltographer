@@ -64,7 +64,7 @@ fn next_feature_id(features: &[PlacedFeature]) -> u32 {
     max_id + 1
 }
 
-fn avg_metric_value(obj: &serde_json::Map<String, serde_json::Value>) -> Option<f64> {
+fn avg_metric_error(obj: &serde_json::Map<String, serde_json::Value>, target: f64) -> Option<f64> {
     if obj.is_empty() {
         return None;
     }
@@ -72,7 +72,7 @@ fn avg_metric_value(obj: &serde_json::Map<String, serde_json::Value>) -> Option<
     let mut count = 0usize;
     for v in obj.values() {
         if let Some(val) = v.get("value").and_then(|x| x.as_f64()) {
-            sum += val;
+            sum += (val - target).abs();
             count += 1;
         }
     }
@@ -148,34 +148,31 @@ fn compute_score(
         total_weight += targets.overall_visibility_weight;
     }
 
-    // 2. DZ visibility (average across all DZs)
+    // 2. DZ visibility (per-DZ error from target, then averaged)
     if let Some(target) = targets.dz_visibility_target {
         if let Some(dz_vis) = vis.get("dz_visibility").and_then(|v| v.as_object()) {
-            if let Some(avg) = avg_metric_value(dz_vis) {
-                let error = (avg - target).abs();
-                total_weighted_error += targets.dz_visibility_weight * error;
+            if let Some(avg_error) = avg_metric_error(dz_vis, target) {
+                total_weighted_error += targets.dz_visibility_weight * avg_error;
                 total_weight += targets.dz_visibility_weight;
             }
         }
     }
 
-    // 3. DZ hidden from opponent (average across all cross-DZ pairs)
+    // 3. DZ hidden from opponent (per-pair error from target, then averaged)
     if let Some(target) = targets.dz_hidden_target {
         if let Some(dz_cross) = vis.get("dz_to_dz_visibility").and_then(|v| v.as_object()) {
-            if let Some(avg) = avg_metric_value(dz_cross) {
-                let error = (avg - target).abs();
-                total_weighted_error += targets.dz_hidden_weight * error;
+            if let Some(avg_error) = avg_metric_error(dz_cross, target) {
+                total_weighted_error += targets.dz_hidden_weight * avg_error;
                 total_weight += targets.dz_hidden_weight;
             }
         }
     }
 
-    // 4. Objective hidability (average across all DZs)
+    // 4. Objective hidability (per-DZ error from target, then averaged)
     if let Some(target) = targets.objective_hidability_target {
         if let Some(obj_hide) = vis.get("objective_hidability").and_then(|v| v.as_object()) {
-            if let Some(avg) = avg_metric_value(obj_hide) {
-                let error = (avg - target).abs();
-                total_weighted_error += targets.objective_hidability_weight * error;
+            if let Some(avg_error) = avg_metric_error(obj_hide, target) {
+                total_weighted_error += targets.objective_hidability_weight * avg_error;
                 total_weight += targets.objective_hidability_weight;
             }
         }
