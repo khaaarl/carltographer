@@ -5,6 +5,7 @@ Validates that Python and Rust engines produce identical layouts for the same se
 
 import json
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -490,7 +491,7 @@ def make_test_params(
     mission: Optional[Mission] = None,
     skip_visibility: bool = False,
     scoring_targets: Optional[ScoringTargets] = None,
-    num_replicas: Optional[int] = None,
+    num_replicas: int = 2,
     swap_interval: int = 20,
     max_temperature: float = 50.0,
     min_all_feature_gap_inches: Optional[float] = None,
@@ -541,7 +542,7 @@ class TestScenario:
     mission: Optional[Mission] = None
     skip_visibility: bool = False
     scoring_targets: Optional[ScoringTargets] = None
-    num_replicas: Optional[int] = None
+    num_replicas: int = 2
     swap_interval: int = 20
     max_temperature: float = 50.0
     min_all_feature_gap_inches: Optional[float] = None
@@ -1109,10 +1110,22 @@ def params_to_json_dict(params: EngineParams) -> dict:
     }
 
 
+@dataclass
+class ComparisonTiming:
+    """Timing breakdown for a single comparison run."""
+
+    python_secs: float
+    rust_secs: float
+
+    @property
+    def total_secs(self) -> float:
+        return self.python_secs + self.rust_secs
+
+
 def run_comparison(
     params: EngineParams,
     verbose: bool = False,
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], ComparisonTiming | None]:
     """Execute both engines and compare results.
 
     Args:
@@ -1120,17 +1133,19 @@ def run_comparison(
         verbose: Print detailed comparison output
 
     Returns:
-        (success: bool, diffs: list of error messages)
+        (success: bool, diffs: list of error messages, timing or None on error)
     """
     diffs = []
 
     # Run Python engine
     try:
+        t0 = time.perf_counter()
         py_result = py_generate(params)
         py_dict = py_result.to_dict()
+        py_secs = time.perf_counter() - t0
     except Exception as e:
         diffs.append(f"Python engine failed: {e}")
-        return False, diffs
+        return False, diffs, None
 
     # Run Rust engine (via Python PyO3 binding)
     try:
@@ -1141,25 +1156,29 @@ def run_comparison(
                 "Rust engine not available - need to build with: "
                 "cd v2/engine_rs && maturin develop"
             )
-            return False, diffs
+            return False, diffs, None
 
         params_dict = params_to_json_dict(params)
 
         # Call Rust engine via PyO3
+        t0 = time.perf_counter()
         rs_json_str = engine_rs.generate_json(  # type: ignore[attr-defined]
             json.dumps(params_dict)
         )
         rs_dict = json.loads(rs_json_str)
+        rs_secs = time.perf_counter() - t0
 
     except ImportError as e:
         diffs.append(f"Failed to import Rust engine: {e}")
-        return False, diffs
+        return False, diffs, None
     except json.JSONDecodeError as e:
         diffs.append(f"Rust engine output not valid JSON: {e}")
-        return False, diffs
+        return False, diffs, None
     except Exception as e:
         diffs.append(f"Rust engine error: {e}")
-        return False, diffs
+        return False, diffs, None
+
+    timing = ComparisonTiming(python_secs=py_secs, rust_secs=rs_secs)
 
     # Compare results
     match, compare_diffs = compare_results(py_dict, rs_dict)
@@ -1171,7 +1190,7 @@ def run_comparison(
         for diff in diffs:
             print(f"  - {diff}")
 
-    return len(diffs) == 0, diffs
+    return len(diffs) == 0, diffs, timing
 
 
 def main():
@@ -1204,22 +1223,33 @@ def main():
 
     passed = 0
     failed = 0
+    total_time = 0.0
 
     for scenario in scenarios:
         params = scenario.make_params()
-        success, diffs = run_comparison(params, verbose=args.verbose)
+        success, diffs, timing = run_comparison(params, verbose=args.verbose)
+
+        if timing:
+            time_str = (
+                f"  ({timing.total_secs:.2f}s"
+                f" — py {timing.python_secs:.2f}s"
+                f", rs {timing.rust_secs:.2f}s)"
+            )
+            total_time += timing.total_secs
+        else:
+            time_str = ""
 
         if success:
-            print(f"✓ {scenario.name}")
+            print(f"✓ {scenario.name}{time_str}")
             passed += 1
         else:
-            print(f"✗ {scenario.name}")
+            print(f"✗ {scenario.name}{time_str}")
             if args.verbose:
                 for diff in diffs:
                     print(f"    {diff}")
             failed += 1
 
-    print(f"\n{passed} passed, {failed} failed")
+    print(f"\n{passed} passed, {failed} failed ({total_time:.2f}s total)")
 
     # If all tests passed and we ran the full suite, write certification manifest
     if failed == 0 and not args.scenario:
