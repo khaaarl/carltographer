@@ -2,11 +2,16 @@
 
 This document organizes the planned features for terrain catalog customization, dynamic assembly, manual placement, and Tabletop Simulator integration. Each feature has a unique ID for dependency tracking.
 
+This is a living document — update the **Status** fields as features progress.
+
 ---
 
 ## A. Catalog Persistence & Management
 
 ### A1. Catalog Persistence (Save/Load)
+
+**Status:** Not Started
+**Blocked by:** —
 
 Externalize terrain catalogs as JSON files instead of hardcoding them in Python. The JSON schema already exists (`schemas/carltographer.schema.json`); this feature makes it the primary storage format.
 
@@ -17,6 +22,9 @@ Externalize terrain catalogs as JSON files instead of hardcoding them in Python.
 
 ### A2. Built-in Starter Catalogs
 
+**Status:** Not Started
+**Blocked by:** A1
+
 Ship the current hardcoded catalogs (WTC set, GW misc, etc.) as bundled JSON files that come with the application. Users can clone and customize them without losing the originals.
 
 - Extract current Python-dict catalogs into JSON files
@@ -24,6 +32,9 @@ Ship the current hardcoded catalogs (WTC set, GW misc, etc.) as bundled JSON fil
 - UI for selecting which catalog(s) to use for generation
 
 ### A3. Catalog Import/Export
+
+**Status:** Not Started
+**Blocked by:** A1
 
 Allow users to share catalog files with each other.
 
@@ -37,6 +48,9 @@ Allow users to share catalog files with each other.
 
 ### B1. Tag System
 
+**Status:** Not Started
+**Blocked by:** —
+
 Add a flexible tagging system to terrain objects and features, complementing (not replacing) the existing `feature_type` field. Tags enable edition-neutral rules modeling — e.g., a feature tagged `obscuring` behaves correctly in both 10th and future editions without hardcoding edition-specific feature types.
 
 - Tags on `TerrainObject` (e.g., `tall`, `dense`, `scalable`)
@@ -46,6 +60,9 @@ Add a flexible tagging system to terrain objects and features, complementing (no
 
 ### B2. Tag-based Scoring & Constraints
 
+**Status:** Not Started
+**Blocked by:** B1
+
 Extend the engine's feature count preferences and visibility scoring to work with tags. For example, "at least 4 features tagged `obscuring`" rather than (or in addition to) "at least 4 features of type `ruins`."
 
 - `FeatureCountPreference` accepts tag-based predicates
@@ -53,6 +70,9 @@ Extend the engine's feature count preferences and visibility scoring to work wit
 - Backward-compatible: `feature_type`-based preferences still work
 
 ### B3. Custom Object Authoring
+
+**Status:** Not Started
+**Blocked by:** A1
 
 UI for users to define their own terrain objects, representing physical pieces they own.
 
@@ -63,6 +83,9 @@ UI for users to define their own terrain objects, representing physical pieces t
 
 ### B4. Custom Feature Authoring
 
+**Status:** Not Started
+**Blocked by:** B3
+
 UI for users to compose terrain features from terrain objects.
 
 - Select objects from the catalog and position them relative to each other
@@ -72,6 +95,9 @@ UI for users to compose terrain features from terrain objects.
 
 ### B5. Piece Preview / Visualization
 
+**Status:** Not Started
+**Blocked by:** —
+
 Show a top-down silhouette or outline of terrain objects and features in the catalog editor and selection UI, so users can see what they're building or choosing.
 
 - Render object shapes as 2D outlines (top-down projection)
@@ -79,11 +105,16 @@ Show a top-down silhouette or outline of terrain objects and features in the cat
 - Color-code by height or feature type
 - Useful in both the authoring UI and the catalog browser
 
+Not a hard dependency for anything, but significantly improves the UX of B3, B4, and D1. Can be developed at any point.
+
 ---
 
 ## C. Dynamic Feature Assembly
 
 ### C1. Assembly Template Schema
+
+**Status:** Not Started
+**Blocked by:** A1
 
 Extend the catalog JSON format so that a terrain feature can declare **variable components** — slots where the engine picks from a set of compatible objects during generation.
 
@@ -115,6 +146,9 @@ The exact schema will evolve through iteration, but the core idea: features can 
 
 ### C2. Assembly in Engine (Mutation Integration)
 
+**Status:** Not Started
+**Blocked by:** C1
+
 The engine uses assembly templates during generation:
 
 - When instantiating a feature from an assembly template, randomly select one option per variable slot
@@ -124,6 +158,9 @@ The engine uses assembly templates during generation:
 
 ### C3. Object-level Quantity Tracking
 
+**Status:** Not Started
+**Blocked by:** C1
+
 Currently, quantity limits exist at both the object and feature level in the schema, but only feature-level quantities are enforced during generation. With dynamic assembly, object-level tracking becomes essential — the engine must ensure it doesn't use more wall sections than the user owns.
 
 - Track per-object usage counts during generation
@@ -131,6 +168,9 @@ Currently, quantity limits exist at both the object and feature level in the sch
 - Mutation actions check object availability before selecting components
 
 ### C4. Procedural Segment Assembly (Lower Priority)
+
+**Status:** Not Started
+**Blocked by:** C2, C3
 
 Rather than choosing from pre-defined wall configurations, the engine places individual wall segments along footprint edges. This is a more advanced form of dynamic assembly.
 
@@ -144,15 +184,21 @@ Rather than choosing from pre-defined wall configurations, the engine places ind
 
 ### D1. Manual Feature Placement
 
+**Status:** Not Started
+**Blocked by:** A1
+
 UI for users to select a terrain feature from the catalog and place it on the battlefield by hand. Should share logic/behavior with the existing move and copy UI interactions.
 
-- Catalog browser panel (with preview, B5)
+- Catalog browser panel (with preview from B5 when available)
 - Click-to-place or drag-to-place interaction
 - Snap to the same quantization grid the engine uses (0.1" position, 15° rotation)
 - Respect table bounds and optionally gap constraints
 - Purely manual layouts (no engine) are valid output
 
 ### D2. Pinning / Locking
+
+**Status:** Not Started
+**Blocked by:** D1
 
 Mark manually-placed (or engine-placed) features as "pinned" so the engine treats them as immovable constraints during generation.
 
@@ -163,6 +209,9 @@ Mark manually-placed (or engine-placed) features as "pinned" so the engine treat
 
 ### D3. Hybrid Generation
 
+**Status:** Not Started
+**Blocked by:** D2
+
 Combine manual placement with engine optimization: the user places some features, pins them, and the engine fills the rest of the board.
 
 - Engine generation starts with pre-placed pinned features instead of an empty board
@@ -171,6 +220,9 @@ Combine manual placement with engine optimization: the user places some features
 - UI flow: place features → pin them → click "generate" → engine fills the rest
 
 ### D4. Manual Object Placement & Feature Crafting (Lower Priority)
+
+**Status:** Not Started
+**Blocked by:** D1, B3
 
 Extend manual placement to individual terrain objects. Users place objects on the board, then group/attach them to create a new custom terrain feature and add it to the catalog.
 
@@ -185,6 +237,9 @@ Extend manual placement to individual terrain objects. Users place objects on th
 
 ### E1. TTS Reference Save System
 
+**Status:** Not Started
+**Blocked by:** —
+
 Load one or more TTS save files as "reference libraries." Carltographer scans their objects for matching tags (e.g., `carltographer_id=ruin_base_6x4` in the object's name, description, or GM notes) to build an index of available TTS objects.
 
 - Parse TTS save file JSON format (well-understood from Caverns of Carl)
@@ -194,6 +249,9 @@ Load one or more TTS save files as "reference libraries." Carltographer scans th
 - Handle GUID refresh on copy (same pattern as Caverns of Carl)
 
 ### E2. TTS Object Associations
+
+**Status:** Not Started
+**Blocked by:** E1, A1
 
 Link Carltographer terrain objects and features to their TTS representations. Associations are stored in the catalog alongside the terrain definitions.
 
@@ -207,6 +265,9 @@ Link Carltographer terrain objects and features to their TTS representations. As
 
 ### E3. TTS Save File Generation
 
+**Status:** Not Started
+**Blocked by:** E2
+
 Generate a complete TTS save file from a Carltographer layout, following the Caverns of Carl pattern.
 
 - Coordinate mapping: Carltographer inches → TTS units (1:1), centered on (x=0, z=0) for standard 40k table positions
@@ -219,6 +280,9 @@ Generate a complete TTS save file from a Carltographer layout, following the Cav
 
 ### E4. Custom TTS Reference Saves
 
+**Status:** Not Started
+**Blocked by:** E1
+
 Users can point Carltographer at their own additional TTS reference save files to provide TTS objects for custom terrain.
 
 - Configuration: list of reference save file paths (default + user-added)
@@ -227,6 +291,9 @@ Users can point Carltographer at their own additional TTS reference save files t
 - Documentation/guide for users: how to tag their TTS objects for Carltographer
 
 ### E5. TTS Lua Scripting (Optional)
+
+**Status:** Not Started
+**Blocked by:** E3
 
 Embed Lua scripts in generated TTS saves for interactive features.
 
@@ -240,6 +307,9 @@ Embed Lua scripts in generated TTS saves for interactive features.
 ## F. Geometry Enhancements
 
 ### F1. Polygonal Shape Outlines
+
+**Status:** Not Started
+**Blocked by:** —
 
 Extend the shape model beyond axis-aligned rectangles to support arbitrary convex (or simple) polygons. Needed for woods areas, irregularly-shaped terrain, and precise custom objects.
 
@@ -255,6 +325,9 @@ Extend the shape model beyond axis-aligned rectangles to support arbitrary conve
 
 ### G1. Enhanced Layout Diagrams
 
+**Status:** Not Started
+**Blocked by:** —
+
 Improve the layout diagram output for physical tabletop play.
 
 - Dimension annotations (arrows with inch measurements from table edges to terrain corners)
@@ -267,62 +340,39 @@ Improve the layout diagram output for physical tabletop play.
 
 ## Dependency Graph
 
-```
-A1 (Catalog Persistence)
-├── A2 (Starter Catalogs)
-├── A3 (Import/Export)
-├── B3 (Custom Object Authoring)
-│   └── B4 (Custom Feature Authoring)
-│       └── C1 (Assembly Template Schema)
-│           └── C2 (Assembly in Engine)
-│           └── C3 (Object-level Quantity Tracking)
-│               └── C4 (Procedural Segment Assembly)
-├── D1 (Manual Feature Placement)
-│   └── D2 (Pinning/Locking)
-│       └── D3 (Hybrid Generation)
-│   └── D4 (Manual Object Placement & Feature Crafting)
-└── E2 (TTS Object Associations)
-    └── E3 (TTS Save File Generation)
-        └── E5 (TTS Lua Scripting)
+### Summary
 
-B1 (Tag System)
-└── B2 (Tag-based Scoring)
+Six independent roots that can start immediately: **A1**, **B1**, **B5**, **E1**, **F1**, **G1**.
 
-B3, B4 ← B5 (Piece Preview) [enhances but doesn't block]
+A1 is the most critical — it unblocks the most downstream work (A2, A3, B3→B4, C1→C2/C3, D1→D2→D3, and E2→E3).
 
-E1 (TTS Reference Save System)
-└── E2 (TTS Object Associations)
-└── E4 (Custom TTS Reference Saves)
+### Dependencies (DAG Edges)
 
-F1 (Polygonal Shapes) — independent, deep engine change
-G1 (Enhanced Diagrams) — independent, UI-only
-```
-
-### Explicit Dependencies (DAG Edges)
-
-| Feature | Depends On |
-|---------|-----------|
-| A2 (Starter Catalogs) | A1 |
-| A3 (Import/Export) | A1 |
-| B2 (Tag-based Scoring) | B1 |
-| B3 (Custom Object Authoring) | A1 |
-| B4 (Custom Feature Authoring) | B3 |
-| B5 (Piece Preview) | — (enhances B3, B4, D1; not a hard dep) |
-| C1 (Assembly Template Schema) | B4 |
-| C2 (Assembly in Engine) | C1 |
-| C3 (Object-level Quantity Tracking) | C1 |
-| C4 (Procedural Segments) | C2, C3 |
-| D1 (Manual Placement) | A1 |
-| D2 (Pinning/Locking) | D1 |
-| D3 (Hybrid Generation) | D2 |
-| D4 (Manual Object + Crafting) | D1, B3 |
-| E1 (TTS Reference System) | — |
-| E2 (TTS Associations) | E1, A1 |
-| E3 (TTS Save Generation) | E2 |
-| E4 (Custom TTS References) | E1 |
-| E5 (TTS Lua Scripting) | E3 |
-| F1 (Polygonal Shapes) | — |
-| G1 (Enhanced Diagrams) | — |
+| Feature | Depends On | Unlocks |
+|---------|-----------|---------|
+| **A1** (Catalog Persistence) | — | A2, A3, B3, C1, D1, E2 |
+| A2 (Starter Catalogs) | A1 | — |
+| A3 (Import/Export) | A1 | — |
+| **B1** (Tag System) | — | B2 |
+| B2 (Tag-based Scoring) | B1 | — |
+| B3 (Custom Object Authoring) | A1 | B4, D4 |
+| B4 (Custom Feature Authoring) | B3 | — |
+| **B5** (Piece Preview) | — | — (enhances B3, B4, D1) |
+| C1 (Assembly Template Schema) | A1 | C2, C3 |
+| C2 (Assembly in Engine) | C1 | C4 |
+| C3 (Object-level Quantity) | C1 | C4 |
+| C4 (Procedural Segments) | C2, C3 | — |
+| D1 (Manual Placement) | A1 | D2, D4 |
+| D2 (Pinning/Locking) | D1 | D3 |
+| D3 (Hybrid Generation) | D2 | — |
+| D4 (Object Placement + Crafting) | D1, B3 | — |
+| **E1** (TTS Reference System) | — | E2, E4 |
+| E2 (TTS Associations) | E1, A1 | E3 |
+| E3 (TTS Save Generation) | E2 | E5 |
+| E4 (Custom TTS References) | E1 | — |
+| E5 (TTS Lua Scripting) | E3 | — |
+| **F1** (Polygonal Shapes) | — | — |
+| **G1** (Enhanced Diagrams) | — | — |
 
 ---
 
