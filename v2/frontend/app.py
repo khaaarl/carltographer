@@ -102,6 +102,62 @@ RANGE_DASH_COLOR = "#000000"
 
 
 # ---------------------------------------------------------------------------
+# Tooltip helper
+# ---------------------------------------------------------------------------
+
+
+class Tooltip:
+    """Lightweight hover tooltip for any tkinter widget."""
+
+    _DELAY_MS = 400
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self._tip_window = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._cancel, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self._DELAY_MS, self._show)
+
+    def _cancel(self, _event=None):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+        self._hide()
+
+    def _show(self):
+        if self._tip_window:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() + 4
+        y = self.widget.winfo_rooty()
+        tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw,
+            text=self.text,
+            background="#ffffe0",
+            foreground="#000000",
+            relief="solid",
+            borderwidth=1,
+            padx=4,
+            pady=2,
+            wraplength=300,
+        )
+        label.pack()
+        self._tip_window = tw
+
+    def _hide(self):
+        if self._tip_window:
+            self._tip_window.destroy()
+            self._tip_window = None
+
+
+# ---------------------------------------------------------------------------
 # Transform helpers
 # ---------------------------------------------------------------------------
 
@@ -664,18 +720,40 @@ class ControlPanel(ttk.Frame):
         row = 0
         row = self._section(left, row, "Terrain")
         row = self._combo(
-            left, row, "Catalog:", self.catalog_var, "catalog_combo"
+            left,
+            row,
+            "Catalog:",
+            self.catalog_var,
+            "catalog_combo",
+            tooltip="Terrain collection to draw pieces from",
         )
         self.catalog_combo["values"] = list(TERRAIN_CATALOGS.keys())
 
         row = self._sep(left, row)
         row = self._section(left, row, "Mission")
         row = self._combo(
-            left, row, "Edition:", self.edition_var, "edition_combo"
+            left,
+            row,
+            "Edition:",
+            self.edition_var,
+            "edition_combo",
+            tooltip="Rules edition for mission deployment zones",
         )
-        row = self._combo(left, row, "Pack:", self.pack_var, "pack_combo")
         row = self._combo(
-            left, row, "Deployment:", self.deployment_var, "deployment_combo"
+            left,
+            row,
+            "Pack:",
+            self.pack_var,
+            "pack_combo",
+            tooltip="Mission pack within the selected edition",
+        )
+        row = self._combo(
+            left,
+            row,
+            "Deployment:",
+            self.deployment_var,
+            "deployment_combo",
+            tooltip="Deployment zone layout; affects scoring targets",
         )
 
         # Initialize mission dropdowns
@@ -683,16 +761,42 @@ class ControlPanel(ttk.Frame):
 
         row = self._sep(left, row)
         row = self._section(left, row, "Table")
-        row = self._field(left, row, "Width (in):", self.table_width_var)
-        row = self._field(left, row, "Depth (in):", self.table_depth_var)
+        row = self._field(
+            left,
+            row,
+            "Width (in):",
+            self.table_width_var,
+            tooltip="Table width in inches (standard: 60)",
+        )
+        row = self._field(
+            left,
+            row,
+            "Depth (in):",
+            self.table_depth_var,
+            tooltip="Table depth in inches (standard: 44)",
+        )
 
         row = self._sep(left, row)
         row = self._section(left, row, "Generation")
-        row = self._field(left, row, "Seed:", self.seed_var)
-        row = self._field(left, row, "Steps:", self.num_steps_var)
-        ttk.Checkbutton(
+        row = self._field(
+            left,
+            row,
+            "Seed:",
+            self.seed_var,
+            tooltip="Random seed for reproducibility; leave blank for random",
+        )
+        row = self._field(
+            left,
+            row,
+            "Steps:",
+            self.num_steps_var,
+            tooltip="Number of optimization iterations (more = better but slower)",
+        )
+        cb = ttk.Checkbutton(
             left, text="Rotationally symmetric", variable=self.symmetric_var
-        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        )
+        cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        Tooltip(cb, "Mirror all off-center terrain 180° for balanced layouts")
         row += 1
         row = self._combo(
             left,
@@ -700,6 +804,7 @@ class ControlPanel(ttk.Frame):
             "Rotation:",
             self.rotation_granularity_var,
             "rotation_granularity_combo",
+            tooltip="Rotation snap angle in degrees for terrain placement",
         )
         self.rotation_granularity_combo["values"] = [
             "90",
@@ -708,54 +813,139 @@ class ControlPanel(ttk.Frame):
         ]
 
         row = self._sep(left, row)
-        ttk.Button(left, text="Generate", command=self.on_generate).grid(
-            row=row, column=0, columnspan=2, pady=(10, 2), sticky="ew"
+        btn_frame = ttk.Frame(left)
+        btn_frame.grid(
+            row=row, column=0, columnspan=2, pady=(10, 10), sticky="ew"
         )
-        row += 1
-        ttk.Button(left, text="Clear Layout", command=self.on_clear).grid(
-            row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
-        )
-        row += 1
-        ttk.Button(left, text="Save Layout", command=self.on_save).grid(
-            row=row, column=0, columnspan=2, pady=(2, 2), sticky="ew"
-        )
-        row += 1
-        ttk.Button(left, text="Load Layout", command=self.on_load).grid(
-            row=row, column=0, columnspan=2, pady=(2, 10), sticky="ew"
-        )
+        btn_frame.columnconfigure(0, weight=1)
+        btn_frame.columnconfigure(1, weight=1)
+
+        btn = ttk.Button(btn_frame, text="Generate", command=self.on_generate)
+        btn.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=(0, 2))
+        Tooltip(btn, "Run the engine to produce or improve a layout")
+
+        btn = ttk.Button(btn_frame, text="Clear", command=self.on_clear)
+        btn.grid(row=0, column=1, sticky="ew", padx=(2, 0), pady=(0, 2))
+        Tooltip(btn, "Remove all terrain and start with an empty table")
+
+        btn = ttk.Button(btn_frame, text="Save", command=self.on_save)
+        btn.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(2, 0))
+        Tooltip(btn, "Export layout as a PNG with embedded data")
+
+        btn = ttk.Button(btn_frame, text="Load", command=self.on_load)
+        btn.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(2, 0))
+        Tooltip(btn, "Import a layout from a saved PNG or JSON file")
 
         # --- Right column: Spacing, Feature Counts, Results ---
         row = 0
         row = self._section(right, row, "Spacing (tall terrain)")
-        row = self._field(right, row, "Feature gap (in):", self.min_gap_var)
-        row = self._field(right, row, "Edge gap (in):", self.min_edge_gap_var)
+        row = self._field(
+            right,
+            row,
+            "Feature gap (in):",
+            self.min_gap_var,
+            tooltip='Min gap between tall terrain (height >= 1")',
+        )
+        row = self._field(
+            right,
+            row,
+            "Edge gap (in):",
+            self.min_edge_gap_var,
+            tooltip="Min gap from tall terrain to table edges",
+        )
 
         row = self._sep(right, row)
         row = self._section(right, row, "Spacing (all features)")
         row = self._field(
-            right, row, "Feature gap (in):", self.min_all_gap_var
+            right,
+            row,
+            "Feature gap (in):",
+            self.min_all_gap_var,
+            tooltip="Min gap between any terrain pieces",
         )
         row = self._field(
-            right, row, "Edge gap (in):", self.min_all_edge_gap_var
+            right,
+            row,
+            "Edge gap (in):",
+            self.min_all_edge_gap_var,
+            tooltip="Min gap from any terrain to table edges",
         )
 
         row = self._sep(right, row)
         row = self._section(right, row, "Feature Counts")
-        row = self._field(right, row, "Min obstacles:", self.min_crates_var)
-        row = self._field(right, row, "Max obstacles:", self.max_crates_var)
-        row = self._field(right, row, "Min ruins:", self.min_ruins_var)
-        row = self._field(right, row, "Max ruins:", self.max_ruins_var)
+        row = self._field(
+            right,
+            row,
+            "Min obstacles:",
+            self.min_crates_var,
+            tooltip="Target minimum obstacle count (soft constraint)",
+        )
+        row = self._field(
+            right,
+            row,
+            "Max obstacles:",
+            self.max_crates_var,
+            tooltip="Target maximum obstacle count (soft constraint)",
+        )
+        row = self._field(
+            right,
+            row,
+            "Min ruins:",
+            self.min_ruins_var,
+            tooltip="Target minimum ruin count (soft constraint)",
+        )
+        row = self._field(
+            right,
+            row,
+            "Max ruins:",
+            self.max_ruins_var,
+            tooltip="Target maximum ruin count (soft constraint)",
+        )
 
         row = self._sep(right, row)
         row = self._section(right, row, "Scoring Targets")
         row = self._field(
-            right, row, "Overall vis %:", self.overall_vis_target_var
+            right,
+            row,
+            "Overall vis %:",
+            self.overall_vis_target_var,
+            tooltip="Target line-of-sight visibility percentage",
         )
-        row = self._field(right, row, "  weight:", self.overall_vis_weight_var)
-        row = self._field(right, row, "DZ hide %:", self.dz_hide_target_var)
-        row = self._field(right, row, "  weight:", self.dz_hide_weight_var)
-        row = self._field(right, row, "Obj hide %:", self.obj_hide_target_var)
-        row = self._field(right, row, "  weight:", self.obj_hide_weight_var)
+        row = self._field(
+            right,
+            row,
+            "  weight:",
+            self.overall_vis_weight_var,
+            tooltip="How strongly to optimize toward the visibility target",
+        )
+        row = self._field(
+            right,
+            row,
+            "DZ hide %:",
+            self.dz_hide_target_var,
+            tooltip="Target % of each deployment zone hidden from opposing DZ",
+        )
+        row = self._field(
+            right,
+            row,
+            "  weight:",
+            self.dz_hide_weight_var,
+            tooltip="How strongly to optimize toward the DZ hide target",
+        )
+        row = self._field(
+            right,
+            row,
+            "Obj hide %:",
+            self.obj_hide_target_var,
+            tooltip="Target % of objectives hidden from deployment zones",
+        )
+        row = self._field(
+            right,
+            row,
+            "  weight:",
+            self.obj_hide_weight_var,
+            tooltip="How strongly to optimize toward the objective hide target",
+        )
 
     def _section(self, parent, row, title):
         ttk.Label(parent, text=title, font=("", 11, "bold")).grid(
@@ -763,24 +953,27 @@ class ControlPanel(ttk.Frame):
         )
         return row + 1
 
-    def _field(self, parent, row, label, var):
-        ttk.Label(parent, text=label).grid(
-            row=row, column=0, sticky="w", pady=2
-        )
-        ttk.Entry(parent, textvariable=var, width=10).grid(
-            row=row, column=1, sticky="w", pady=2, padx=(5, 0)
-        )
+    def _field(self, parent, row, label, var, tooltip=None):
+        lbl = ttk.Label(parent, text=label)
+        lbl.grid(row=row, column=0, sticky="w", pady=2)
+        entry = ttk.Entry(parent, textvariable=var, width=10)
+        entry.grid(row=row, column=1, sticky="w", pady=2, padx=(5, 0))
+        if tooltip:
+            Tooltip(lbl, tooltip)
+            Tooltip(entry, tooltip)
         return row + 1
 
-    def _combo(self, parent, row, label, var, attr_name):
-        ttk.Label(parent, text=label).grid(
-            row=row, column=0, sticky="w", pady=2
-        )
+    def _combo(self, parent, row, label, var, attr_name, tooltip=None):
+        lbl = ttk.Label(parent, text=label)
+        lbl.grid(row=row, column=0, sticky="w", pady=2)
         combo = ttk.Combobox(
             parent, textvariable=var, width=28, state="readonly"
         )
         combo.grid(row=row, column=1, sticky="w", pady=2, padx=(5, 0))
         setattr(self, attr_name, combo)
+        if tooltip:
+            Tooltip(lbl, tooltip)
+            Tooltip(combo, tooltip)
         return row + 1
 
     def _sep(self, parent, row):
@@ -1078,10 +1271,22 @@ class App:
             self._results_frame, text="Visibility: --"
         )
         self.visibility_label.grid(row=0, column=0, sticky="w", pady=1)
+        Tooltip(
+            self.visibility_label,
+            "Overall line-of-sight visibility across the table",
+        )
         self.dz_hide_label = ttk.Label(self._results_frame, text="")
         self.dz_hide_label.grid(row=1, column=0, sticky="w", pady=1)
+        Tooltip(
+            self.dz_hide_label,
+            "% of each deployment zone hidden from the opposing DZ",
+        )
         self.obj_hide_label = ttk.Label(self._results_frame, text="")
         self.obj_hide_label.grid(row=2, column=0, sticky="w", pady=1)
+        Tooltip(
+            self.obj_hide_label,
+            "% of objectives hidden from deployment zones",
+        )
 
         # Right panel for controls and history
         self.right_panel = ttk.Frame(self.root)
@@ -1163,6 +1368,10 @@ class App:
             borderwidth=2,
         )
         self._add_terrain_btn_window_id = None
+        Tooltip(
+            self._add_terrain_btn,
+            "Manually place a terrain piece from the catalog",
+        )
 
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
