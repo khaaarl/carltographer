@@ -1,0 +1,108 @@
+{
+  "seed": 42,
+  "table_width_inches": 44,
+  "table_depth_inches": 30,
+  "catalog": {
+    "objects": [
+      {
+        "item": {
+          "id": "crate_5x2.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 5.0,
+              "depth_inches": 2.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Crate (double-stack)"
+        }
+      },
+      {
+        "item": {
+          "id": "ruins_10x6",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 10.0,
+              "depth_inches": 6.0,
+              "height_inches": 0.0
+            }
+          ],
+          "name": "Ruins (base)"
+        }
+      },
+      {
+        "item": {
+          "id": "opaque_wall_6x0.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 6.0,
+              "depth_inches": 0.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Opaque Wall"
+        }
+      }
+    ],
+    "features": [
+      {
+        "item": {
+          "id": "crate",
+          "feature_type": "obstacle",
+          "components": [
+            {
+              "object_id": "crate_5x2.5"
+            }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "bare_ruin",
+          "feature_type": "obscuring",
+          "components": [
+            {
+              "object_id": "ruins_10x6"
+            }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "ruin_with_wall",
+          "feature_type": "obscuring",
+          "components": [
+            {
+              "object_id": "ruins_10x6"
+            },
+            {
+              "object_id": "opaque_wall_6x0.5",
+              "transform": {
+                "x_inches": 2.0,
+                "y_inches": 0.0,
+                "z_inches": 0.0,
+                "rotation_deg": 0.0
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "name": "WTC-style Catalog"
+  },
+  "num_steps": 100,
+  "scoring_targets": {
+    "overall_visibility_target": 30.0,
+    "overall_visibility_weight": 1.0,
+    "dz_hideability_target": 70.0,
+    "dz_hideability_weight": 5.0,
+    "objective_hidability_target": 50.0,
+    "objective_hidability_weight": 5.0
+  },
+  "min_edge_gap_inches": 5.2,
+  "min_all_feature_gap_inches": 3,
+  "min_all_edge_gap_inches": 3
+}

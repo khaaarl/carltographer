@@ -1,0 +1,46 @@
+{
+  "seed": 42,
+  "table_width_inches": 44,
+  "table_depth_inches": 30,
+  "catalog": {
+    "objects": [
+      {
+        "item": {
+          "id": "crate_5x2.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 5.0,
+              "depth_inches": 2.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Crate (double-stack)"
+        }
+      }
+    ],
+    "features": [
+      {
+        "item": {
+          "id": "crate",
+          "feature_type": "obstacle",
+          "components": [
+            {
+              "object_id": "crate_5x2.5"
+            }
+          ]
+        }
+      }
+    ],
+    "name": "Crates Only"
+  },
+  "num_steps": 10,
+  "scoring_targets": {
+    "overall_visibility_target": 30.0,
+    "overall_visibility_weight": 1.0,
+    "dz_hideability_target": 70.0,
+    "dz_hideability_weight": 5.0,
+    "objective_hidability_target": 50.0,
+    "objective_hidability_weight": 5.0
+  }
+}

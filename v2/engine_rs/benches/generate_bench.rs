@@ -1,396 +1,200 @@
 //! Criterion benchmarks for the Carltographer terrain generation engine.
 //!
-//! Run with: `cargo bench` from `v2/engine_rs/`
+//! 28 cases from a pairwise (all-pairs) covering array over 9 parameters:
+//!   Table size (3) × Symmetry (2) × Mission (7) × Terrain (2) × Steps (4)
+//!   × Feature gap (2) × Edge gap (2) × All-feature gap (2) × All-edge gap (2)
 //!
 //! JSON fixtures generated via:
-//!   `python scripts/profile_engine.py dump-json --scenario <name>`
+//!   `python engine_rs/benches/generate_fixtures.py` (from v2/)
+//!
+//! Run with: `cargo bench` from `v2/engine_rs/`
+
+use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use engine_rs::generate::generate;
 use engine_rs::types::EngineParams;
 
-// -- JSON fixtures --
-// Each corresponds to a test scenario from engine_cmp/compare.py.
-
-/// 100 steps, no visibility — pure generation workload.
-const BASIC_100_JSON: &str = r#"{
-  "seed": 42,
-  "table_width_inches": 60.0,
-  "table_depth_inches": 44.0,
-  "catalog": {
-    "objects": [
-      {
-        "item": {
-          "id": "crate_5x2.5",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 5.0,
-              "depth_inches": 2.5,
-              "height_inches": 2.0
-            }
-          ],
-          "name": "Crate"
+macro_rules! bench_case {
+    ($fn_name:ident, $bench_name:expr, $file:expr) => {
+        fn $fn_name(c: &mut Criterion) {
+            let params: EngineParams = serde_json::from_str(include_str!($file)).unwrap();
+            c.bench_function($bench_name, |b| b.iter(|| generate(&params)));
         }
-      }
-    ],
-    "features": [
-      {
-        "item": {
-          "id": "crate",
-          "feature_type": "obstacle",
-          "components": [
-            {
-              "object_id": "crate_5x2.5"
-            }
-          ]
-        }
-      }
-    ],
-    "name": "Test Catalog"
-  },
-  "num_steps": 100,
-  "skip_visibility": true
-}"#;
-
-/// 100 steps with gap enforcement + feature count preferences, no visibility.
-const ALL_FEATURES_JSON: &str = r#"{
-  "seed": 42,
-  "table_width_inches": 60.0,
-  "table_depth_inches": 44.0,
-  "catalog": {
-    "objects": [
-      {
-        "item": {
-          "id": "crate_5x2.5",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 5.0,
-              "depth_inches": 2.5,
-              "height_inches": 2.0
-            }
-          ],
-          "name": "Crate"
-        }
-      }
-    ],
-    "features": [
-      {
-        "item": {
-          "id": "crate",
-          "feature_type": "obstacle",
-          "components": [
-            {
-              "object_id": "crate_5x2.5"
-            }
-          ]
-        }
-      }
-    ],
-    "name": "Test Catalog"
-  },
-  "num_steps": 100,
-  "feature_count_preferences": [
-    {
-      "feature_type": "obstacle",
-      "min": 3,
-      "max": 10
-    }
-  ],
-  "min_feature_gap_inches": 2.0,
-  "min_edge_gap_inches": 1.0,
-  "skip_visibility": true
-}"#;
-
-/// 50 steps with visibility computation enabled.
-/// Uses 5" tall crates (above 4" blocking height threshold) so terrain
-/// actually generates blocking segments for the intersection loop.
-const VISIBILITY_50_JSON: &str = r#"{
-  "seed": 42,
-  "table_width_inches": 60.0,
-  "table_depth_inches": 44.0,
-  "catalog": {
-    "objects": [
-      {
-        "item": {
-          "id": "crate_5x2.5",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 5.0,
-              "depth_inches": 2.5,
-              "height_inches": 5.0
-            }
-          ],
-          "name": "Crate"
-        }
-      }
-    ],
-    "features": [
-      {
-        "item": {
-          "id": "crate",
-          "feature_type": "obstacle",
-          "components": [
-            {
-              "object_id": "crate_5x2.5"
-            }
-          ]
-        }
-      }
-    ],
-    "name": "Test Catalog"
-  },
-  "num_steps": 50
-}"#;
-
-/// 50 steps with mission (Hammer and Anvil) + visibility + DZ scoring.
-/// Uses 5" tall crates (above 4" blocking height threshold) so terrain
-/// actually generates blocking segments for the intersection loop.
-const MISSION_HNA_JSON: &str = r#"{
-  "seed": 42,
-  "table_width_inches": 60.0,
-  "table_depth_inches": 44.0,
-  "catalog": {
-    "objects": [
-      {
-        "item": {
-          "id": "crate_5x2.5",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 5.0,
-              "depth_inches": 2.5,
-              "height_inches": 5.0
-            }
-          ],
-          "name": "Crate"
-        }
-      }
-    ],
-    "features": [
-      {
-        "item": {
-          "id": "crate",
-          "feature_type": "obstacle",
-          "components": [
-            {
-              "object_id": "crate_5x2.5"
-            }
-          ]
-        }
-      }
-    ],
-    "name": "Test Catalog"
-  },
-  "num_steps": 50,
-  "mission": {
-    "name": "Hammer and Anvil",
-    "objectives": [
-      { "id": "1", "position": { "x_inches": 0.0, "z_inches": 0.0 }, "range_inches": 3.0 },
-      { "id": "2", "position": { "x_inches": 0.0, "z_inches": -16.0 }, "range_inches": 3.0 },
-      { "id": "3", "position": { "x_inches": 0.0, "z_inches": 16.0 }, "range_inches": 3.0 },
-      { "id": "4", "position": { "x_inches": -20.0, "z_inches": 0.0 }, "range_inches": 3.0 },
-      { "id": "5", "position": { "x_inches": 20.0, "z_inches": 0.0 }, "range_inches": 3.0 }
-    ],
-    "deployment_zones": [
-      {
-        "id": "green",
-        "polygons": [[
-          { "x_inches": -30.0, "z_inches": -22.0 },
-          { "x_inches": -12.0, "z_inches": -22.0 },
-          { "x_inches": -12.0, "z_inches": 22.0 },
-          { "x_inches": -30.0, "z_inches": 22.0 }
-        ]]
-      },
-      {
-        "id": "red",
-        "polygons": [[
-          { "x_inches": 12.0, "z_inches": -22.0 },
-          { "x_inches": 30.0, "z_inches": -22.0 },
-          { "x_inches": 30.0, "z_inches": 22.0 },
-          { "x_inches": 12.0, "z_inches": 22.0 }
-        ]]
-      }
-    ],
-    "rotationally_symmetric": true
-  }
-}"#;
-
-/// 50 steps on a 44×30" table with mixed terrain catalog (crates + ruins + walls)
-/// and Hammer and Anvil mission. Exercises multi-component obscuring features,
-/// angular sweep with blocking + obscuring segments, and all DZ/objective scoring.
-const MISSION_RUINS_JSON: &str = r#"{
-  "seed": 42,
-  "table_width_inches": 44.0,
-  "table_depth_inches": 30.0,
-  "catalog": {
-    "objects": [
-      {
-        "item": {
-          "id": "crate_5x2.5",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 5.0,
-              "depth_inches": 2.5,
-              "height_inches": 5.0
-            }
-          ],
-          "name": "Crate (double-stack)"
-        }
-      },
-      {
-        "item": {
-          "id": "ruins_10x6",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 10.0,
-              "depth_inches": 6.0,
-              "height_inches": 0.0
-            }
-          ],
-          "name": "Ruins (base)"
-        }
-      },
-      {
-        "item": {
-          "id": "opaque_wall_6x0.5",
-          "shapes": [
-            {
-              "shape_type": "rectangular_prism",
-              "width_inches": 6.0,
-              "depth_inches": 0.5,
-              "height_inches": 5.0
-            }
-          ],
-          "name": "Opaque Wall"
-        }
-      }
-    ],
-    "features": [
-      {
-        "item": {
-          "id": "crate",
-          "feature_type": "obstacle",
-          "components": [
-            { "object_id": "crate_5x2.5" }
-          ]
-        }
-      },
-      {
-        "item": {
-          "id": "bare_ruin",
-          "feature_type": "obscuring",
-          "components": [
-            { "object_id": "ruins_10x6" }
-          ]
-        }
-      },
-      {
-        "item": {
-          "id": "ruin_with_wall",
-          "feature_type": "obscuring",
-          "components": [
-            { "object_id": "ruins_10x6" },
-            {
-              "object_id": "opaque_wall_6x0.5",
-              "transform": { "x_inches": 2.0, "z_inches": 0.0, "rotation_deg": 0.0 }
-            }
-          ]
-        }
-      }
-    ],
-    "name": "WTC-style Catalog"
-  },
-  "num_steps": 50,
-  "mission": {
-    "name": "Hammer and Anvil",
-    "objectives": [
-      { "id": "1", "position": { "x_inches": 0.0, "z_inches": 0.0 }, "range_inches": 3.0 },
-      { "id": "2", "position": { "x_inches": 0.0, "z_inches": -9.0 }, "range_inches": 3.0 },
-      { "id": "3", "position": { "x_inches": 0.0, "z_inches": 9.0 }, "range_inches": 3.0 },
-      { "id": "4", "position": { "x_inches": -12.0, "z_inches": 0.0 }, "range_inches": 3.0 },
-      { "id": "5", "position": { "x_inches": 12.0, "z_inches": 0.0 }, "range_inches": 3.0 }
-    ],
-    "deployment_zones": [
-      {
-        "id": "green",
-        "polygons": [[
-          { "x_inches": -22.0, "z_inches": -15.0 },
-          { "x_inches": -4.0, "z_inches": -15.0 },
-          { "x_inches": -4.0, "z_inches": 15.0 },
-          { "x_inches": -22.0, "z_inches": 15.0 }
-        ]]
-      },
-      {
-        "id": "red",
-        "polygons": [[
-          { "x_inches": 4.0, "z_inches": -15.0 },
-          { "x_inches": 22.0, "z_inches": -15.0 },
-          { "x_inches": 22.0, "z_inches": 15.0 },
-          { "x_inches": 4.0, "z_inches": 15.0 }
-        ]]
-      }
-    ],
-    "rotationally_symmetric": true
-  }
-}"#;
-
-fn bench_basic_100(c: &mut Criterion) {
-    let params: EngineParams = serde_json::from_str(BASIC_100_JSON).unwrap();
-    c.bench_function("generate_basic_100_steps", |b| {
-        b.iter(|| generate(&params));
-    });
+    };
 }
 
-fn bench_all_features(c: &mut Criterion) {
-    let params: EngineParams = serde_json::from_str(ALL_FEATURES_JSON).unwrap();
-    c.bench_function("generate_all_features", |b| {
-        b.iter(|| generate(&params));
-    });
-}
-
-fn bench_with_visibility(c: &mut Criterion) {
-    let params: EngineParams = serde_json::from_str(VISIBILITY_50_JSON).unwrap();
-    c.bench_function("generate_with_visibility_50", |b| {
-        b.iter(|| generate(&params));
-    });
-}
-
-fn bench_with_visibility_100(c: &mut Criterion) {
-    // Same as VISIBILITY_50 but with 100 steps — more terrain accumulates,
-    // making later visibility computations progressively heavier.
-    let json = VISIBILITY_50_JSON.replace("\"num_steps\": 50", "\"num_steps\": 100");
-    let params: EngineParams = serde_json::from_str(&json).unwrap();
-    c.bench_function("generate_with_visibility_100", |b| {
-        b.iter(|| generate(&params));
-    });
-}
-
-fn bench_with_mission(c: &mut Criterion) {
-    let params: EngineParams = serde_json::from_str(MISSION_HNA_JSON).unwrap();
-    c.bench_function("generate_with_mission_hna", |b| {
-        b.iter(|| generate(&params));
-    });
-}
-
-fn bench_mission_ruins(c: &mut Criterion) {
-    let params: EngineParams = serde_json::from_str(MISSION_RUINS_JSON).unwrap();
-    c.bench_function("generate_mission_ruins", |b| {
-        b.iter(|| generate(&params));
-    });
-}
-
-criterion_group!(
-    benches,
-    bench_basic_100,
-    bench_all_features,
-    bench_with_visibility,
-    bench_with_visibility_100,
-    bench_with_mission,
-    bench_mission_ruins
+// -- 01-04: no mission (symmetry forced off) --
+bench_case!(
+    bench_01,
+    "44x30_crates_none_nosym_10_g0000",
+    "fixtures/44x30_crates_none_nosym_10_g0000.json"
 );
+bench_case!(
+    bench_02,
+    "60x44_wtc_none_nosym_20_g1010",
+    "fixtures/60x44_wtc_none_nosym_20_g1010.json"
+);
+bench_case!(
+    bench_03,
+    "90x44_crates_none_nosym_50_g1101",
+    "fixtures/90x44_crates_none_nosym_50_g1101.json"
+);
+bench_case!(
+    bench_04,
+    "44x30_wtc_none_nosym_100_g0111",
+    "fixtures/44x30_wtc_none_nosym_100_g0111.json"
+);
+
+// -- 05-08: Hammer and Anvil --
+bench_case!(
+    bench_05,
+    "60x44_crates_HnA_nosym_10_g1001",
+    "fixtures/60x44_crates_HnA_nosym_10_g1001.json"
+);
+bench_case!(
+    bench_06,
+    "90x44_wtc_HnA_sym_20_g0100",
+    "fixtures/90x44_wtc_HnA_sym_20_g0100.json"
+);
+bench_case!(
+    bench_07,
+    "44x30_wtc_HnA_nosym_50_g0110",
+    "fixtures/44x30_wtc_HnA_nosym_50_g0110.json"
+);
+bench_case!(
+    bench_08,
+    "60x44_crates_HnA_sym_100_g1011",
+    "fixtures/60x44_crates_HnA_sym_100_g1011.json"
+);
+
+// -- 09-12: Dawn of War --
+bench_case!(
+    bench_09,
+    "90x44_wtc_DoW_nosym_10_g0110",
+    "fixtures/90x44_wtc_DoW_nosym_10_g0110.json"
+);
+bench_case!(
+    bench_10,
+    "44x30_crates_DoW_sym_20_g1001",
+    "fixtures/44x30_crates_DoW_sym_20_g1001.json"
+);
+bench_case!(
+    bench_11,
+    "60x44_crates_DoW_nosym_50_g0011",
+    "fixtures/60x44_crates_DoW_nosym_50_g0011.json"
+);
+bench_case!(
+    bench_12,
+    "90x44_wtc_DoW_sym_100_g1100",
+    "fixtures/90x44_wtc_DoW_sym_100_g1100.json"
+);
+
+// -- 13-16: Tipping Point --
+bench_case!(
+    bench_13,
+    "44x30_wtc_TipPt_sym_10_g1010",
+    "fixtures/44x30_wtc_TipPt_sym_10_g1010.json"
+);
+bench_case!(
+    bench_14,
+    "60x44_crates_TipPt_nosym_20_g0101",
+    "fixtures/60x44_crates_TipPt_nosym_20_g0101.json"
+);
+bench_case!(
+    bench_15,
+    "90x44_crates_TipPt_sym_50_g1001",
+    "fixtures/90x44_crates_TipPt_sym_50_g1001.json"
+);
+bench_case!(
+    bench_16,
+    "44x30_wtc_TipPt_nosym_100_g0110",
+    "fixtures/44x30_wtc_TipPt_nosym_100_g0110.json"
+);
+
+// -- 17-20: Sweeping Engagement --
+bench_case!(
+    bench_17,
+    "60x44_wtc_SwpEng_sym_10_g0101",
+    "fixtures/60x44_wtc_SwpEng_sym_10_g0101.json"
+);
+bench_case!(
+    bench_18,
+    "90x44_crates_SwpEng_nosym_20_g1010",
+    "fixtures/90x44_crates_SwpEng_nosym_20_g1010.json"
+);
+bench_case!(
+    bench_19,
+    "44x30_crates_SwpEng_sym_50_g1101",
+    "fixtures/44x30_crates_SwpEng_sym_50_g1101.json"
+);
+bench_case!(
+    bench_20,
+    "60x44_wtc_SwpEng_nosym_100_g0010",
+    "fixtures/60x44_wtc_SwpEng_nosym_100_g0010.json"
+);
+
+// -- 21-24: Crucible of Battle --
+bench_case!(
+    bench_21,
+    "90x44_crates_Crucible_sym_10_g1000",
+    "fixtures/90x44_crates_Crucible_sym_10_g1000.json"
+);
+bench_case!(
+    bench_22,
+    "44x30_wtc_Crucible_nosym_20_g0111",
+    "fixtures/44x30_wtc_Crucible_nosym_20_g0111.json"
+);
+bench_case!(
+    bench_23,
+    "60x44_wtc_Crucible_sym_50_g0110",
+    "fixtures/60x44_wtc_Crucible_sym_50_g0110.json"
+);
+bench_case!(
+    bench_24,
+    "90x44_crates_Crucible_nosym_100_g1001",
+    "fixtures/90x44_crates_Crucible_nosym_100_g1001.json"
+);
+
+// -- 25-28: Search and Destroy --
+bench_case!(
+    bench_25,
+    "44x30_crates_SnD_nosym_10_g0111",
+    "fixtures/44x30_crates_SnD_nosym_10_g0111.json"
+);
+bench_case!(
+    bench_26,
+    "60x44_wtc_SnD_sym_20_g1000",
+    "fixtures/60x44_wtc_SnD_sym_20_g1000.json"
+);
+bench_case!(
+    bench_27,
+    "90x44_wtc_SnD_nosym_50_g0010",
+    "fixtures/90x44_wtc_SnD_nosym_50_g0010.json"
+);
+bench_case!(
+    bench_28,
+    "44x30_crates_SnD_sym_100_g1101",
+    "fixtures/44x30_crates_SnD_sym_100_g1101.json"
+);
+
+fn config() -> Criterion {
+    Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(3))
+}
+
+criterion_group! {
+    name = benches;
+    config = config();
+    targets =
+        bench_01, bench_02, bench_03, bench_04,
+        bench_05, bench_06, bench_07, bench_08,
+        bench_09, bench_10, bench_11, bench_12,
+        bench_13, bench_14, bench_15, bench_16,
+        bench_17, bench_18, bench_19, bench_20,
+        bench_21, bench_22, bench_23, bench_24,
+        bench_25, bench_26, bench_27, bench_28,
+}
 criterion_main!(benches);
