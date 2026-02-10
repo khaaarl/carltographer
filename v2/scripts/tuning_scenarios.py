@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Scenario definitions for multi-scenario hyperparameter tuning.
 
 The goal is to evaluate TuningParams across a diverse set of game setups so

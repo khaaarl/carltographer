@@ -57,7 +57,7 @@ source .env/bin/activate
 pip install -r requirements.txt
 
 # Run the UI
-./scripts/run-ui.sh
+./scripts/ui.py
 
 # (Optional) Build the Rust engine for ~10x faster generation
 pip install maturin

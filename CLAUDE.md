@@ -52,7 +52,7 @@ source .env/bin/activate
 ```
 
 Toolchain (always run from v2/):
-- **Run UI**: `./scripts/run-ui.sh` (works from any directory)
+- **Run UI**: `./scripts/ui.py` (works from any directory)
 - **Build Rust engine**: `python scripts/build_rust_engine.py` (cross-platform, works from v2/)
 - **Package executable**: `python scripts/package_executable.py` (cross-platform, works from v2/)
 - **pytest** for tests: `python -m pytest engine/`
