@@ -21,7 +21,7 @@ from ..engine.types import PlacedFeature as TypedPlacedFeature
 from ..engine.types import TerrainObject as TypedTerrainObject
 from ..engine_cmp.hash_manifest import verify_engine_unchanged
 from .layout_io import load_layout, save_layout_png
-from .missions import EDITIONS, find_mission_path
+from .missions import EDITIONS, find_mission_path, get_mission
 
 try:
     import engine_rs as _engine_rs
@@ -968,7 +968,6 @@ class ControlPanel(ttk.Frame):
         self.edition_var = tk.StringVar(value="")
         self.pack_var = tk.StringVar(value="")
         self.deployment_var = tk.StringVar(value="None")
-        self.selected_mission = None  # current mission dict or None
         self._initializing = True  # suppress callbacks during init
 
         # Combo widgets (set during _build via _combo helper)
@@ -1185,17 +1184,27 @@ class ControlPanel(ttk.Frame):
         self._on_deployment_changed()
 
     def _on_deployment_changed(self):
-        dep = self.deployment_var.get()
-        if dep == "None" or dep == "":
-            self.selected_mission = None
-        else:
-            edition = self.edition_var.get()
-            pack = self.pack_var.get()
-            self.selected_mission = (
-                EDITIONS.get(edition, {}).get(pack, {}).get(dep)
-            )
         if not self._initializing:
             self.on_table_changed()
+
+    def _resolve_mission(self):
+        """Compute mission dict for current deployment + table dims."""
+        dep = self.deployment_var.get()
+        if dep in ("None", ""):
+            return None
+        edition = self.edition_var.get()
+        pack = self.pack_var.get()
+        try:
+            tw = self.table_width_var.get()
+            td = self.table_depth_var.get()
+        except (tk.TclError, ValueError):
+            tw, td = 60.0, 44.0
+        return get_mission(edition, pack, dep, tw, td)
+
+    @property
+    def selected_mission(self):
+        """Current mission dict resolved from deployment + table dimensions."""
+        return self._resolve_mission()
 
     def _dims_changed(self, *_args):
         try:
@@ -1429,7 +1438,7 @@ class App:
 
         self.controls = ControlPanel(
             self.right_panel,
-            on_table_changed=self._render,
+            on_table_changed=self._on_table_changed,
             on_generate=self._on_generate,
             on_clear=self._on_clear,
             on_save=self._on_save,
@@ -1479,6 +1488,9 @@ class App:
         self._move_typed_features = None
         self._move_typed_objects = None
 
+        # Debounced visibility recompute timer
+        self._vis_recompute_after_id = None
+
         self.root.after(50, self._render)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<Button-1>", self._on_canvas_click)
@@ -1510,6 +1522,44 @@ class App:
                     "(Python source has changed since last certification - "
                     "run: python -m engine_cmp.compare)"
                 )
+
+    # -- table change handling --
+
+    def _on_table_changed(self):
+        """Called when table dims or deployment change. Re-render and schedule visibility recompute."""
+        self._render()
+        self._schedule_visibility_recompute()
+
+    def _schedule_visibility_recompute(self):
+        """Debounced: schedule a visibility recompute after 500ms of inactivity."""
+        if self._vis_recompute_after_id is not None:
+            self.root.after_cancel(self._vis_recompute_after_id)
+            self._vis_recompute_after_id = None
+        if not self.layout.get("placed_features"):
+            return
+        self._vis_recompute_after_id = self.root.after(
+            500, self._recompute_visibility
+        )
+
+    def _recompute_visibility(self):
+        """Re-run engine with num_steps=0 to get fresh visibility for current layout + mission."""
+        self._vis_recompute_after_id = None
+        params = self.controls.get_params()
+        if params is None:
+            return
+        params["num_steps"] = 0
+        params["seed"] = 1
+        params["initial_layout"] = self.layout
+
+        if _should_use_rust_engine():
+            result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore
+            result = json.loads(result_json)
+        else:
+            result = generate_json(params)
+
+        self.layout["visibility"] = result["layout"].get("visibility")
+        self._update_visibility_display()
+        self._render()
 
     # -- rendering --
 
