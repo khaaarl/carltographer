@@ -22,12 +22,19 @@ repos:
         pass_filenames: false
         files: ^v2/.*\.py$
 
-      - id: pytest
-        name: pytest
-        entry: bash -c 'cd v2 && .env/bin/python -m pytest --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
+      - id: pytest-engine
+        name: pytest engine
+        entry: bash -c 'cd v2 && .env/bin/python -m pytest engine/ --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
         language: system
         pass_filenames: false
-        files: (^v2/.*\.py$|requirements.*\.txt$)
+        files: (^v2/engine/.*\.py$|requirements.*\.txt$)
+
+      - id: pytest-frontend
+        name: pytest frontend
+        entry: bash -c 'cd v2 && .env/bin/python -m pytest frontend/ --no-header -q; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
+        language: system
+        pass_filenames: false
+        files: (^v2/(engine|frontend)/.*\.py$|requirements.*\.txt$)
 
       - id: cargo-fmt
         name: cargo fmt
