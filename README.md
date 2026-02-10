@@ -15,7 +15,7 @@ line-of-sight coverage.
 >   developer", right-click (or Control-click) the app and choose **Open**,
 >   then click **Open** in the dialog.
 
-![Example layout](docs/example-layout.png)
+![Example layout](docs/layout_2026-02-09_18-01-41.png)
 
 ## Features
 
