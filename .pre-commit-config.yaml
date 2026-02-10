@@ -28,3 +28,24 @@ repos:
         language: system
         pass_filenames: false
         files: (^v2/.*\.py$|requirements.*\.txt$)
+
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: bash -c 'cd v2/engine_rs && cargo fmt --check'
+        language: system
+        pass_filenames: false
+        files: ^v2/engine_rs/.*\.rs$
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: bash -c 'cd v2/engine_rs && cargo clippy --quiet -- -D warnings'
+        language: system
+        pass_filenames: false
+        files: ^v2/engine_rs/
+
+      - id: cargo-test
+        name: cargo test
+        entry: bash -c 'cd v2/engine_rs && cargo test --quiet'
+        language: system
+        pass_filenames: false
+        files: ^v2/engine_rs/.*\.rs$

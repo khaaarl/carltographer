@@ -281,8 +281,7 @@ mod tests {
             "num_steps": 100
         }"#;
 
-        let params: EngineParams =
-            serde_json::from_str(json).expect("deserialize");
+        let params: EngineParams = serde_json::from_str(json).expect("deserialize");
         assert_eq!(params.seed, 42);
         assert_eq!(params.steps(), 100);
         assert_eq!(params.catalog.objects.len(), 1);
@@ -290,8 +289,7 @@ mod tests {
 
         // Re-serialize and verify it's valid JSON
         let out = serde_json::to_string(&params).expect("serialize");
-        let _: EngineParams =
-            serde_json::from_str(&out).expect("re-deserialize");
+        let _: EngineParams = serde_json::from_str(&out).expect("re-deserialize");
     }
 
     #[test]
@@ -322,8 +320,7 @@ mod tests {
             "table_depth_inches": 44.0,
             "catalog": {}
         }"#;
-        let params: EngineParams =
-            serde_json::from_str(json).expect("deserialize");
+        let params: EngineParams = serde_json::from_str(json).expect("deserialize");
         assert_eq!(params.steps(), 100);
         assert!(params.catalog.objects.is_empty());
         assert!(params.catalog.features.is_empty());

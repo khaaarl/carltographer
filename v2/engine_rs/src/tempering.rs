@@ -111,12 +111,7 @@ pub fn compute_temperatures(num_replicas: u32, max_temperature: f64) -> Vec<f64>
 /// Always accepts improvements (no PRNG draw).
 /// T=0: rejects worse (no PRNG draw).
 /// T>0: accepts worse with P = exp((new - current) / T), consuming one rng.next_float().
-pub fn sa_accept(
-    current_score: f64,
-    new_score: f64,
-    temperature: f64,
-    rng: &mut Pcg32,
-) -> bool {
+pub fn sa_accept(current_score: f64, new_score: f64, temperature: f64, rng: &mut Pcg32) -> bool {
     if new_score >= current_score {
         return true;
     }
@@ -263,10 +258,9 @@ pub fn run_tempering<C: TemperingCandidate>(
         } else {
             // Parallel: run each replica's batch in its own thread
             // Collect per-replica best improvements, then merge
-            let mut per_replica_best: Vec<(f64, Option<C>)> =
-                (0..params.num_replicas)
-                    .map(|_| (f64::NEG_INFINITY, None))
-                    .collect();
+            let mut per_replica_best: Vec<(f64, Option<C>)> = (0..params.num_replicas)
+                .map(|_| (f64::NEG_INFINITY, None))
+                .collect();
 
             std::thread::scope(|s| {
                 let handles: Vec<_> = replicas

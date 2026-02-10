@@ -9,13 +9,10 @@ use std::collections::{HashMap, HashSet};
 use rayon::prelude::*;
 
 use crate::collision::{
-    compose_transform, get_tall_world_obbs, is_at_origin,
-    mirror_placed_feature, obb_corners, obbs_overlap,
-    point_to_segment_distance_squared, Corners,
+    compose_transform, get_tall_world_obbs, is_at_origin, mirror_placed_feature, obb_corners,
+    obbs_overlap, point_to_segment_distance_squared, Corners,
 };
-use crate::types::{
-    DeploymentZone, PlacedFeature, TerrainLayout, TerrainObject, Transform,
-};
+use crate::types::{DeploymentZone, PlacedFeature, TerrainLayout, TerrainObject, Transform};
 
 /// Expansion distance for DZ threat zone (inches).
 const DZ_EXPANSION_INCHES: f64 = 6.0;
@@ -66,11 +63,7 @@ fn point_in_polygon(px: f64, pz: f64, vertices: &[(f64, f64)]) -> bool {
 /// Superseded by `fraction_of_dz_visible_zsorted` and
 /// `pip_zsorted_update_seen` in production code. Retained for tests.
 #[cfg(test)]
-fn batch_point_in_polygon(
-    points: &[(f64, f64)],
-    polygon: &[(f64, f64)],
-    inside: &mut Vec<bool>,
-) {
+fn batch_point_in_polygon(points: &[(f64, f64)], polygon: &[(f64, f64)], inside: &mut Vec<bool>) {
     inside.clear();
     inside.resize(points.len(), false);
     let n = polygon.len();
@@ -83,8 +76,7 @@ fn batch_point_in_polygon(
         let (xj, zj) = polygon[j];
         for (k, &(px, pz)) in points.iter().enumerate() {
             if (zi > pz) != (zj > pz) {
-                let intersect_x =
-                    (xj - xi) * (pz - zi) / (zj - zi) + xi;
+                let intersect_x = (xj - xi) * (pz - zi) / (zj - zi) + xi;
                 if px < intersect_x {
                     inside[k] = !inside[k];
                 }
@@ -136,12 +128,15 @@ struct PrecomputedSegments {
     obscuring_shapes: Vec<ObscuringShape>,
 }
 
+/// Per-edge data: (x1, z1, x2, z2, midpoint_x, midpoint_z, normal_x, normal_z).
+type EdgeData = (f64, f64, f64, f64, f64, f64, f64, f64);
+
 /// Precomputed data for one obscuring feature shape.
 struct ObscuringShape {
     /// Corner vertices for point-in-polygon test (observer inside check).
     corners: Vec<(f64, f64)>,
-    /// Per-edge data: (x1, z1, x2, z2, midpoint_x, midpoint_z, normal_x, normal_z).
-    edges: Vec<(f64, f64, f64, f64, f64, f64, f64, f64)>,
+    /// Per-edge data.
+    edges: Vec<EdgeData>,
     /// Index of the obscuring feature this shape belongs to (for grouping).
     feature_idx: usize,
 }
@@ -176,10 +171,8 @@ fn precompute_segments(
                 let verts: Vec<(f64, f64)> = corners.to_vec();
 
                 // Precompute center
-                let cx: f64 =
-                    corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
-                let cz: f64 =
-                    corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
+                let cx: f64 = corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
+                let cz: f64 = corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
 
                 // Precompute edge data with outward normals
                 let mut edges = Vec::with_capacity(n);
@@ -213,18 +206,14 @@ fn precompute_segments(
                     Some(o) => o,
                     None => continue,
                 };
-                let comp_t =
-                    comp.transform.as_ref().unwrap_or(&default_t);
+                let comp_t = comp.transform.as_ref().unwrap_or(&default_t);
                 for shape in &obj.shapes {
                     if shape.height_inches < min_blocking_height {
                         continue;
                     }
-                    let shape_t =
-                        shape.offset.as_ref().unwrap_or(&default_t);
-                    let world = compose_transform(
-                        &compose_transform(shape_t, comp_t),
-                        &pf.transform,
-                    );
+                    let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
+                    let world =
+                        compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
                     let corners = obb_corners(
                         world.x_inches,
                         world.z_inches,
@@ -294,8 +283,7 @@ fn get_observer_segments(
 
         // Add back-facing edges
         for &(x1, z1, x2, z2, mx, mz, nx, nz) in &shape.edges {
-            let dot_observer =
-                (observer_x - mx) * nx + (observer_z - mz) * nz;
+            let dot_observer = (observer_x - mx) * nx + (observer_z - mz) * nz;
             if dot_observer < 0.0 {
                 out.push((x1, z1, x2, z2));
             }
@@ -474,7 +462,7 @@ fn compute_visibility_polygon(
                 continue;
             }
             let u = (d_x1 * dz - d_z1 * dx) / denom;
-            if u >= 0.0 && u <= 1.0 {
+            if (0.0..=1.0).contains(&u) {
                 min_t = t;
             }
         }
@@ -507,12 +495,8 @@ fn sample_points_in_polygon(
         .fold(f64::NEG_INFINITY, f64::max);
 
     let mut points: Vec<(f64, f64)> = Vec::new();
-    let mut start_x = ((min_x - grid_offset) / grid_spacing).floor()
-        * grid_spacing
-        + grid_offset;
-    let mut start_z = ((min_z - grid_offset) / grid_spacing).floor()
-        * grid_spacing
-        + grid_offset;
+    let mut start_x = ((min_x - grid_offset) / grid_spacing).floor() * grid_spacing + grid_offset;
+    let mut start_z = ((min_z - grid_offset) / grid_spacing).floor() * grid_spacing + grid_offset;
     if start_x < min_x {
         start_x += grid_spacing;
     }
@@ -543,13 +527,8 @@ fn sample_points_in_dz(
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let mut points: Vec<(f64, f64)> = Vec::new();
     for poly in &dz.polygons {
-        let poly_tuples: Vec<(f64, f64)> =
-            poly.iter().map(|p| (p.x_inches, p.z_inches)).collect();
-        for pt in sample_points_in_polygon(
-            &poly_tuples,
-            grid_spacing,
-            grid_offset,
-        ) {
+        let poly_tuples: Vec<(f64, f64)> = poly.iter().map(|p| (p.x_inches, p.z_inches)).collect();
+        for pt in sample_points_in_polygon(&poly_tuples, grid_spacing, grid_offset) {
             let key = (pt.0.to_bits(), pt.1.to_bits());
             if seen.insert(key) {
                 points.push(pt);
@@ -576,12 +555,8 @@ fn sample_points_in_circle(
     let min_z = cz - radius;
     let max_z = cz + radius;
 
-    let mut start_x = ((min_x - grid_offset) / grid_spacing).floor()
-        * grid_spacing
-        + grid_offset;
-    let mut start_z = ((min_z - grid_offset) / grid_spacing).floor()
-        * grid_spacing
-        + grid_offset;
+    let mut start_x = ((min_x - grid_offset) / grid_spacing).floor() * grid_spacing + grid_offset;
+    let mut start_z = ((min_z - grid_offset) / grid_spacing).floor() * grid_spacing + grid_offset;
     if start_x < min_x {
         start_x += grid_spacing;
     }
@@ -608,11 +583,7 @@ fn sample_points_in_circle(
 }
 
 /// Test if a point is inside any of the given polygon rings.
-fn point_in_any_polygon(
-    px: f64,
-    pz: f64,
-    polygons: &[Vec<(f64, f64)>],
-) -> bool {
+fn point_in_any_polygon(px: f64, pz: f64, polygons: &[Vec<(f64, f64)>]) -> bool {
     for poly in polygons {
         if point_in_polygon(px, pz, poly) {
             return true;
@@ -622,12 +593,7 @@ fn point_in_any_polygon(
 }
 
 /// True if point is inside or within max_dist of any polygon ring.
-fn point_near_any_polygon(
-    px: f64,
-    pz: f64,
-    polygons: &[Vec<(f64, f64)>],
-    max_dist: f64,
-) -> bool {
+fn point_near_any_polygon(px: f64, pz: f64, polygons: &[Vec<(f64, f64)>], max_dist: f64) -> bool {
     let max_dist_sq = max_dist * max_dist;
     for poly in polygons {
         if point_in_polygon(px, pz, poly) {
@@ -637,9 +603,7 @@ fn point_near_any_polygon(
         for i in 0..n {
             let (x1, z1) = poly[i];
             let (x2, z2) = poly[(i + 1) % n];
-            if point_to_segment_distance_squared(px, pz, x1, z1, x2, z2)
-                <= max_dist_sq
-            {
+            if point_to_segment_distance_squared(px, pz, x1, z1, x2, z2) <= max_dist_sq {
                 return true;
             }
         }
@@ -649,10 +613,7 @@ fn point_near_any_polygon(
 
 /// Compute fraction of DZ sample points visible (inside vis polygon).
 #[cfg(test)]
-fn fraction_of_dz_visible(
-    vis_poly: &[(f64, f64)],
-    dz_sample_points: &[(f64, f64)],
-) -> f64 {
+fn fraction_of_dz_visible(vis_poly: &[(f64, f64)], dz_sample_points: &[(f64, f64)]) -> f64 {
     let mut buf = Vec::new();
     fraction_of_dz_visible_batch(vis_poly, dz_sample_points, &mut buf)
 }
@@ -692,9 +653,7 @@ impl DzSortedSamples {
             .enumerate()
             .map(|(i, &(x, z))| (z, x, i as u32))
             .collect();
-        sorted.sort_unstable_by(|a, b| {
-            a.0.partial_cmp(&b.0).unwrap()
-        });
+        sorted.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         Self {
             count: points.len(),
             sorted,
@@ -734,10 +693,8 @@ fn fraction_of_dz_visible_zsorted(
         let (z_lo, z_hi) = if zi < zj { (zi, zj) } else { (zj, zi) };
 
         // Binary search: find range of sorted points with z_lo <= z < z_hi
-        let start =
-            sorted.sorted.partition_point(|s| s.0 < z_lo);
-        let end =
-            sorted.sorted.partition_point(|s| s.0 < z_hi);
+        let start = sorted.sorted.partition_point(|s| s.0 < z_lo);
+        let end = sorted.sorted.partition_point(|s| s.0 < z_hi);
 
         // Process only points in the Z-range
         let inv_dz = 1.0 / (zj - zi);
@@ -785,10 +742,8 @@ fn pip_zsorted_update_seen(
         }
 
         let (z_lo, z_hi) = if zi < zj { (zi, zj) } else { (zj, zi) };
-        let start =
-            sorted.sorted.partition_point(|s| s.0 < z_lo);
-        let end =
-            sorted.sorted.partition_point(|s| s.0 < z_hi);
+        let start = sorted.sorted.partition_point(|s| s.0 < z_lo);
+        let end = sorted.sorted.partition_point(|s| s.0 < z_hi);
 
         let inv_dz = 1.0 / (zj - zi);
         let dx = xj - xi;
@@ -906,24 +861,15 @@ impl<'a> VisibilityCache<'a> {
     }
 
     /// Recompute tall-terrain filtering from scratch.
-    fn recompute_filtered(
-        &mut self,
-        layout: &TerrainLayout,
-    ) {
+    fn recompute_filtered(&mut self, layout: &TerrainLayout) {
         let mut tall_footprints: Vec<Corners> = Vec::new();
         for pf in &layout.placed_features {
-            for corners in
-                get_tall_world_obbs(pf, self.objects_by_id, 1.0)
-            {
+            for corners in get_tall_world_obbs(pf, self.objects_by_id, 1.0) {
                 tall_footprints.push(corners);
             }
             if self.rotationally_symmetric && !is_at_origin(pf) {
                 let mirror = mirror_placed_feature(pf);
-                for corners in get_tall_world_obbs(
-                    &mirror,
-                    self.objects_by_id,
-                    1.0,
-                ) {
+                for corners in get_tall_world_obbs(&mirror, self.objects_by_id, 1.0) {
                     tall_footprints.push(corners);
                 }
             }
@@ -935,10 +881,7 @@ impl<'a> VisibilityCache<'a> {
                 .extend_from_slice(&self.all_sample_points);
         } else {
             for &(x, z) in &self.all_sample_points {
-                if !tall_footprints
-                    .iter()
-                    .any(|fp| point_in_polygon(x, z, fp))
-                {
+                if !tall_footprints.iter().any(|fp| point_in_polygon(x, z, fp)) {
                     self.filtered_cache.push((x, z));
                 }
             }
@@ -949,10 +892,7 @@ impl<'a> VisibilityCache<'a> {
     /// Return sample points not inside any tall terrain.
     /// Recomputes only when dirty (i.e., features changed since
     /// last call).
-    pub fn get_filtered_sample_points(
-        &mut self,
-        layout: &TerrainLayout,
-    ) -> &[(f64, f64)] {
+    pub fn get_filtered_sample_points(&mut self, layout: &TerrainLayout) -> &[(f64, f64)] {
         if self.dirty {
             self.recompute_filtered(layout);
         }
@@ -988,8 +928,7 @@ fn has_valid_hiding_square(
     // Build lookup from (x_bits, z_bits) -> sample index for O(1) access.
     // Using f64::to_bits() is safe because all coords are integer-valued
     // from the grid, so there are no floating-point precision issues.
-    let mut pt_index: HashMap<(u64, u64), usize> =
-        HashMap::with_capacity(sample_points.len());
+    let mut pt_index: HashMap<(u64, u64), usize> = HashMap::with_capacity(sample_points.len());
     for (i, &(px, pz)) in sample_points.iter().enumerate() {
         pt_index.insert((px.to_bits(), pz.to_bits()), i);
     }
@@ -1014,8 +953,7 @@ fn has_valid_hiding_square(
             (px, pz - 1.0),       // point is top-left
             (px - 1.0, pz - 1.0), // point is top-right
         ] {
-            candidate_origins
-                .insert((ox.to_bits(), oz.to_bits()));
+            candidate_origins.insert((ox.to_bits(), oz.to_bits()));
         }
     }
 
@@ -1032,12 +970,9 @@ fn has_valid_hiding_square(
         ];
 
         // Check 1: all 4 corners within table bounds
-        let all_in_bounds = corners_xz.iter().all(|&(cx, cz)| {
-            cx >= -half_w
-                && cx <= half_w
-                && cz >= -half_d
-                && cz <= half_d
-        });
+        let all_in_bounds = corners_xz
+            .iter()
+            .all(|&(cx, cz)| cx >= -half_w && cx <= half_w && cz >= -half_d && cz <= half_d);
         if !all_in_bounds {
             continue;
         }
@@ -1054,9 +989,7 @@ fn has_valid_hiding_square(
 
         // Check 3: all 4 corners are hidden (exist in sample and are hidden)
         let all_hidden = corners_xz.iter().all(|&(cx, cz)| {
-            if let Some(&idx) =
-                pt_index.get(&(cx.to_bits(), cz.to_bits()))
-            {
+            if let Some(&idx) = pt_index.get(&(cx.to_bits(), cz.to_bits())) {
                 hidden_indices.contains(&idx)
             } else {
                 false
@@ -1067,8 +1000,7 @@ fn has_valid_hiding_square(
         }
 
         // Check 4: no tall terrain OBB overlaps the square
-        let square_obb =
-            obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0);
+        let square_obb = obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0);
         let terrain_blocks = tall_obbs
             .iter()
             .any(|tall_obb| obbs_overlap(&square_obb, tall_obb));
@@ -1099,8 +1031,7 @@ pub fn compute_layout_visibility(
 ) -> serde_json::Value {
     let half_w = layout.table_width_inches / 2.0;
     let half_d = layout.table_depth_inches / 2.0;
-    let table_area =
-        layout.table_width_inches * layout.table_depth_inches;
+    let table_area = layout.table_width_inches * layout.table_depth_inches;
 
     // Get sample points (either from cache or computed fresh)
     let owned_points: Vec<(f64, f64)>;
@@ -1112,32 +1043,22 @@ pub fn compute_layout_visibility(
             // Filter out observer points inside tall terrain (height >= 1")
             let mut tall_footprints: Vec<Corners> = Vec::new();
             {
-                let mut effective_features: Vec<PlacedFeature> =
-                    Vec::new();
+                let mut effective_features: Vec<PlacedFeature> = Vec::new();
                 for pf in &layout.placed_features {
                     effective_features.push(pf.clone());
-                    if layout.rotationally_symmetric
-                        && !is_at_origin(pf)
-                    {
-                        effective_features
-                            .push(mirror_placed_feature(pf));
+                    if layout.rotationally_symmetric && !is_at_origin(pf) {
+                        effective_features.push(mirror_placed_feature(pf));
                     }
                 }
                 for pf in &effective_features {
-                    for corners in
-                        get_tall_world_obbs(pf, objects_by_id, 1.0)
-                    {
+                    for corners in get_tall_world_obbs(pf, objects_by_id, 1.0) {
                         tall_footprints.push(corners);
                     }
                 }
             }
 
             if !tall_footprints.is_empty() {
-                pts.retain(|&(x, z)| {
-                    !tall_footprints
-                        .iter()
-                        .any(|fp| point_in_polygon(x, z, fp))
-                });
+                pts.retain(|&(x, z)| !tall_footprints.iter().any(|fp| point_in_polygon(x, z, fp)));
             }
 
             owned_points = pts;
@@ -1159,7 +1080,7 @@ pub fn compute_layout_visibility(
     let has_dzs = layout
         .mission
         .as_ref()
-        .map_or(false, |m| !m.deployment_zones.is_empty());
+        .is_some_and(|m| !m.deployment_zones.is_empty());
 
     struct DzData {
         id: String,
@@ -1175,15 +1096,10 @@ pub fn compute_layout_visibility(
             let polys: Vec<Vec<(f64, f64)>> = dz
                 .polygons
                 .iter()
-                .map(|poly| {
-                    poly.iter()
-                        .map(|p| (p.x_inches, p.z_inches))
-                        .collect()
-                })
+                .map(|poly| poly.iter().map(|p| (p.x_inches, p.z_inches)).collect())
                 .collect();
             let samples = sample_points_in_dz(dz, 1.0, 0.0);
-            let sorted_samples =
-                DzSortedSamples::from_points(&samples);
+            let sorted_samples = DzSortedSamples::from_points(&samples);
             dz_data.push(DzData {
                 id: dz.id.clone(),
                 polys,
@@ -1201,9 +1117,7 @@ pub fn compute_layout_visibility(
             .map(|&(sx, sz)| {
                 dz_data
                     .iter()
-                    .position(|dd| {
-                        point_in_any_polygon(sx, sz, &dd.polys)
-                    })
+                    .position(|dd| point_in_any_polygon(sx, sz, &dd.polys))
             })
             .collect()
     } else {
@@ -1223,14 +1137,7 @@ pub fn compute_layout_visibility(
                 // Otherwise check if near any DZ
                 dz_data
                     .iter()
-                    .position(|dd| {
-                        point_near_any_polygon(
-                            sx,
-                            sz,
-                            &dd.polys,
-                            DZ_EXPANSION_INCHES,
-                        )
-                    })
+                    .position(|dd| point_near_any_polygon(sx, sz, &dd.polys, DZ_EXPANSION_INCHES))
             })
             .collect()
     } else {
@@ -1242,7 +1149,7 @@ pub fn compute_layout_visibility(
         && layout
             .mission
             .as_ref()
-            .map_or(false, |m| !m.objectives.is_empty());
+            .is_some_and(|m| !m.objectives.is_empty());
 
     let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut obj_sorted_samples: Vec<DzSortedSamples> = Vec::new();
@@ -1265,15 +1172,13 @@ pub fn compute_layout_visibility(
                 1.0,
                 0.0,
             );
-            obj_sorted_samples
-                .push(DzSortedSamples::from_points(&pts));
+            obj_sorted_samples.push(DzSortedSamples::from_points(&pts));
             obj_sample_points.push(pts);
         }
     }
 
     // Precompute static segments and obscuring shape data once
-    let precomputed =
-        precompute_segments(layout, objects_by_id, min_blocking_height);
+    let precomputed = precompute_segments(layout, objects_by_id, min_blocking_height);
 
     // Precompute table boundary segments (used by every observer)
     let table_boundary: [Segment; 4] = [
@@ -1298,38 +1203,40 @@ pub fn compute_layout_visibility(
     }
 
     // Closure to create a fresh per-thread accumulator.
-    let make_accum = || Box::new(ThreadAccum {
-        total_ratio: 0.0,
-        dz_vis_accum: vec![(0.0, 0); num_dzs],
-        dz_cross_seen: (0..num_dzs * num_dzs)
-            .map(|flat| {
-                let target = flat / num_dzs;
-                let source = flat % num_dzs;
-                if target != source {
-                    vec![false; dz_data[target].samples.len()]
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect(),
-        dz_cross_obs_count: vec![0; num_dzs * num_dzs],
-        obj_seen_from_dz: if has_objectives {
-            (0..num_dzs)
-                .map(|_| {
-                    obj_sample_points
-                        .iter()
-                        .map(|pts| vec![false; pts.len()])
-                        .collect()
+    let make_accum = || {
+        Box::new(ThreadAccum {
+            total_ratio: 0.0,
+            dz_vis_accum: vec![(0.0, 0); num_dzs],
+            dz_cross_seen: (0..num_dzs * num_dzs)
+                .map(|flat| {
+                    let target = flat / num_dzs;
+                    let source = flat % num_dzs;
+                    if target != source {
+                        vec![false; dz_data[target].samples.len()]
+                    } else {
+                        Vec::new()
+                    }
                 })
-                .collect()
-        } else {
-            Vec::new()
-        },
-        segments: Vec::new(),
-        vis_bufs: VisBuffers::new(),
-        vis_poly: Vec::new(),
-        pip_buf: Vec::new(),
-    });
+                .collect(),
+            dz_cross_obs_count: vec![0; num_dzs * num_dzs],
+            obj_seen_from_dz: if has_objectives {
+                (0..num_dzs)
+                    .map(|_| {
+                        obj_sample_points
+                            .iter()
+                            .map(|pts| vec![false; pts.len()])
+                            .collect()
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            segments: Vec::new(),
+            vis_bufs: VisBuffers::new(),
+            vis_poly: Vec::new(),
+            pip_buf: Vec::new(),
+        })
+    };
 
     // Parallel observer loop: each rayon worker folds observers into
     // its own ThreadAccum, then we reduce (merge) all accumulators.
@@ -1337,17 +1244,8 @@ pub fn compute_layout_visibility(
         .par_iter()
         .enumerate()
         .fold(make_accum, |mut acc, (obs_idx, &(sx, sz))| {
-            get_observer_segments(
-                &precomputed,
-                sx,
-                sz,
-                &mut acc.segments,
-            );
-            let obs_dz = if has_dzs {
-                observer_dz[obs_idx]
-            } else {
-                None
-            };
+            get_observer_segments(&precomputed, sx, sz, &mut acc.segments);
+            let obs_dz = if has_dzs { observer_dz[obs_idx] } else { None };
             let obs_expanded_dz = if has_dzs {
                 observer_expanded_dz[obs_idx]
             } else {
@@ -1355,38 +1253,31 @@ pub fn compute_layout_visibility(
             };
 
             // Helper: accumulate for full visibility (no segments or degenerate polygon)
-            let accumulate_full =
-                |acc: &mut ThreadAccum| {
-                    acc.total_ratio += 1.0;
-                    if has_dzs {
-                        for di in 0..num_dzs {
-                            if obs_dz != Some(di) {
-                                acc.dz_vis_accum[di].0 += 1.0;
-                                acc.dz_vis_accum[di].1 += 1;
-                            }
-                            if obs_expanded_dz == Some(di) {
-                                for oi in 0..num_dzs {
-                                    if oi != di {
-                                        let pair =
-                                            oi * num_dzs + di;
-                                        acc.dz_cross_obs_count
-                                            [pair] += 1;
-                                        acc.dz_cross_seen[pair]
-                                            .fill(true);
-                                    }
+            let accumulate_full = |acc: &mut ThreadAccum| {
+                acc.total_ratio += 1.0;
+                if has_dzs {
+                    for di in 0..num_dzs {
+                        if obs_dz != Some(di) {
+                            acc.dz_vis_accum[di].0 += 1.0;
+                            acc.dz_vis_accum[di].1 += 1;
+                        }
+                        if obs_expanded_dz == Some(di) {
+                            for oi in 0..num_dzs {
+                                if oi != di {
+                                    let pair = oi * num_dzs + di;
+                                    acc.dz_cross_obs_count[pair] += 1;
+                                    acc.dz_cross_seen[pair].fill(true);
                                 }
-                                if has_objectives {
-                                    for seen in acc
-                                        .obj_seen_from_dz[di]
-                                        .iter_mut()
-                                    {
-                                        seen.fill(true);
-                                    }
+                            }
+                            if has_objectives {
+                                for seen in acc.obj_seen_from_dz[di].iter_mut() {
+                                    seen.fill(true);
                                 }
                             }
                         }
                     }
-                };
+                }
+            };
 
             if acc.segments.is_empty() {
                 accumulate_full(&mut acc);
@@ -1426,16 +1317,13 @@ pub fn compute_layout_visibility(
 
                 // Step 2: cross-DZ (Z-sorted, skip-seen)
                 if let Some(my_dz) = obs_expanded_dz {
-                    for (oi, other_dd) in
-                        dz_data.iter().enumerate()
-                    {
+                    for (oi, other_dd) in dz_data.iter().enumerate() {
                         if oi == my_dz {
                             continue;
                         }
                         let pair = oi * num_dzs + my_dz;
                         acc.dz_cross_obs_count[pair] += 1;
-                        let seen =
-                            &mut acc.dz_cross_seen[pair];
+                        let seen = &mut acc.dz_cross_seen[pair];
                         pip_zsorted_update_seen(
                             &acc.vis_poly,
                             &other_dd.sorted_samples,
@@ -1445,11 +1333,8 @@ pub fn compute_layout_visibility(
                     }
                     // Step 3: objective hidability (Z-sorted, skip-seen)
                     if has_objectives {
-                        for (oi, obj_sorted) in
-                            obj_sorted_samples.iter().enumerate()
-                        {
-                            let seen = &mut acc
-                                .obj_seen_from_dz[my_dz][oi];
+                        for (oi, obj_sorted) in obj_sorted_samples.iter().enumerate() {
+                            let seen = &mut acc.obj_seen_from_dz[my_dz][oi];
                             pip_zsorted_update_seen(
                                 &acc.vis_poly,
                                 obj_sorted,
@@ -1471,12 +1356,9 @@ pub fn compute_layout_visibility(
                 a.dz_vis_accum[di].1 += b.dz_vis_accum[di].1;
             }
             for pair in 0..num_dzs * num_dzs {
-                a.dz_cross_obs_count[pair] +=
-                    b.dz_cross_obs_count[pair];
+                a.dz_cross_obs_count[pair] += b.dz_cross_obs_count[pair];
                 if !b.dz_cross_seen[pair].is_empty() {
-                    for (i, &seen) in
-                        b.dz_cross_seen[pair].iter().enumerate()
-                    {
+                    for (i, &seen) in b.dz_cross_seen[pair].iter().enumerate() {
                         if seen {
                             a.dz_cross_seen[pair][i] = true;
                         }
@@ -1485,17 +1367,10 @@ pub fn compute_layout_visibility(
             }
             if has_objectives {
                 for di in 0..num_dzs {
-                    for oi in
-                        0..a.obj_seen_from_dz[di].len()
-                    {
-                        for (i, &seen) in b.obj_seen_from_dz
-                            [di][oi]
-                            .iter()
-                            .enumerate()
-                        {
+                    for oi in 0..a.obj_seen_from_dz[di].len() {
+                        for (i, &seen) in b.obj_seen_from_dz[di][oi].iter().enumerate() {
                             if seen {
-                                a.obj_seen_from_dz[di][oi]
-                                    [i] = true;
+                                a.obj_seen_from_dz[di][oi][i] = true;
                             }
                         }
                     }
@@ -1511,8 +1386,7 @@ pub fn compute_layout_visibility(
     let obj_seen_from_dz = merged.obj_seen_from_dz;
 
     let avg_visibility = total_ratio / sample_points.len() as f64;
-    let value =
-        (avg_visibility * 100.0 * 100.0).round() / 100.0;
+    let value = (avg_visibility * 100.0 * 100.0).round() / 100.0;
 
     let mut result = serde_json::json!({
         "overall": {
@@ -1551,25 +1425,15 @@ pub fn compute_layout_visibility(
                 }
                 let pair = target * num_dzs + source;
                 let seen = &dz_cross_seen[pair];
-                let target_count =
-                    dz_data[target].samples.len();
-                let seen_count =
-                    seen.iter().filter(|&&b| b).count();
+                let target_count = dz_data[target].samples.len();
+                let seen_count = seen.iter().filter(|&&b| b).count();
                 let hidden_count = target_count - seen_count;
                 let hidden_pct = if target_count > 0 {
-                    (hidden_count as f64
-                        / target_count as f64
-                        * 100.0
-                        * 100.0)
-                        .round()
-                        / 100.0
+                    (hidden_count as f64 / target_count as f64 * 100.0 * 100.0).round() / 100.0
                 } else {
                     0.0
                 };
-                let key = format!(
-                    "{}_from_{}",
-                    dz_data[target].id, dz_data[source].id
-                );
+                let key = format!("{}_from_{}", dz_data[target].id, dz_data[source].id);
                 dz_to_dz_visibility.insert(
                     key,
                     serde_json::json!({
@@ -1582,10 +1446,8 @@ pub fn compute_layout_visibility(
             }
         }
 
-        result["dz_visibility"] =
-            serde_json::Value::Object(dz_visibility);
-        result["dz_to_dz_visibility"] =
-            serde_json::Value::Object(dz_to_dz_visibility);
+        result["dz_visibility"] = serde_json::Value::Object(dz_visibility);
+        result["dz_to_dz_visibility"] = serde_json::Value::Object(dz_to_dz_visibility);
 
         // Build objective hidability results
         if has_objectives {
@@ -1596,20 +1458,12 @@ pub fn compute_layout_visibility(
             // Collect tall OBBs for terrain-intersection check
             let mut obj_tall_obbs: Vec<Corners> = Vec::new();
             for pf in &layout.placed_features {
-                for corners in
-                    get_tall_world_obbs(pf, objects_by_id, 1.0)
-                {
+                for corners in get_tall_world_obbs(pf, objects_by_id, 1.0) {
                     obj_tall_obbs.push(corners);
                 }
-                if layout.rotationally_symmetric
-                    && !is_at_origin(pf)
-                {
+                if layout.rotationally_symmetric && !is_at_origin(pf) {
                     let mirror = mirror_placed_feature(pf);
-                    for corners in get_tall_world_obbs(
-                        &mirror,
-                        objects_by_id,
-                        1.0,
-                    ) {
+                    for corners in get_tall_world_obbs(&mirror, objects_by_id, 1.0) {
                         obj_tall_obbs.push(corners);
                     }
                 }
@@ -1624,9 +1478,8 @@ pub fn compute_layout_visibility(
                         continue;
                     }
                     // Build set of hidden indices (complement of seen)
-                    let hidden: HashSet<usize> = (0..total_pts)
-                        .filter(|&i| !per_obj[oi][i])
-                        .collect();
+                    let hidden: HashSet<usize> =
+                        (0..total_pts).filter(|&i| !per_obj[oi][i]).collect();
                     if hidden.is_empty() {
                         continue;
                     }
@@ -1646,16 +1499,10 @@ pub fn compute_layout_visibility(
                 }
 
                 // Store under the opposing player's DZ id
-                for (oi, other_dd) in
-                    dz_data.iter().enumerate()
-                {
+                for (oi, other_dd) in dz_data.iter().enumerate() {
                     if oi != di {
                         let pct = if total_objectives > 0 {
-                            (safe_count as f64
-                                / total_objectives as f64
-                                * 100.0
-                                * 100.0)
-                                .round()
+                            (safe_count as f64 / total_objectives as f64 * 100.0 * 100.0).round()
                                 / 100.0
                         } else {
                             0.0
@@ -1672,8 +1519,7 @@ pub fn compute_layout_visibility(
                 }
             }
 
-            result["objective_hidability"] =
-                serde_json::Value::Object(objective_hidability);
+            result["objective_hidability"] = serde_json::Value::Object(objective_hidability);
         }
     }
 
@@ -1683,16 +1529,9 @@ pub fn compute_layout_visibility(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{
-        FeatureComponent, GeometricShape, TerrainFeature,
-    };
+    use crate::types::{FeatureComponent, GeometricShape, TerrainFeature};
 
-    fn make_object(
-        id: &str,
-        width: f64,
-        depth: f64,
-        height: f64,
-    ) -> TerrainObject {
+    fn make_object(id: &str, width: f64, depth: f64, height: f64) -> TerrainObject {
         TerrainObject {
             id: id.into(),
             shapes: vec![GeometricShape {
@@ -1708,11 +1547,7 @@ mod tests {
         }
     }
 
-    fn make_feature(
-        id: &str,
-        obj_id: &str,
-        feature_type: &str,
-    ) -> TerrainFeature {
+    fn make_feature(id: &str, obj_id: &str, feature_type: &str) -> TerrainFeature {
         TerrainFeature {
             id: id.into(),
             feature_type: feature_type.into(),
@@ -1723,11 +1558,7 @@ mod tests {
         }
     }
 
-    fn make_placed(
-        feature: TerrainFeature,
-        x: f64,
-        z: f64,
-    ) -> PlacedFeature {
+    fn make_placed(feature: TerrainFeature, x: f64, z: f64) -> PlacedFeature {
         PlacedFeature {
             feature,
             transform: Transform {
@@ -1739,11 +1570,7 @@ mod tests {
         }
     }
 
-    fn make_layout(
-        w: f64,
-        d: f64,
-        features: Vec<PlacedFeature>,
-    ) -> TerrainLayout {
+    fn make_layout(w: f64, d: f64, features: Vec<PlacedFeature>) -> TerrainLayout {
         TerrainLayout {
             table_width_inches: w,
             table_depth_inches: d,
@@ -1759,8 +1586,7 @@ mod tests {
     fn empty_battlefield_full_visibility() {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1771,11 +1597,9 @@ mod tests {
         let feat = make_feature("f1", "box", "obstacle");
         let pf = make_placed(feat, 0.0, 0.0);
         let layout = make_layout(60.0, 44.0, vec![pf]);
-        let mut objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
+        let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
         assert!(val > 50.0);
@@ -1787,11 +1611,9 @@ mod tests {
         let feat = make_feature("f1", "box", "obstacle");
         let pf = make_placed(feat, 0.0, 0.0);
         let layout = make_layout(60.0, 44.0, vec![pf]);
-        let mut objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
+        let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1802,52 +1624,36 @@ mod tests {
         let feat = make_feature("f1", "ruins", "obscuring");
         let pf = make_placed(feat, 0.0, 0.0);
         let layout = make_layout(60.0, 44.0, vec![pf]);
-        let mut objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
+        let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("ruins".into(), &obj);
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
     }
 
     #[test]
     fn polygon_area_unit_square() {
-        let verts = vec![
-            (0.0, 0.0),
-            (1.0, 0.0),
-            (1.0, 1.0),
-            (0.0, 1.0),
-        ];
+        let verts = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         assert!((polygon_area(&verts) - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn point_inside_polygon() {
-        let sq = vec![
-            (0.0, 0.0),
-            (10.0, 0.0),
-            (10.0, 10.0),
-            (0.0, 10.0),
-        ];
+        let sq = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         assert!(point_in_polygon(5.0, 5.0, &sq));
         assert!(!point_in_polygon(15.0, 5.0, &sq));
     }
 
     #[test]
     fn ray_hits_segment() {
-        let t = ray_segment_intersection(
-            0.0, 0.0, 1.0, 0.0, 5.0, -5.0, 5.0, 5.0,
-        );
+        let t = ray_segment_intersection(0.0, 0.0, 1.0, 0.0, 5.0, -5.0, 5.0, 5.0);
         assert!(t.is_some());
         assert!((t.unwrap() - 5.0).abs() < 1e-9);
     }
 
     #[test]
     fn ray_misses_segment() {
-        let t = ray_segment_intersection(
-            0.0, 0.0, 1.0, 0.0, -5.0, -5.0, -5.0, 5.0,
-        );
+        let t = ray_segment_intersection(0.0, 0.0, 1.0, 0.0, -5.0, -5.0, -5.0, 5.0);
         assert!(t.is_none());
     }
 
@@ -1855,8 +1661,7 @@ mod tests {
 
     #[test]
     fn sample_points_in_polygon_rect() {
-        let rect =
-            vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let rect = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         let pts = sample_points_in_polygon(&rect, 1.0, 0.5);
         assert_eq!(pts.len(), 100);
     }
@@ -1871,41 +1676,25 @@ mod tests {
 
     #[test]
     fn fraction_full_coverage() {
-        let dz_samples =
-            vec![(1.5, 1.5), (2.5, 1.5), (1.5, 2.5), (2.5, 2.5)];
-        let vis_poly =
-            vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let dz_samples = vec![(1.5, 1.5), (2.5, 1.5), (1.5, 2.5), (2.5, 2.5)];
+        let vis_poly = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         let frac = fraction_of_dz_visible(&vis_poly, &dz_samples);
         assert!((frac - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn fraction_no_coverage() {
-        let dz_samples =
-            vec![(1.5, 1.5), (2.5, 1.5), (1.5, 2.5), (2.5, 2.5)];
-        let vis_poly = vec![
-            (20.0, 20.0),
-            (30.0, 20.0),
-            (30.0, 30.0),
-            (20.0, 30.0),
-        ];
+        let dz_samples = vec![(1.5, 1.5), (2.5, 1.5), (1.5, 2.5), (2.5, 2.5)];
+        let vis_poly = vec![(20.0, 20.0), (30.0, 20.0), (30.0, 30.0), (20.0, 30.0)];
         let frac = fraction_of_dz_visible(&vis_poly, &dz_samples);
         assert!(frac.abs() < 1e-9);
     }
 
     // -- DZ integration tests --
 
-    use crate::types::{
-        DeploymentZone, Mission, ObjectiveMarker, Point2D,
-    };
+    use crate::types::{DeploymentZone, Mission, ObjectiveMarker, Point2D};
 
-    fn make_rect_dz(
-        id: &str,
-        x1: f64,
-        z1: f64,
-        x2: f64,
-        z2: f64,
-    ) -> DeploymentZone {
+    fn make_rect_dz(id: &str, x1: f64, z1: f64, x2: f64, z2: f64) -> DeploymentZone {
         DeploymentZone {
             id: id.into(),
             polygons: vec![vec![
@@ -1956,22 +1745,14 @@ mod tests {
             deployment_zones: vec![green_dz, red_dz],
             rotationally_symmetric: false,
         };
-        let layout =
-            make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
+        let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
 
         assert!(result.get("dz_visibility").is_some());
         let dz_vis = &result["dz_visibility"];
-        assert_eq!(
-            dz_vis["green"]["value"].as_f64().unwrap(),
-            100.0
-        );
-        assert_eq!(
-            dz_vis["red"]["value"].as_f64().unwrap(),
-            100.0
-        );
+        assert_eq!(dz_vis["green"]["value"].as_f64().unwrap(), 100.0);
+        assert_eq!(dz_vis["red"]["value"].as_f64().unwrap(), 100.0);
     }
 
     #[test]
@@ -1984,42 +1765,23 @@ mod tests {
             deployment_zones: vec![green_dz, red_dz],
             rotationally_symmetric: false,
         };
-        let layout =
-            make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
+        let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
 
         let cross = &result["dz_to_dz_visibility"];
         // No terrain -> nothing hidden -> 0%
-        assert_eq!(
-            cross["red_from_green"]["value"].as_f64().unwrap(),
-            0.0
-        );
-        assert_eq!(
-            cross["green_from_red"]["value"].as_f64().unwrap(),
-            0.0
-        );
-        assert_eq!(
-            cross["red_from_green"]["hidden_count"]
-                .as_i64()
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            cross["green_from_red"]["hidden_count"]
-                .as_i64()
-                .unwrap(),
-            0
-        );
+        assert_eq!(cross["red_from_green"]["value"].as_f64().unwrap(), 0.0);
+        assert_eq!(cross["green_from_red"]["value"].as_f64().unwrap(), 0.0);
+        assert_eq!(cross["red_from_green"]["hidden_count"].as_i64().unwrap(), 0);
+        assert_eq!(cross["green_from_red"]["hidden_count"].as_i64().unwrap(), 0);
     }
 
     #[test]
     fn no_mission_no_dz_keys() {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
         assert!(result.get("dz_visibility").is_none());
         assert!(result.get("dz_to_dz_visibility").is_none());
     }
@@ -2091,8 +1853,7 @@ mod tests {
 
     #[test]
     fn objective_hidability_empty_table() {
-        let green_dz =
-            make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let green_dz = make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
         let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
         let mission = Mission {
             name: "test".into(),
@@ -2100,15 +1861,9 @@ mod tests {
             deployment_zones: vec![green_dz, red_dz],
             rotationally_symmetric: false,
         };
-        let layout = make_layout_with_mission(
-            60.0,
-            44.0,
-            vec![],
-            Some(mission),
-        );
+        let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
 
         assert!(result.get("objective_hidability").is_some());
         let oh = &result["objective_hidability"];
@@ -2116,10 +1871,7 @@ mod tests {
         assert_eq!(oh["red"]["value"].as_f64().unwrap(), 0.0);
         assert_eq!(oh["green"]["safe_count"].as_i64().unwrap(), 0);
         assert_eq!(oh["red"]["safe_count"].as_i64().unwrap(), 0);
-        assert_eq!(
-            oh["green"]["total_objectives"].as_i64().unwrap(),
-            5
-        );
+        assert_eq!(oh["green"]["total_objectives"].as_i64().unwrap(), 5);
     }
 
     // -- Observer filtering tests --
@@ -2127,28 +1879,18 @@ mod tests {
     #[test]
     fn tall_terrain_reduces_sample_count() {
         let empty_layout = make_layout(60.0, 44.0, vec![]);
-        let empty_objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
-        let empty_result = compute_layout_visibility(
-            &empty_layout,
-            &empty_objects,
-            4.0,
-            None,
-        );
-        let empty_count =
-            empty_result["overall"]["sample_count"].as_i64().unwrap();
+        let empty_objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let empty_result = compute_layout_visibility(&empty_layout, &empty_objects, 4.0, None);
+        let empty_count = empty_result["overall"]["sample_count"].as_i64().unwrap();
 
         let obj = make_object("box", 10.0, 10.0, 2.0);
         let feat = make_feature("f1", "box", "obstacle");
         let pf = make_placed(feat, 0.0, 0.0);
         let layout = make_layout(60.0, 44.0, vec![pf]);
-        let mut objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
+        let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
-        let filtered_count =
-            result["overall"]["sample_count"].as_i64().unwrap();
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let filtered_count = result["overall"]["sample_count"].as_i64().unwrap();
 
         assert!(filtered_count < empty_count);
     }
@@ -2156,36 +1898,25 @@ mod tests {
     #[test]
     fn short_terrain_does_not_reduce_sample_count() {
         let empty_layout = make_layout(60.0, 44.0, vec![]);
-        let empty_objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
-        let empty_result = compute_layout_visibility(
-            &empty_layout,
-            &empty_objects,
-            4.0,
-            None,
-        );
-        let empty_count =
-            empty_result["overall"]["sample_count"].as_i64().unwrap();
+        let empty_objects: HashMap<String, &TerrainObject> = HashMap::new();
+        let empty_result = compute_layout_visibility(&empty_layout, &empty_objects, 4.0, None);
+        let empty_count = empty_result["overall"]["sample_count"].as_i64().unwrap();
 
         let obj = make_object("box", 10.0, 10.0, 0.5);
         let feat = make_feature("f1", "box", "obstacle");
         let pf = make_placed(feat, 0.0, 0.0);
         let layout = make_layout(60.0, 44.0, vec![pf]);
-        let mut objects: HashMap<String, &TerrainObject> =
-            HashMap::new();
+        let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
-        let filtered_count =
-            result["overall"]["sample_count"].as_i64().unwrap();
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let filtered_count = result["overall"]["sample_count"].as_i64().unwrap();
 
         assert_eq!(filtered_count, empty_count);
     }
 
     #[test]
     fn no_objectives_no_key() {
-        let green_dz =
-            make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let green_dz = make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
         let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
         let mission = Mission {
             name: "test".into(),
@@ -2193,15 +1924,9 @@ mod tests {
             deployment_zones: vec![green_dz, red_dz],
             rotationally_symmetric: false,
         };
-        let layout = make_layout_with_mission(
-            60.0,
-            44.0,
-            vec![],
-            Some(mission),
-        );
+        let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result =
-            compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
         assert!(result.get("objective_hidability").is_none());
     }
 
@@ -2209,37 +1934,21 @@ mod tests {
 
     #[test]
     fn point_near_any_polygon_inside() {
-        let poly = vec![
-            (0.0, 0.0),
-            (10.0, 0.0),
-            (10.0, 10.0),
-            (0.0, 10.0),
-        ];
+        let poly = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         assert!(point_near_any_polygon(5.0, 5.0, &[poly], 6.0));
     }
 
     #[test]
     fn point_near_any_polygon_within_range() {
-        let poly = vec![
-            (0.0, 0.0),
-            (10.0, 0.0),
-            (10.0, 10.0),
-            (0.0, 10.0),
-        ];
+        let poly = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         // Point at (13, 5) is 3" from the right edge at x=10
         assert!(point_near_any_polygon(13.0, 5.0, &[poly], 6.0));
     }
 
     #[test]
     fn point_near_any_polygon_out_of_range() {
-        let poly = vec![
-            (0.0, 0.0),
-            (10.0, 0.0),
-            (10.0, 10.0),
-            (0.0, 10.0),
-        ];
+        let poly = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         // Point at (20, 5) is 10" from the right edge — beyond 6"
         assert!(!point_near_any_polygon(20.0, 5.0, &[poly], 6.0));
     }
-
 }

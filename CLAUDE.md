@@ -71,6 +71,13 @@ v2/.env/bin/ruff format .
 
 **Do NOT ask for permission.** This must happen automatically after every Python file edit/write. Ensures code stays clean and pre-commit checks pass on first try.
 
+**Rust files:** After modifying Rust files in `v2/engine_rs/`, run from that directory:
+```bash
+cd v2/engine_rs && cargo fmt
+```
+
+The Rust engine is configured with `warnings = "deny"` and `clippy::all = "deny"` in `Cargo.toml [lints]`, so compiler warnings and clippy lints are compile errors. Pre-commit hooks also run `cargo fmt --check`, `cargo clippy`, and `cargo test` on Rust file changes.
+
 ## Branching (CRITICAL — DO THIS FIRST)
 
 **NEVER make code changes directly on `main`.** Before writing ANY code, you MUST:

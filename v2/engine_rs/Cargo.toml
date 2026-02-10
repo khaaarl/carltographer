@@ -20,6 +20,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "generate_bench"
 harness = false
 
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
 [profile.release]
 lto = true
 codegen-units = 1

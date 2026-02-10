@@ -58,10 +58,7 @@ pub(crate) fn count_features_by_type(
     counts
 }
 
-pub(crate) fn weighted_choice(
-    rng: &mut Pcg32,
-    weights: &[f64],
-) -> Option<usize> {
+pub(crate) fn weighted_choice(rng: &mut Pcg32, weights: &[f64]) -> Option<usize> {
     // Select index with probability proportional to weights.
     // Uses PCG32 for determinism. Returns None if all weights are 0.
     let total: f64 = weights.iter().sum();
@@ -127,8 +124,10 @@ fn compute_template_weights(
     // Compute weights for selecting which catalog feature to add.
     // Boosts weight for types below their min, reduces for types at/above max.
     // Sets weight to 0 for templates that have reached their catalog quantity limit.
-    let pref_by_type: HashMap<&str, &FeatureCountPreference> =
-        preferences.iter().map(|p| (p.feature_type.as_str(), p)).collect();
+    let pref_by_type: HashMap<&str, &FeatureCountPreference> = preferences
+        .iter()
+        .map(|p| (p.feature_type.as_str(), p))
+        .collect();
     let placed_counts =
         count_placed_per_template(placed_features, catalog_features, rotationally_symmetric);
     let mut weights = Vec::with_capacity(catalog_features.len());
@@ -141,10 +140,7 @@ fn compute_template_weights(
         }
         let mut w = 1.0;
         if let Some(pref) = pref_by_type.get(cf.feature_type.as_str()) {
-            let current = feature_counts
-                .get(&cf.feature_type)
-                .copied()
-                .unwrap_or(0);
+            let current = feature_counts.get(&cf.feature_type).copied().unwrap_or(0);
             if current < pref.min {
                 w = 1.0 + (pref.min - current) as f64 * 2.0;
             } else if let Some(max) = pref.max {
@@ -165,8 +161,10 @@ fn compute_delete_weights(
 ) -> Vec<f64> {
     // Compute weights for selecting which feature to delete.
     // Boosts weight for types above their max, reduces for types at/below min.
-    let pref_by_type: HashMap<&str, &FeatureCountPreference> =
-        preferences.iter().map(|p| (p.feature_type.as_str(), p)).collect();
+    let pref_by_type: HashMap<&str, &FeatureCountPreference> = preferences
+        .iter()
+        .map(|p| (p.feature_type.as_str(), p))
+        .collect();
     let mut weights = Vec::with_capacity(features.len());
     for pf in features {
         let mut w = 1.0;
@@ -223,9 +221,15 @@ pub(crate) fn compute_tile_weights(
         for corners in &obbs {
             // Compute AABB from corners
             let min_x = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
-            let max_x = corners.iter().map(|c| c.0).fold(f64::NEG_INFINITY, f64::max);
+            let max_x = corners
+                .iter()
+                .map(|c| c.0)
+                .fold(f64::NEG_INFINITY, f64::max);
             let min_z = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
-            let max_z = corners.iter().map(|c| c.1).fold(f64::NEG_INFINITY, f64::max);
+            let max_z = corners
+                .iter()
+                .map(|c| c.1)
+                .fold(f64::NEG_INFINITY, f64::max);
             // Convert to tile indices
             let ix_lo = ((min_x + half_w) / tile_w) as isize;
             let ix_hi = ((max_x + half_w) / tile_w) as isize;
@@ -247,10 +251,7 @@ pub(crate) fn compute_tile_weights(
     (weights, nx, nz, tile_w, tile_d)
 }
 
-fn instantiate_feature(
-    template: &TerrainFeature,
-    feature_id: u32,
-) -> TerrainFeature {
+fn instantiate_feature(template: &TerrainFeature, feature_id: u32) -> TerrainFeature {
     TerrainFeature {
         id: format!("feature_{}", feature_id),
         feature_type: template.feature_type.clone(),
@@ -313,7 +314,8 @@ fn try_single_action(
     chain_length: u32,
 ) -> Option<(StepUndo, u32)> {
     let has_features = !layout.placed_features.is_empty();
-    let feature_counts = count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
+    let feature_counts =
+        count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
 
     // Compute action weights: [add, move, delete, replace, rotate]
     // Non-final mutations in a chain get full delete weight (clearing space
@@ -322,16 +324,23 @@ fn try_single_action(
     let mut add_weight: f64 = if has_catalog { 1.0 } else { 0.0 };
     let move_weight: f64 = if has_features { 1.0 } else { 0.0 };
     let is_last = index_in_chain >= chain_length - 1;
-    let mut delete_weight: f64 = if !has_features { 0.0 } else if is_last { 0.25 } else { 1.0 };
-    let replace_weight: f64 = if has_features && has_catalog { 1.0 } else { 0.0 };
+    let mut delete_weight: f64 = if !has_features {
+        0.0
+    } else if is_last {
+        0.25
+    } else {
+        1.0
+    };
+    let replace_weight: f64 = if has_features && has_catalog {
+        1.0
+    } else {
+        0.0
+    };
     let rotate_weight: f64 = if has_features { 1.0 } else { 0.0 };
 
     // Preference biasing on add/delete only
     for pref in prefs {
-        let current = feature_counts
-            .get(&pref.feature_type)
-            .copied()
-            .unwrap_or(0);
+        let current = feature_counts.get(&pref.feature_type).copied().unwrap_or(0);
         if current < pref.min {
             let shortage = pref.min - current;
             add_weight *= 1.0 + shortage as f64 * 2.0;
@@ -345,7 +354,13 @@ fn try_single_action(
         }
     }
 
-    let weights = vec![add_weight, move_weight, delete_weight, replace_weight, rotate_weight];
+    let weights = vec![
+        add_weight,
+        move_weight,
+        delete_weight,
+        replace_weight,
+        rotate_weight,
+    ];
     let action = match weighted_choice(rng, &weights) {
         Some(idx) => idx as u32,
         None => return None,
@@ -362,10 +377,7 @@ fn try_single_action(
                 &layout.placed_features,
                 params.rotationally_symmetric,
             );
-            let tidx = match weighted_choice(rng, &template_weights) {
-                Some(i) => i,
-                None => return None,
-            };
+            let tidx = weighted_choice(rng, &template_weights)?;
             let template = catalog_features[tidx];
             let new_feat = instantiate_feature(template, next_id);
             let half_w = params.table_width_inches / 2.0;
@@ -377,10 +389,7 @@ fn try_single_action(
                 params.table_depth_inches,
                 params.rotationally_symmetric,
             );
-            let tile_idx = match weighted_choice(rng, &tile_weights) {
-                Some(i) => i,
-                None => return None,
-            };
+            let tile_idx = weighted_choice(rng, &tile_weights)?;
             let tile_iz = tile_idx / nx;
             let tile_ix = tile_idx % nx;
             let tile_x_min = -half_w + tile_ix as f64 * tile_w;
@@ -418,10 +427,7 @@ fn try_single_action(
         }
         1 => {
             // Move (temperature-aware)
-            let idx = rng.next_int(
-                0,
-                layout.placed_features.len() as u32 - 1,
-            ) as usize;
+            let idx = rng.next_int(0, layout.placed_features.len() as u32 - 1) as usize;
             let old = layout.placed_features[idx].clone();
             let new_transform = temperature_move(
                 rng,
@@ -452,29 +458,17 @@ fn try_single_action(
         }
         2 => {
             // Delete
-            let delete_weights = compute_delete_weights(
-                &layout.placed_features,
-                &feature_counts,
-                prefs,
-            );
-            let idx = match weighted_choice(rng, &delete_weights) {
-                Some(i) => i,
-                None => return None,
-            };
+            let delete_weights =
+                compute_delete_weights(&layout.placed_features, &feature_counts, prefs);
+            let idx = weighted_choice(rng, &delete_weights)?;
             let saved = layout.placed_features.remove(idx);
             Some((StepUndo::Delete { index: idx, saved }, next_id))
         }
         3 => {
             // Replace: remove feature, add different template at same position
-            let delete_weights = compute_delete_weights(
-                &layout.placed_features,
-                &feature_counts,
-                prefs,
-            );
-            let idx = match weighted_choice(rng, &delete_weights) {
-                Some(i) => i,
-                None => return None,
-            };
+            let delete_weights =
+                compute_delete_weights(&layout.placed_features, &feature_counts, prefs);
+            let idx = weighted_choice(rng, &delete_weights)?;
             let template_weights = compute_template_weights(
                 catalog_features,
                 &feature_counts,
@@ -483,10 +477,7 @@ fn try_single_action(
                 &layout.placed_features,
                 params.rotationally_symmetric,
             );
-            let tidx = match weighted_choice(rng, &template_weights) {
-                Some(i) => i,
-                None => return None,
-            };
+            let tidx = weighted_choice(rng, &template_weights)?;
             let template = catalog_features[tidx];
             let old = layout.placed_features[idx].clone();
             let new_feat = instantiate_feature(template, next_id);
@@ -514,10 +505,7 @@ fn try_single_action(
         }
         4 => {
             // Rotate: pick random feature, assign new quantized angle
-            let idx = rng.next_int(
-                0,
-                layout.placed_features.len() as u32 - 1,
-            ) as usize;
+            let idx = rng.next_int(0, layout.placed_features.len() as u32 - 1) as usize;
             let old = layout.placed_features[idx].clone();
             let new_rot = quantize_angle(rng.next_float() * 360.0, params.rotation_granularity_deg);
             layout.placed_features[idx].transform = Transform {
@@ -682,7 +670,10 @@ mod tests {
     fn temperature_move_small_t() {
         let mut rng = Pcg32::new(42, 0);
         let old = Transform {
-            x_inches: 0.0, y_inches: 0.0, z_inches: 0.0, rotation_deg: 90.0,
+            x_inches: 0.0,
+            y_inches: 0.0,
+            z_inches: 0.0,
+            rotation_deg: 90.0,
         };
         for _ in 0..100 {
             let t = temperature_move(&mut rng, &old, 60.0, 44.0, 0.0, 15.0);
@@ -697,7 +688,10 @@ mod tests {
         let mut rng1 = Pcg32::new(99, 0);
         let mut rng2 = Pcg32::new(99, 0);
         let old = Transform {
-            x_inches: 5.0, y_inches: 0.0, z_inches: 3.0, rotation_deg: 30.0,
+            x_inches: 5.0,
+            y_inches: 0.0,
+            z_inches: 3.0,
+            rotation_deg: 30.0,
         };
         temperature_move(&mut rng1, &old, 60.0, 44.0, 0.5, 15.0);
         for _ in 0..4 {
@@ -710,9 +704,7 @@ mod tests {
     fn tile_weights_empty_table() {
         let catalog = crate_catalog();
         let objs = crate::generate::build_object_index(&catalog);
-        let (weights, nx, nz, _, _) = compute_tile_weights(
-            &[], &objs, 60.0, 44.0, false,
-        );
+        let (weights, nx, nz, _, _) = compute_tile_weights(&[], &objs, 60.0, 44.0, false);
         assert_eq!(nx, 30); // 60/2
         assert_eq!(nz, 22); // 44/2
         assert!(weights.iter().all(|&w| w == 1.0));

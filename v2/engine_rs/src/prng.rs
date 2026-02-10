@@ -21,10 +21,7 @@ impl Pcg32 {
     }
 
     fn advance(&mut self) {
-        self.state = self
-            .state
-            .wrapping_mul(MULTIPLIER)
-            .wrapping_add(self.inc);
+        self.state = self.state.wrapping_mul(MULTIPLIER).wrapping_add(self.inc);
     }
 
     pub fn next_u32(&mut self) -> u32 {
@@ -51,10 +48,7 @@ mod tests {
     #[test]
     fn reference_values() {
         let mut rng = Pcg32::new(42, 54);
-        let expected: [u32; 5] = [
-            0xa15c02b7, 0x7b47f409, 0xba1d3330, 0x83d2f293,
-            0xbfa4784b,
-        ];
+        let expected: [u32; 5] = [0xa15c02b7, 0x7b47f409, 0xba1d3330, 0x83d2f293, 0xbfa4784b];
         for exp in expected {
             assert_eq!(rng.next_u32(), exp);
         }

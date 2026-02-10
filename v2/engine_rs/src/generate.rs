@@ -13,9 +13,7 @@ use crate::types::{
 
 const PHASE2_BASE: f64 = 1000.0;
 
-pub(crate) fn build_object_index<'a>(
-    catalog: &'a TerrainCatalog,
-) -> HashMap<String, &'a TerrainObject> {
+pub(crate) fn build_object_index(catalog: &TerrainCatalog) -> HashMap<String, &TerrainObject> {
     let mut index = HashMap::new();
     for co in &catalog.objects {
         index.insert(co.item.id.clone(), &co.item);
@@ -53,9 +51,7 @@ fn collect_layout_objects(
 fn next_feature_id(features: &[PlacedFeature]) -> u32 {
     let mut max_id: u32 = 0;
     for pf in features {
-        if let Some(num_str) =
-            pf.feature.id.strip_prefix("feature_")
-        {
+        if let Some(num_str) = pf.feature.id.strip_prefix("feature_") {
             if let Ok(n) = num_str.parse::<u32>() {
                 max_id = max_id.max(n);
             }
@@ -94,16 +90,10 @@ fn compute_score(
     visibility_cache: Option<&mut crate::visibility::VisibilityCache>,
 ) -> f64 {
     // Phase 1: gradient toward satisfying count preferences.
-    let counts = count_features_by_type(
-        &layout.placed_features,
-        layout.rotationally_symmetric,
-    );
+    let counts = count_features_by_type(&layout.placed_features, layout.rotationally_symmetric);
     let mut total_deficit: u32 = 0;
     for pref in preferences {
-        let current = counts
-            .get(&pref.feature_type)
-            .copied()
-            .unwrap_or(0);
+        let current = counts.get(&pref.feature_type).copied().unwrap_or(0);
         if current < pref.min {
             total_deficit += pref.min - current;
         } else if let Some(max) = pref.max {
@@ -125,7 +115,7 @@ fn compute_score(
     let vis = crate::visibility::compute_layout_visibility(
         layout,
         objects_by_id,
-        4.0,  // min_blocking_height
+        4.0, // min_blocking_height
         visibility_cache,
     );
 
@@ -202,22 +192,17 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         merge_layout_objects(&mut objects_by_id, &initial.terrain_objects);
     }
 
-    let (initial_features, mut nid) =
-        match &params.initial_layout {
-            Some(initial) => {
-                let feats = initial.placed_features.clone();
-                let id = next_feature_id(&feats);
-                (feats, id)
-            }
-            None => (Vec::new(), 1u32),
-        };
+    let (initial_features, mut nid) = match &params.initial_layout {
+        Some(initial) => {
+            let feats = initial.placed_features.clone();
+            let id = next_feature_id(&feats);
+            (feats, id)
+        }
+        None => (Vec::new(), 1u32),
+    };
 
-    let catalog_features: Vec<&TerrainFeature> = params
-        .catalog
-        .features
-        .iter()
-        .map(|cf| &cf.item)
-        .collect();
+    let catalog_features: Vec<&TerrainFeature> =
+        params.catalog.features.iter().map(|cf| &cf.item).collect();
     let catalog_quantities: Vec<Option<u32>> = params
         .catalog
         .features
@@ -240,12 +225,22 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
 
     // Create visibility cache for incremental tall-footprint filtering
     let mut vis_cache: Option<crate::visibility::VisibilityCache> = if !params.skip_visibility {
-        Some(crate::visibility::VisibilityCache::new(&layout, &objects_by_id))
+        Some(crate::visibility::VisibilityCache::new(
+            &layout,
+            &objects_by_id,
+        ))
     } else {
         None
     };
 
-    let mut current_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
+    let mut current_score = compute_score(
+        &layout,
+        prefs,
+        &objects_by_id,
+        params.skip_visibility,
+        params.scoring_targets.as_ref(),
+        vis_cache.as_mut(),
+    );
 
     for _ in 0..num_steps {
         let (undo, new_nid) = perform_step(
@@ -270,7 +265,14 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         if let Some(ref mut cache) = vis_cache {
             cache.mark_dirty();
         }
-        let new_score = compute_score(&layout, prefs, &objects_by_id, params.skip_visibility, params.scoring_targets.as_ref(), vis_cache.as_mut());
+        let new_score = compute_score(
+            &layout,
+            prefs,
+            &objects_by_id,
+            params.skip_visibility,
+            params.scoring_targets.as_ref(),
+            vis_cache.as_mut(),
+        );
         if new_score >= current_score {
             current_score = new_score;
             nid = new_nid;
@@ -283,14 +285,12 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
     }
 
     if !params.skip_visibility {
-        layout.visibility = Some(
-            crate::visibility::compute_layout_visibility(
-                &layout,
-                &objects_by_id,
-                4.0,  // min_blocking_height
-                vis_cache.as_mut(),
-            ),
-        );
+        layout.visibility = Some(crate::visibility::compute_layout_visibility(
+            &layout,
+            &objects_by_id,
+            4.0, // min_blocking_height
+            vis_cache.as_mut(),
+        ));
     }
 
     layout.terrain_objects = collect_layout_objects(&layout.placed_features, &objects_by_id);
@@ -309,12 +309,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
     if let Some(ref initial) = params.initial_layout {
         merge_layout_objects(&mut objects_by_id, &initial.terrain_objects);
     }
-    let catalog_features: Vec<&TerrainFeature> = params
-        .catalog
-        .features
-        .iter()
-        .map(|cf| &cf.item)
-        .collect();
+    let catalog_features: Vec<&TerrainFeature> =
+        params.catalog.features.iter().map(|cf| &cf.item).collect();
     let catalog_quantities: Vec<Option<u32>> = params
         .catalog
         .features
@@ -359,7 +355,10 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
             mission: params.mission.clone(),
         };
         let vis_cache = if !params.skip_visibility {
-            Some(crate::visibility::VisibilityCache::new(&layout, &objects_by_id))
+            Some(crate::visibility::VisibilityCache::new(
+                &layout,
+                &objects_by_id,
+            ))
         } else {
             None
         };
@@ -400,12 +399,14 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
         let batch_size = remaining.min(swap_interval);
 
         // Per-replica best tracking for this batch
-        let mut per_replica_best: Vec<(f64, Option<TerrainLayout>)> =
-            (0..num_replicas).map(|_| (f64::NEG_INFINITY, None)).collect();
+        let mut per_replica_best: Vec<(f64, Option<TerrainLayout>)> = (0..num_replicas)
+            .map(|_| (f64::NEG_INFINITY, None))
+            .collect();
         let current_best = best_score;
 
         std::thread::scope(|s| {
-            let handles: Vec<_> = replicas.iter_mut()
+            let handles: Vec<_> = replicas
+                .iter_mut()
                 .zip(per_replica_best.iter_mut())
                 .map(|(replica, prb)| {
                     let cat_feats = &catalog_features;
@@ -420,7 +421,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                         let num_mutations = 1 + (t_factor * MAX_EXTRA_MUTATIONS as f64) as u32;
 
                         for _ in 0..batch_size {
-                            let mut sub_undos: Vec<(StepUndo, u32)> = Vec::with_capacity(num_mutations as usize);
+                            let mut sub_undos: Vec<(StepUndo, u32)> =
+                                Vec::with_capacity(num_mutations as usize);
                             for mi in 0..num_mutations {
                                 let (undo, new_nid) = perform_step(
                                     &mut replica.layout,
@@ -458,7 +460,12 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                 replica.vis_cache.as_mut(),
                             );
 
-                            if sa_accept(old_score, new_score, replica.temperature, &mut replica.rng) {
+                            if sa_accept(
+                                old_score,
+                                new_score,
+                                replica.temperature,
+                                &mut replica.rng,
+                            ) {
                                 replica.score = new_score;
                                 if new_score > current_best && new_score > prb.0 {
                                     prb.0 = new_score;
@@ -539,18 +546,18 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
 
     // Final visibility on best layout
     if !params.skip_visibility {
-        let mut best_vis_cache = crate::visibility::VisibilityCache::new(&best_layout, &objects_by_id);
-        best_layout.visibility = Some(
-            crate::visibility::compute_layout_visibility(
-                &best_layout,
-                &objects_by_id,
-                4.0,
-                Some(&mut best_vis_cache),
-            ),
-        );
+        let mut best_vis_cache =
+            crate::visibility::VisibilityCache::new(&best_layout, &objects_by_id);
+        best_layout.visibility = Some(crate::visibility::compute_layout_visibility(
+            &best_layout,
+            &objects_by_id,
+            4.0,
+            Some(&mut best_vis_cache),
+        ));
     }
 
-    best_layout.terrain_objects = collect_layout_objects(&best_layout.placed_features, &objects_by_id);
+    best_layout.terrain_objects =
+        collect_layout_objects(&best_layout.placed_features, &objects_by_id);
 
     EngineResult {
         layout: best_layout,
@@ -567,9 +574,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
 mod tests {
     use super::*;
     use crate::collision::{get_world_obbs, obb_in_bounds, obbs_overlap};
-    use crate::types::{
-        CatalogFeature, CatalogObject, FeatureComponent, GeometricShape,
-    };
+    use crate::types::{CatalogFeature, CatalogObject, FeatureComponent, GeometricShape};
 
     fn crate_catalog() -> TerrainCatalog {
         TerrainCatalog {
@@ -680,12 +685,7 @@ mod tests {
                 let oj = get_world_obbs(&feats[j], &objs);
                 for ca in &oi {
                     for cb in &oj {
-                        assert!(
-                            !obbs_overlap(ca, cb),
-                            "Features {} and {} overlap",
-                            i,
-                            j
-                        );
+                        assert!(!obbs_overlap(ca, cb), "Features {} and {} overlap", i, j);
                     }
                 }
             }
@@ -887,12 +887,7 @@ mod tests {
                 let oj = get_world_obbs(&feats[j], &objs);
                 for ca in &oi {
                     for cb in &oj {
-                        assert!(
-                            !obbs_overlap(ca, cb),
-                            "Features {} and {} overlap",
-                            i,
-                            j
-                        );
+                        assert!(!obbs_overlap(ca, cb), "Features {} and {} overlap", i, j);
                     }
                 }
             }

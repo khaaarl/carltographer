@@ -31,34 +31,22 @@ pub fn compose_transform(inner: &Transform, outer: &Transform) -> Transform {
     let cos_o = outer.rotation_deg.to_radians().cos();
     let sin_o = outer.rotation_deg.to_radians().sin();
     Transform {
-        x_inches: outer.x_inches + inner.x_inches * cos_o
-            - inner.z_inches * sin_o,
+        x_inches: outer.x_inches + inner.x_inches * cos_o - inner.z_inches * sin_o,
         y_inches: 0.0,
-        z_inches: outer.z_inches + inner.x_inches * sin_o
-            + inner.z_inches * cos_o,
+        z_inches: outer.z_inches + inner.x_inches * sin_o + inner.z_inches * cos_o,
         rotation_deg: inner.rotation_deg + outer.rotation_deg,
     }
 }
 
-pub fn obb_corners(
-    cx: f64,
-    cz: f64,
-    half_w: f64,
-    half_d: f64,
-    rot_rad: f64,
-) -> Corners {
+pub fn obb_corners(cx: f64, cz: f64, half_w: f64, half_d: f64, rot_rad: f64) -> Corners {
     let cos_r = rot_rad.cos();
     let sin_r = rot_rad.sin();
-    const SIGNS: [(f64, f64); 4] =
-        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+    const SIGNS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
     let mut corners = [(0.0, 0.0); 4];
     for (i, &(sx, sz)) in SIGNS.iter().enumerate() {
         let lx = sx * half_w;
         let lz = sz * half_d;
-        corners[i] = (
-            cx + lx * cos_r - lz * sin_r,
-            cz + lx * sin_r + lz * cos_r,
-        );
+        corners[i] = (cx + lx * cos_r - lz * sin_r, cz + lx * sin_r + lz * cos_r);
     }
     corners
 }
@@ -100,21 +88,12 @@ pub fn obbs_overlap(a: &Corners, b: &Corners) -> bool {
 }
 
 /// True if all corners are within (or on) the table edges.
-pub fn obb_in_bounds(
-    corners: &Corners,
-    table_width: f64,
-    table_depth: f64,
-) -> bool {
+pub fn obb_in_bounds(corners: &Corners, table_width: f64, table_depth: f64) -> bool {
     let half_w = table_width / 2.0;
     let half_d = table_depth / 2.0;
     corners
         .iter()
-        .all(|&(cx, cz)| {
-            -half_w <= cx
-                && cx <= half_w
-                && -half_d <= cz
-                && cz <= half_d
-        })
+        .all(|&(cx, cz)| -half_w <= cx && cx <= half_w && -half_d <= cz && cz <= half_d)
 }
 
 /// Compute squared distance from point to line segment.
@@ -202,9 +181,7 @@ pub fn obb_distance(corners_a: &Corners, corners_b: &Corners) -> f64 {
             let (bx1, bz1) = corners_b[i];
             let (bx2, bz2) = corners_b[(i + 1) % 4];
             let dist_sq =
-                point_to_segment_distance_squared(
-                    *corner_x, *corner_z, bx1, bz1, bx2, bz2
-                );
+                point_to_segment_distance_squared(*corner_x, *corner_z, bx1, bz1, bx2, bz2);
             min_dist_sq = min_dist_sq.min(dist_sq);
         }
     }
@@ -215,9 +192,7 @@ pub fn obb_distance(corners_a: &Corners, corners_b: &Corners) -> f64 {
             let (ax1, az1) = corners_a[i];
             let (ax2, az2) = corners_a[(i + 1) % 4];
             let dist_sq =
-                point_to_segment_distance_squared(
-                    *corner_x, *corner_z, ax1, az1, ax2, az2
-                );
+                point_to_segment_distance_squared(*corner_x, *corner_z, ax1, az1, ax2, az2);
             min_dist_sq = min_dist_sq.min(dist_sq);
         }
     }
@@ -228,11 +203,7 @@ pub fn obb_distance(corners_a: &Corners, corners_b: &Corners) -> f64 {
 /// Compute minimum distance from OBB to nearest table edge.
 ///
 /// Returns 0 if any corner is outside or on table boundary.
-pub fn obb_to_table_edge_distance(
-    corners: &Corners,
-    table_width: f64,
-    table_depth: f64,
-) -> f64 {
+pub fn obb_to_table_edge_distance(corners: &Corners, table_width: f64, table_depth: f64) -> f64 {
     let half_w = table_width / 2.0;
     let half_d = table_depth / 2.0;
 
@@ -278,10 +249,7 @@ pub fn get_world_obbs(
         let comp_t = comp.transform.as_ref().unwrap_or(&default_t);
         for shape in &obj.shapes {
             let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
-            let world = compose_transform(
-                &compose_transform(shape_t, comp_t),
-                &placed.transform,
-            );
+            let world = compose_transform(&compose_transform(shape_t, comp_t), &placed.transform);
             let corners = obb_corners(
                 world.x_inches,
                 world.z_inches,
@@ -317,10 +285,7 @@ pub fn get_tall_world_obbs(
             }
 
             let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
-            let world = compose_transform(
-                &compose_transform(shape_t, comp_t),
-                &placed.transform,
-            );
+            let world = compose_transform(&compose_transform(shape_t, comp_t), &placed.transform);
             let corners = obb_corners(
                 world.x_inches,
                 world.z_inches,
@@ -397,11 +362,7 @@ pub fn is_valid_placement(
     if let Some(gap) = min_all_edge_gap {
         if gap > 0.0 {
             for corners in &check_obbs {
-                let dist = obb_to_table_edge_distance(
-                    corners,
-                    table_width,
-                    table_depth,
-                );
+                let dist = obb_to_table_edge_distance(corners, table_width, table_depth);
                 if dist < gap {
                     return false;
                 }
@@ -437,11 +398,7 @@ pub fn is_valid_placement(
     if let Some(gap) = min_edge_gap {
         if gap > 0.0 {
             for corners in &check_tall {
-                let dist = obb_to_table_edge_distance(
-                    corners,
-                    table_width,
-                    table_depth,
-                );
+                let dist = obb_to_table_edge_distance(corners, table_width, table_depth);
                 if dist < gap {
                     return false;
                 }
@@ -453,8 +410,7 @@ pub fn is_valid_placement(
     if let Some(gap) = min_feature_gap {
         if gap > 0.0 {
             for pf in &other_features {
-                let other_tall =
-                    get_tall_world_obbs(pf, objects_by_id, 1.0);
+                let other_tall = get_tall_world_obbs(pf, objects_by_id, 1.0);
                 for ca in &check_tall {
                     for cb in &other_tall {
                         let dist = obb_distance(ca, cb);
@@ -474,8 +430,8 @@ pub fn is_valid_placement(
 mod tests {
     use super::*;
     use crate::types::{
-        CatalogFeature, CatalogObject, FeatureComponent, GeometricShape,
-        TerrainCatalog, TerrainFeature, TerrainObject,
+        CatalogFeature, CatalogObject, FeatureComponent, GeometricShape, TerrainCatalog,
+        TerrainFeature, TerrainObject,
     };
 
     #[test]
@@ -509,13 +465,7 @@ mod tests {
     #[test]
     fn rotated_same_center_overlap() {
         let a = obb_corners(0.0, 0.0, 2.5, 1.25, 0.0);
-        let b = obb_corners(
-            0.0,
-            0.0,
-            2.5,
-            1.25,
-            std::f64::consts::FRAC_PI_4,
-        );
+        let b = obb_corners(0.0, 0.0, 2.5, 1.25, std::f64::consts::FRAC_PI_4);
         assert!(obbs_overlap(&a, &b));
     }
 
@@ -540,38 +490,28 @@ mod tests {
     #[test]
     fn point_to_segment_perpendicular() {
         // Point directly above segment midpoint
-        let dist_sq = point_to_segment_distance_squared(
-            0.0, 2.0, -1.0, 0.0, 1.0, 0.0
-        );
+        let dist_sq = point_to_segment_distance_squared(0.0, 2.0, -1.0, 0.0, 1.0, 0.0);
         assert!((dist_sq - 4.0).abs() < 1e-10);
     }
 
     #[test]
     fn point_to_segment_endpoint() {
         // Point near segment endpoint
-        let dist_sq = point_to_segment_distance_squared(
-            0.0, 0.0, -1.0, 0.0, 1.0, 0.0
-        );
+        let dist_sq = point_to_segment_distance_squared(0.0, 0.0, -1.0, 0.0, 1.0, 0.0);
         assert!(dist_sq < 1e-10);
     }
 
     #[test]
     fn segments_do_intersect() {
         // Two crossing segments
-        let intersects = segments_intersect(
-            -1.0, 0.0, 1.0, 0.0,
-            0.0, -1.0, 0.0, 1.0
-        );
+        let intersects = segments_intersect(-1.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0);
         assert!(intersects);
     }
 
     #[test]
     fn segments_dont_intersect() {
         // Parallel segments
-        let intersects = segments_intersect(
-            -1.0, 0.0, 1.0, 0.0,
-            -1.0, 1.0, 1.0, 1.0
-        );
+        let intersects = segments_intersect(-1.0, 0.0, 1.0, 0.0, -1.0, 1.0, 1.0, 1.0);
         assert!(!intersects);
     }
 
@@ -601,7 +541,7 @@ mod tests {
                 }],
             },
             transform: Transform {
-                x_inches: 27.0,  // Close to edge at 30.0
+                x_inches: 27.0, // Close to edge at 30.0
                 y_inches: 0.0,
                 z_inches: 0.0,
                 rotation_deg: 0.0,
@@ -610,13 +550,22 @@ mod tests {
 
         // This should fail with min_edge_gap_inches=2.0
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, Some(2.0), false, None, None
+            &features,
+            0,
+            60.0,
+            44.0,
+            &objs,
+            None,
+            Some(2.0),
+            false,
+            None,
+            None,
         );
         assert!(!valid);
 
         // But pass without gap constraint
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, None, false, None, None
+            &features, 0, 60.0, 44.0, &objs, None, None, false, None, None,
         );
         assert!(valid);
     }
@@ -656,7 +605,7 @@ mod tests {
                 }],
             },
             transform: Transform {
-                x_inches: 4.0,  // 2 inch gap: (-5+2.5) to (4-2.5) = -2.5 to 1.5
+                x_inches: 4.0, // 2 inch gap: (-5+2.5) to (4-2.5) = -2.5 to 1.5
                 y_inches: 0.0,
                 z_inches: 0.0,
                 rotation_deg: 0.0,
@@ -665,13 +614,22 @@ mod tests {
 
         // Gap is ~4 inches, so should fail with min_feature_gap_inches=5.0
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, Some(5.0), None, false, None, None
+            &features,
+            1,
+            60.0,
+            44.0,
+            &objs,
+            Some(5.0),
+            None,
+            false,
+            None,
+            None,
         );
         assert!(!valid);
 
         // But pass without gap constraint
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, None, None, false, None, None
+            &features, 1, 60.0, 44.0, &objs, None, None, false, None, None,
         );
         assert!(valid);
     }
@@ -726,7 +684,7 @@ mod tests {
                 }],
             },
             transform: Transform {
-                x_inches: 27.0,  // Close to edge at 30.0
+                x_inches: 27.0, // Close to edge at 30.0
                 y_inches: 0.0,
                 z_inches: 0.0,
                 rotation_deg: 0.0,
@@ -735,21 +693,51 @@ mod tests {
 
         // Tall-only edge gap should pass (feature is short)
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, Some(5.0), false, None, None
+            &features,
+            0,
+            60.0,
+            44.0,
+            &objs,
+            None,
+            Some(5.0),
+            false,
+            None,
+            None,
         );
         assert!(valid, "Short feature should pass tall-only edge gap");
 
         // All-feature edge gap should fail (feature is close to edge)
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, None, false, None, Some(5.0)
+            &features,
+            0,
+            60.0,
+            44.0,
+            &objs,
+            None,
+            None,
+            false,
+            None,
+            Some(5.0),
         );
         assert!(!valid, "Short feature should fail all-feature edge gap");
 
         // All-feature edge gap with smaller value should pass
         let valid = is_valid_placement(
-            &features, 0, 60.0, 44.0, &objs, None, None, false, None, Some(0.1)
+            &features,
+            0,
+            60.0,
+            44.0,
+            &objs,
+            None,
+            None,
+            false,
+            None,
+            Some(0.1),
         );
-        assert!(valid, "Short feature should pass small all-feature edge gap");
+        assert!(
+            valid,
+            "Short feature should pass small all-feature edge gap"
+        );
     }
 
     #[test]
@@ -785,7 +773,7 @@ mod tests {
                     }],
                 },
                 transform: Transform {
-                    x_inches: 4.0,  // ~4 inch gap between features
+                    x_inches: 4.0, // ~4 inch gap between features
                     y_inches: 0.0,
                     z_inches: 0.0,
                     rotation_deg: 0.0,
@@ -795,19 +783,46 @@ mod tests {
 
         // Tall-only feature gap should pass (features are short)
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, Some(5.0), None, false, None, None
+            &features,
+            1,
+            60.0,
+            44.0,
+            &objs,
+            Some(5.0),
+            None,
+            false,
+            None,
+            None,
         );
         assert!(valid, "Short features should pass tall-only feature gap");
 
         // All-feature gap should fail (features are close)
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, None, None, false, Some(5.0), None
+            &features,
+            1,
+            60.0,
+            44.0,
+            &objs,
+            None,
+            None,
+            false,
+            Some(5.0),
+            None,
         );
         assert!(!valid, "Short features should fail all-feature gap");
 
         // All-feature gap with smaller value should pass
         let valid = is_valid_placement(
-            &features, 1, 60.0, 44.0, &objs, None, None, false, Some(1.0), None
+            &features,
+            1,
+            60.0,
+            44.0,
+            &objs,
+            None,
+            None,
+            false,
+            Some(1.0),
+            None,
         );
         assert!(valid, "Short features should pass small all-feature gap");
     }
@@ -845,9 +860,7 @@ mod tests {
         }
     }
 
-    fn build_object_index(
-        catalog: &TerrainCatalog,
-    ) -> HashMap<String, &TerrainObject> {
+    fn build_object_index(catalog: &TerrainCatalog) -> HashMap<String, &TerrainObject> {
         let mut index = HashMap::new();
         for co in &catalog.objects {
             index.insert(co.item.id.clone(), &co.item);

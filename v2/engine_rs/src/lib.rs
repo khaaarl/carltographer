@@ -20,12 +20,9 @@ pub mod visibility;
 /// returns a JSON string matching the `engine_result` schema.
 #[pyfunction]
 fn generate_json(params_json: &str) -> PyResult<String> {
-    let params: types::EngineParams = serde_json::from_str(params_json)
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Invalid engine_params JSON: {e}"
-            ))
-        })?;
+    let params: types::EngineParams = serde_json::from_str(params_json).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid engine_params JSON: {e}"))
+    })?;
 
     let result = generate::generate(&params);
 
