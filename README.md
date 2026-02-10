@@ -5,6 +5,16 @@ pieces and a table size, Carltographer uses a genetic algorithm to produce
 balanced, playable layouts — optimizing for piece counts, spacing, and
 line-of-sight coverage.
 
+**[Download the latest release](https://github.com/khaaarl/carltographer/releases/latest)** — pre-built executables are available for Windows, macOS (Apple Silicon), and Linux. No installation required, just download and run.
+
+> **Note:** Because the executables aren't signed, your OS may show a warning
+> the first time you run it. This is normal for independent software.
+> - **Windows:** If you see "Windows protected your PC", click **More info**,
+>   then **Run anyway**.
+> - **macOS:** If you see "can't be opened because it is from an unidentified
+>   developer", right-click (or Control-click) the app and choose **Open**,
+>   then click **Open** in the dialog.
+
 ![Example layout](docs/example-layout.png)
 
 ## Features
@@ -30,8 +40,9 @@ line-of-sight coverage.
 
 ### From a packaged executable
 
-Download a pre-built binary for your platform from the releases page. Run it
-directly — no Python or Rust installation needed.
+Download a pre-built binary for your platform from the
+[latest release](https://github.com/khaaarl/carltographer/releases/latest).
+Run it directly — no Python or Rust installation needed.
 
 ### From source
 
