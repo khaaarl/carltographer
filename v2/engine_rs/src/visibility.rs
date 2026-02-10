@@ -5,6 +5,7 @@
 //! polygons via angular sweep.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use rayon::prelude::*;
 
@@ -16,6 +17,54 @@ use crate::types::{PlacedFeature, TerrainLayout, TerrainObject, Transform};
 
 // Note: DZ expansion is done in Python via shapely buffer() and
 // passed to Rust via the expanded_polygons field on DeploymentZone.
+
+/// Fast non-cryptographic hasher (FxHash) for integer keys.
+/// Uses a single multiply-XOR per 8-byte chunk. Much faster than the
+/// default SipHash for hash-table lookups on known-safe (non-adversarial) keys
+/// like f64 bit patterns and array indices.
+struct FxHasher {
+    hash: u64,
+}
+
+/// Constant from Firefox/rustc FxHash: a good odd multiplier for mixing.
+const FX_SEED: u64 = 0x517c_c1b7_2722_0a95;
+
+impl Hasher for FxHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+
+    #[inline]
+    fn write(&mut self, _bytes: &[u8]) {
+        // Only u64 and usize writes are used in this codebase.
+        unreachable!("FxHasher: only write_u64 and write_usize are supported");
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.hash = (self.hash.rotate_left(5) ^ i).wrapping_mul(FX_SEED);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.write_u64(i as u64);
+    }
+}
+
+impl Default for FxHasher {
+    #[inline]
+    fn default() -> Self {
+        FxHasher { hash: 0 }
+    }
+}
+
+/// BuildHasher that produces FxHasher instances.
+type FxBuildHasher = BuildHasherDefault<FxHasher>;
+/// HashSet using FxHash instead of SipHash.
+type FxHashSet<T> = HashSet<T, FxBuildHasher>;
+/// HashMap using FxHash instead of SipHash.
+type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
 /// A line segment: (x1, z1, x2, z2)
 type Segment = (f64, f64, f64, f64);
@@ -299,7 +348,7 @@ fn angle_to_bucket(angle: f64) -> usize {
 /// Reusable buffers for compute_visibility_polygon to avoid per-call allocations.
 struct VisBuffers {
     endpoints: Vec<(f64, f64)>,
-    endpoint_seen: HashSet<(u64, u64)>,
+    endpoint_seen: FxHashSet<(u64, u64)>,
     rays: Vec<(f64, f64, f64)>,
     /// Angular buckets: each bucket holds indices into `all_segments`.
     buckets: [Vec<u16>; NUM_ANGLE_BUCKETS],
@@ -311,7 +360,7 @@ impl VisBuffers {
     fn new() -> Self {
         Self {
             endpoints: Vec::with_capacity(256),
-            endpoint_seen: HashSet::with_capacity(256),
+            endpoint_seen: FxHashSet::with_capacity_and_hasher(256, FxBuildHasher::default()),
             rays: Vec::with_capacity(768),
             buckets: std::array::from_fn(|_| Vec::with_capacity(16)),
             all_segments: Vec::with_capacity(128),
@@ -883,7 +932,7 @@ fn has_valid_hiding_square(
     obj_cz: f64,
     obj_radius: f64,
     sample_points: &[(f64, f64)],
-    hidden_indices: &HashSet<usize>,
+    hidden_indices: &FxHashSet<usize>,
     tall_obbs: &[Corners],
     half_w: f64,
     half_d: f64,
@@ -891,7 +940,8 @@ fn has_valid_hiding_square(
     // Build lookup from (x_bits, z_bits) -> sample index for O(1) access.
     // Using f64::to_bits() is safe because all coords are integer-valued
     // from the grid, so there are no floating-point precision issues.
-    let mut pt_index: HashMap<(u64, u64), usize> = HashMap::with_capacity(sample_points.len());
+    let mut pt_index: FxHashMap<(u64, u64), usize> =
+        FxHashMap::with_capacity_and_hasher(sample_points.len(), FxBuildHasher::default());
     for (i, &(px, pz)) in sample_points.iter().enumerate() {
         pt_index.insert((px.to_bits(), pz.to_bits()), i);
     }
@@ -901,7 +951,7 @@ fn has_valid_hiding_square(
     // Collect candidate square origins (bottom-left corners).
     // For each hidden, in-range point, it could be any of the 4 corners
     // of a valid square. Deduplicate via HashSet of (x_bits, z_bits).
-    let mut candidate_origins: HashSet<(u64, u64)> = HashSet::new();
+    let mut candidate_origins: FxHashSet<(u64, u64)> = FxHashSet::default();
     for &idx in hidden_indices {
         let (px, pz) = sample_points[idx];
         let dx = px - obj_cx;
@@ -1138,6 +1188,7 @@ pub fn compute_layout_visibility(
         id: String,
         polys: Vec<Vec<(f64, f64)>>,
         expanded_polys: Vec<Vec<(f64, f64)>>,
+        expanded_aabbs: Vec<crate::collision::Aabb>,
     }
 
     let mut dz_data: Vec<DzData> = Vec::new();
@@ -1154,10 +1205,15 @@ pub fn compute_layout_visibility(
                 .iter()
                 .map(|poly| poly.iter().map(|p| (p.x_inches, p.z_inches)).collect())
                 .collect();
+            let expanded_aabbs: Vec<crate::collision::Aabb> = expanded_polys
+                .iter()
+                .map(|ep| crate::collision::compute_aabb(ep))
+                .collect();
             dz_data.push(DzData {
                 id: dz.id.clone(),
                 polys,
                 expanded_polys,
+                expanded_aabbs,
             });
         }
     }
@@ -1331,7 +1387,14 @@ pub fn compute_layout_visibility(
                             let overlaps = other_dd
                                 .expanded_polys
                                 .iter()
-                                .any(|ep| crate::collision::polygons_overlap(&acc.vis_poly, ep));
+                                .zip(other_dd.expanded_aabbs.iter())
+                                .any(|(ep, ep_aabb)| {
+                                    crate::collision::polygons_overlap_aabb(
+                                        &acc.vis_poly,
+                                        ep,
+                                        ep_aabb,
+                                    )
+                                });
                             if !overlaps {
                                 acc.dz_hide_accum[my_dz].0 += 1;
                             }
@@ -1447,7 +1510,7 @@ pub fn compute_layout_visibility(
                         continue;
                     }
                     // Build set of hidden indices (complement of seen)
-                    let hidden: HashSet<usize> =
+                    let hidden: FxHashSet<usize> =
                         (0..total_pts).filter(|&i| !per_obj[oi][i]).collect();
                     if hidden.is_empty() {
                         continue;

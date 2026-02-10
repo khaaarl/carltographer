@@ -203,6 +203,38 @@ pub fn point_in_polygon(px: f64, pz: f64, vertices: &[(f64, f64)]) -> bool {
     inside
 }
 
+/// Axis-aligned bounding box: (min_x, max_x, min_z, max_z).
+pub type Aabb = (f64, f64, f64, f64);
+
+/// Compute the axis-aligned bounding box of a polygon.
+pub fn compute_aabb(poly: &[(f64, f64)]) -> Aabb {
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_z = f64::INFINITY;
+    let mut max_z = f64::NEG_INFINITY;
+    for &(x, z) in poly {
+        if x < min_x {
+            min_x = x;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if z < min_z {
+            min_z = z;
+        }
+        if z > max_z {
+            max_z = z;
+        }
+    }
+    (min_x, max_x, min_z, max_z)
+}
+
+/// Test if two AABBs overlap.
+#[inline]
+fn aabbs_overlap(a: &Aabb, b: &Aabb) -> bool {
+    a.1 >= b.0 && b.1 >= a.0 && a.3 >= b.2 && b.3 >= a.2
+}
+
 /// Test if two polygons overlap (share any interior area).
 ///
 /// Checks:
@@ -213,6 +245,56 @@ pub fn polygons_overlap(poly_a: &[(f64, f64)], poly_b: &[(f64, f64)]) -> bool {
     let n_a = poly_a.len();
     let n_b = poly_b.len();
     if n_a < 3 || n_b < 3 {
+        return false;
+    }
+
+    // 1. Edge-edge intersection
+    for i in 0..n_a {
+        let j = (i + 1) % n_a;
+        let (ax1, az1) = poly_a[i];
+        let (ax2, az2) = poly_a[j];
+        for k in 0..n_b {
+            let m = (k + 1) % n_b;
+            let (bx1, bz1) = poly_b[k];
+            let (bx2, bz2) = poly_b[m];
+            if segments_intersect_inclusive(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2) {
+                return true;
+            }
+        }
+    }
+
+    // 2. Any vertex of A inside B
+    for &(px, pz) in poly_a {
+        if point_in_polygon(px, pz, poly_b) {
+            return true;
+        }
+    }
+
+    // 3. Any vertex of B inside A
+    for &(px, pz) in poly_b {
+        if point_in_polygon(px, pz, poly_a) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Like `polygons_overlap`, but with a precomputed AABB for polygon B.
+///
+/// Use this when polygon B is static and tested against many different A polygons.
+/// The AABB of A is computed on-the-fly and compared against the precomputed B AABB;
+/// if they don't overlap, the expensive edge/vertex tests are skipped entirely.
+pub fn polygons_overlap_aabb(poly_a: &[(f64, f64)], poly_b: &[(f64, f64)], aabb_b: &Aabb) -> bool {
+    let n_a = poly_a.len();
+    let n_b = poly_b.len();
+    if n_a < 3 || n_b < 3 {
+        return false;
+    }
+
+    // AABB early-exit: compute A's AABB and compare against precomputed B AABB
+    let aabb_a = compute_aabb(poly_a);
+    if !aabbs_overlap(&aabb_a, aabb_b) {
         return false;
     }
 

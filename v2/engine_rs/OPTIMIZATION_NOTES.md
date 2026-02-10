@@ -1,6 +1,6 @@
 # Rust Visibility Optimization Notes
 
-Status: **post polygon-intersection refactor** — re-profile recommended
+Status: **post AABB early-exit for polygons_overlap** — re-profile recommended
 
 ## Context
 
@@ -160,6 +160,55 @@ This eliminates the entire DZ sample grid, Z-sorted binary search for DZ PIP, an
 - **mission_hna: ~629ms → ~364ms (-42%)**
 - **mission_ruins: ~371ms → ~192ms (-48%)**
 
+### 8. AABB early-exit for polygons_overlap (precomputed DZ AABBs)
+Precompute axis-aligned bounding boxes for each expanded DZ polygon (constant per layout). In the per-observer hot loop, compute the vis_poly AABB on-the-fly and reject non-overlapping pairs before the expensive O(E_A x E_B) edge-edge intersection tests.
+
+Key design choice: a naive approach that computes *both* AABBs inside `polygons_overlap` caused a regression on some workloads (+9% on SwpEng_nosym_100) because when AABBs always overlap, the O(n_b) scan of the static DZ polygon was pure overhead. By precomputing the DZ AABB once and only computing the vis_poly AABB per call (`polygons_overlap_aabb`), the per-call cost is reduced to O(n_vis_poly) + 4 comparisons.
+
+Impact varies by mission type and table size. Largest wins on large-table symmetric cases where many observers have visibility polygons that don't reach distant DZs:
+
+- **90x44_wtc_HnA_sym_20**: 219 ms -> 181 ms (**-17.5%**)
+- **90x44_wtc_DoW_sym_100**: 1717 ms -> 1473 ms (**-14.2%**)
+- **90x44_crates_Crucible_nosym_100**: 787 ms -> 712 ms (**-9.5%**)
+- **44x30_wtc_HnA_nosym_50**: 157 ms -> 144 ms (**-8.4%**)
+- **60x44_crates_HnA_sym_100**: 667 ms -> 621 ms (**-7.0%**)
+- Non-mission benchmarks: unaffected (no `polygons_overlap` calls)
+- No regressions observed
+
+### 9. FxHash for endpoint deduplication and objective hidability lookups
+Replace the standard library `HashSet<(u64, u64)>` (SipHash-2-4, cryptographic quality) with a custom inline FxHash hasher for all integer-keyed hash sets/maps in the visibility hot paths. SipHash provides DoS resistance which is unnecessary for non-adversarial keys like `f64::to_bits()` pairs and `usize` indices. FxHash uses a single `(rotate_left(5) ^ key).wrapping_mul(MAGIC)` per 8-byte chunk -- roughly 5-10x faster per hash operation.
+
+Affected data structures:
+- `VisBuffers::endpoint_seen: FxHashSet<(u64, u64)>` -- per-observer endpoint dedup (hot path)
+- `candidate_origins: FxHashSet<(u64, u64)>` -- objective hidability square candidates
+- `pt_index: FxHashMap<(u64, u64), usize>` -- objective sample point lookup
+- `hidden: FxHashSet<usize>` -- hidden index set for objective hidability
+
+No external dependency added: the FxHasher is implemented inline (~25 lines) in `visibility.rs`. The change is internal-only -- produces identical output since the same set of unique endpoints is collected regardless of hash function.
+
+Broad improvement across all workloads (5-15% typical, up to 21% on some cases):
+
+| # | Benchmark | Before | After | Change |
+|---|-----------|--------|-------|--------|
+| 01 | `44x30_crates_none_nosym_10_g0000` | 10.1 ms | 9.4 ms | **-7%** |
+| 02 | `60x44_wtc_none_nosym_20_g1010` | 29.2 ms | 27.8 ms | **-5%** |
+| 03 | `90x44_crates_none_nosym_50_g1101` | 145 ms | 141 ms | -3% |
+| 04 | `44x30_wtc_none_nosym_100_g0111` | 103 ms | 98.8 ms | **-4%** |
+| 06 | `90x44_wtc_HnA_sym_20_g0100` | 187 ms | 163 ms | **-13%** |
+| 08 | `60x44_crates_HnA_sym_100_g1011` | 635 ms | 574 ms | **-10%** |
+| 09 | `90x44_wtc_DoW_nosym_10_g0110` | 36.1 ms | 31.8 ms | **-11%** |
+| 10 | `44x30_crates_DoW_sym_20_g1001` | 38.1 ms | 34.8 ms | **-11%** |
+| 11 | `60x44_crates_DoW_nosym_50_g0011` | 201 ms | 180 ms | **-10%** |
+| 12 | `90x44_wtc_DoW_sym_100_g1100` | 1468 ms | 1364 ms | **-7%** |
+| 14 | `60x44_crates_TipPt_nosym_20_g0101` | 58.9 ms | 54.1 ms | **-9%** |
+| 16 | `44x30_wtc_TipPt_nosym_100_g0110` | 340 ms | 309 ms | **-9%** |
+| 17 | `60x44_wtc_SwpEng_sym_10_g0101` | 49.2 ms | 36.3 ms | **-21%** |
+| 18 | `90x44_crates_SwpEng_nosym_20_g1010` | 83.1 ms | 71.3 ms | **-15%** |
+| 25 | `44x30_crates_SnD_nosym_10_g0111` | 15.4 ms | 13.2 ms | **-14%** |
+| 28 | `44x30_crates_SnD_sym_100_g1101` | 212 ms | 190 ms | **-10%** |
+
+(Selected representative cases; 25/28 benchmarks improved by 5%+ with no regressions.)
+
 ### Cumulative improvement (all optimizations)
 | Benchmark | Original | Current | Total improvement |
 |---|---|---|---|
@@ -167,6 +216,8 @@ This eliminates the entire DZ sample grid, Z-sorted binary search for DZ PIP, an
 | visibility_100 | 3.80 s | **~733 ms** | **-81%** |
 | mission_hna | 5.70 s | **~364 ms** | **-94%** |
 | mission_ruins | n/a | **~192 ms** | n/a |
+
+*Note: cumulative table uses old benchmark names from before the 28-case refactor. The FxHash optimization (opt #9) provides a further ~7-15% across the board on top of previous optimizations. Run-to-run variance makes precise cumulative numbers difficult to pin down, but the improvement is consistent and statistically significant across all 28 cases.*
 
 *Measured February 2026.*
 
@@ -250,13 +301,10 @@ Organized by expected impact. Updated after polygon-intersection refactor.
 
 ### Tier 1: Polygon-polygon intersection optimization
 
-The new `polygons_overlap()` function (in `collision.rs`) uses edge-edge intersection + vertex containment. It tests all edges of polygon A against all edges of polygon B, plus vertex-in-polygon checks.
-
-#### 1a. AABB early-exit for polygons_overlap
-Compute bounding boxes of both polygons; if AABBs don't overlap, return false immediately. With sparse terrain on a large table, many observer visibility polygons won't overlap distant DZ polygons at all. This is cheap (O(V) to compute AABB) and could skip the O(E_A × E_B) edge tests entirely for non-overlapping cases.
+The `polygons_overlap()` function (in `collision.rs`) uses edge-edge intersection + vertex containment. AABB early-exit has been added (opt #8) via `polygons_overlap_aabb()` with precomputed DZ AABBs.
 
 #### 1b. Spatial acceleration for edge-edge tests
-If expanded DZ polygons have many edges (shapely buffer can produce ~20-50 points per polygon), the O(E_vis × E_dz) edge test becomes significant. Precomputing a spatial index (e.g., grid-based or segment tree) on the static DZ polygon edges could reduce per-observer work.
+If expanded DZ polygons have many edges (shapely buffer can produce ~20-50 points per polygon), the O(E_vis × E_dz) edge test becomes significant. Precomputing a spatial index (e.g., grid-based or segment tree) on the static DZ polygon edges could reduce per-observer work. Likely diminishing returns now that AABB eliminates the non-overlapping cases entirely.
 
 ### Tier 2: Raycasting refinements (dominant for non-mission workloads)
 
@@ -267,11 +315,8 @@ Use pseudoangle `p = dx / (|dx| + |dz|)` for ray sorting (avoids atan2 in ray ge
 
 **Note**: Since the trig reduction (opt #2) was reverted, ray generation now does `atan2 + 4×cos/sin + 1×sqrt + 2×division` per endpoint. Pseudoangle could replace the atan2 for sort-key computation (but the 4 cos/sin calls for ±eps rays must stay for FP parity).
 
-#### 2b. Faster endpoint deduplication
-The `HashSet<(u64, u64)>` for endpoint dedup uses SipHash (DoS-resistant but slow). Options:
-- Replace with `FxHashSet` from `rustc-hash` crate (fast hash, would add a dependency)
-- Implement a simple custom hasher (XOR + multiply, no dependency)
-- Skip dedup entirely (costs ~80% more rays but avoids hashing overhead — net effect unclear)
+#### ~~2b. Faster endpoint deduplication~~ (DONE — see opt #9)
+Replaced SipHash with inline FxHash for all integer-keyed hash sets/maps. 5-21% improvement across all workloads.
 
 #### 2c. SIMD intersection
 Manually vectorize the ray-segment intersection using `std::arch` SIMD intrinsics. Complex to implement and maintain. Low priority unless profiling shows raycasting > 50%.
@@ -308,7 +353,7 @@ Only recompute observers affected by a mutation. Extremely complex, especially w
 
 ### Recommended next steps
 
-1. **Re-profile mission_hna and mission_ruins** to see the new bottleneck distribution post-polygon-intersection. Expected: `compute_visibility_polygon` is now dominant.
-2. **Try 1a (AABB early-exit for polygons_overlap)** — cheapest possible win on the new DZ path.
-3. **Try 2a (pseudoangle hybrid)** — if raycasting is now dominant, this addresses the hottest path.
-4. **4a (OBB caching)** — clean code improvement with potential benefit for mutation-heavy workloads.
+1. **Re-profile** to see the new bottleneck distribution post-FxHash. The endpoint dedup is now much faster, so `compute_visibility_polygon`'s raycasting inner loop and atan2/trig calls are likely more dominant.
+2. **Try 2a (pseudoangle hybrid)** — if raycasting is now dominant, replacing atan2 for sort-key computation addresses the hottest remaining path.
+3. **4a (OBB caching)** — clean code improvement with potential benefit for mutation-heavy workloads.
+4. **Also consider**: FxHash could be applied to `objects_by_id: HashMap<String, ...>` (String keys), though this is built once per layout and unlikely to be a bottleneck.
