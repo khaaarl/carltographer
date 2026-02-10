@@ -909,6 +909,89 @@ mod tests {
         }
     }
 
+    // --- Parallel tempering integration tests ---
+
+    fn make_tempering_params(seed: u64, num_steps: u32, num_replicas: u32) -> EngineParams {
+        EngineParams {
+            num_replicas: Some(num_replicas),
+            skip_visibility: true,
+            ..make_params(seed, num_steps)
+        }
+    }
+
+    #[test]
+    fn tempering_deterministic() {
+        let params = make_tempering_params(123, 100, 2);
+        let r1 = generate(&params);
+        let r2 = generate(&params);
+        let j1 = serde_json::to_string(&r1).unwrap();
+        let j2 = serde_json::to_string(&r2).unwrap();
+        assert_eq!(j1, j2);
+    }
+
+    #[test]
+    fn tempering_produces_features() {
+        let result = generate(&make_tempering_params(42, 100, 2));
+        assert!(!result.layout.placed_features.is_empty());
+    }
+
+    #[test]
+    fn tempering_three_replicas() {
+        let params = make_tempering_params(42, 100, 3);
+        let r1 = generate(&params);
+        let r2 = generate(&params);
+        let j1 = serde_json::to_string(&r1).unwrap();
+        let j2 = serde_json::to_string(&r2).unwrap();
+        assert_eq!(j1, j2);
+        assert!(!r1.layout.placed_features.is_empty());
+    }
+
+    #[test]
+    fn tempering_with_swaps() {
+        // Use enough steps and a small swap_interval to exercise the
+        // replica exchange path multiple times.
+        let mut params = make_tempering_params(42, 200, 3);
+        params.swap_interval = 10;
+        let r1 = generate(&params);
+        let r2 = generate(&params);
+        let j1 = serde_json::to_string(&r1).unwrap();
+        let j2 = serde_json::to_string(&r2).unwrap();
+        assert_eq!(j1, j2);
+        assert!(!r1.layout.placed_features.is_empty());
+    }
+
+    #[test]
+    fn tempering_no_overlaps() {
+        let params = make_tempering_params(42, 100, 2);
+        let result = generate(&params);
+        let objs = build_object_index(&params.catalog);
+        let feats = &result.layout.placed_features;
+        for i in 0..feats.len() {
+            let oi = get_world_obbs(&feats[i], &objs);
+            for j in (i + 1)..feats.len() {
+                let oj = get_world_obbs(&feats[j], &objs);
+                for ca in &oi {
+                    for cb in &oj {
+                        assert!(!obbs_overlap(ca, cb), "Features {} and {} overlap", i, j);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tempering_with_visibility() {
+        // Exercise the tempering path with visibility scoring enabled.
+        let mut params = make_tempering_params(42, 50, 2);
+        params.skip_visibility = false;
+        let r1 = generate(&params);
+        let r2 = generate(&params);
+        let j1 = serde_json::to_string(&r1).unwrap();
+        let j2 = serde_json::to_string(&r2).unwrap();
+        assert_eq!(j1, j2);
+        assert!(r1.layout.visibility.is_some());
+    }
+
     #[test]
     fn terrain_objects_in_output() {
         let params = make_params(42, 50);
