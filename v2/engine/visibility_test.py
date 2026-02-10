@@ -1,5 +1,6 @@
 """Tests for visibility score computation."""
 
+from engine.collision import obb_corners
 from engine.types import (
     DeploymentZone,
     FeatureComponent,
@@ -17,6 +18,7 @@ from engine.visibility import (
     DZ_EXPANSION_INCHES,
     _extract_blocking_segments,
     _fraction_of_dz_visible,
+    _has_valid_hiding_square,
     _point_in_polygon,
     _point_near_any_polygon,
     _polygon_area,
@@ -695,6 +697,104 @@ class TestObjectiveHidability:
         layout = _make_layout(60, 44, [])
         result = compute_layout_visibility(layout, {})
         assert "objective_hidability" not in result
+
+
+class TestHasValidHidingSquare:
+    """Tests for the model-fit hiding square check."""
+
+    def _grid_points(self, x_range, z_range):
+        """Generate grid points at integer spacing."""
+        pts = []
+        for x in x_range:
+            for z in z_range:
+                pts.append((float(x), float(z)))
+        return pts
+
+    def test_basic_valid_square(self):
+        """4 adjacent hidden points form a valid hiding square."""
+        # Objective at origin, radius 5
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        # Hide a 2x2 block of points near origin
+        hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 0 <= x <= 1 and 0 <= z <= 1:
+                hidden.add(i)
+        assert _has_valid_hiding_square(0.0, 0.0, 5.0, pts, hidden, [], 30, 22)
+
+    def test_no_hidden_points(self):
+        """No hidden points -> no valid square."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        hidden: set[int] = set()
+        assert not _has_valid_hiding_square(
+            0.0, 0.0, 5.0, pts, hidden, [], 30, 22
+        )
+
+    def test_single_hidden_point_not_enough(self):
+        """A single hidden point cannot form a 1x1 square."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        # Hide only one point
+        hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if x == 0 and z == 0:
+                hidden.add(i)
+                break
+        assert not _has_valid_hiding_square(
+            0.0, 0.0, 5.0, pts, hidden, [], 30, 22
+        )
+
+    def test_terrain_blocks_square(self):
+        """Tall terrain overlapping the square invalidates it."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        # Hide a 2x2 block
+        hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 0 <= x <= 1 and 0 <= z <= 1:
+                hidden.add(i)
+        # Place tall terrain OBB covering exactly the hiding square
+        tall_obb = obb_corners(0.5, 0.5, 0.6, 0.6, 0.0)
+        assert not _has_valid_hiding_square(
+            0.0, 0.0, 5.0, pts, hidden, [tall_obb], 30, 22
+        )
+
+    def test_out_of_range(self):
+        """Hidden points far from objective don't count."""
+        pts = self._grid_points(range(-10, 11), range(-10, 11))
+        # Hide a 2x2 block far from origin (at x=8..9, z=8..9)
+        hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 8 <= x <= 9 and 8 <= z <= 9:
+                hidden.add(i)
+        # Objective radius 3 — hidden points are way outside
+        assert not _has_valid_hiding_square(
+            0.0, 0.0, 3.0, pts, hidden, [], 30, 22
+        )
+
+    def test_out_of_bounds(self):
+        """Hidden points outside table bounds don't form valid square."""
+        # Table is 10x10 (half_w=5, half_d=5)
+        pts = self._grid_points(range(-6, 7), range(-6, 7))
+        # Hide points at the table edge where square would go OOB
+        hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 5 <= x <= 6 and 0 <= z <= 1:
+                hidden.add(i)
+        # Objective at (5, 0) with radius 2 — hidden points at edge
+        assert not _has_valid_hiding_square(
+            5.0, 0.0, 2.0, pts, hidden, [], 5, 5
+        )
+
+    def test_terrain_adjacent_but_not_overlapping(self):
+        """Tall terrain adjacent to (but not overlapping) square is fine."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 0 <= x <= 1 and 0 <= z <= 1:
+                hidden.add(i)
+        # Terrain right next to the square but not overlapping
+        tall_obb = obb_corners(2.5, 0.5, 0.5, 0.5, 0.0)
+        assert _has_valid_hiding_square(
+            0.0, 0.0, 5.0, pts, hidden, [tall_obb], 30, 22
+        )
 
 
 # -- Observer filtering tests --

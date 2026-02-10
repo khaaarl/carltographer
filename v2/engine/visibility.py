@@ -74,6 +74,7 @@ from .collision import (
     get_tall_world_obbs,
     get_world_obbs,
     obb_corners,
+    obbs_overlap,
     point_to_segment_distance_squared,
 )
 from .types import (
@@ -754,6 +755,114 @@ class VisibilityCache:
         ]
 
 
+def _has_valid_hiding_square(
+    obj_cx: float,
+    obj_cz: float,
+    obj_radius: float,
+    sample_points: list[tuple[float, float]],
+    hidden_indices: set[int],
+    tall_obbs: list[list[tuple[float, float]]],
+    half_w: float,
+    half_d: float,
+) -> bool:
+    """Check if a 1x1" square of hidden grid points exists for model placement.
+
+    A model needs physical space to stand, so a single hidden point is not
+    enough. We look for a 1"x1" axis-aligned square (4 adjacent grid points
+    at 1" spacing) where:
+      1. All 4 corners are within table bounds
+      2. At least 1 corner is within the objective's range circle
+      3. All 4 corners are hidden from the opposing threat zone
+      4. No tall terrain shape (height >= 1.0") intersects the square
+
+    WARNING: The terrain-intersection check (step 4) uses OBB (oriented
+    bounding box) geometry via obbs_overlap(). This assumes all terrain
+    shapes are rectangular. If polygonal or cylindrical terrain shapes are
+    added in the future, this check will need to be updated to use the
+    appropriate intersection test.
+    """
+    # Build lookup from (x, z) -> sample index for O(1) access
+    pt_index: dict[tuple[float, float], int] = {}
+    for i, (px, pz) in enumerate(sample_points):
+        pt_index[(px, pz)] = i
+
+    r_sq = obj_radius * obj_radius
+
+    # Collect candidate square origins (bottom-left corners).
+    # For each hidden, in-range point, it could be any of the 4 corners
+    # of a valid square. Deduplicate via set of (origin_x, origin_z).
+    candidate_origins: set[tuple[float, float]] = set()
+    for idx in hidden_indices:
+        px, pz = sample_points[idx]
+        dx = px - obj_cx
+        dz = pz - obj_cz
+        if dx * dx + dz * dz > r_sq:
+            continue
+        # This point is hidden AND in range — generate 4 candidate origins
+        # where this point would be each corner of a 1x1 square
+        for ox, oz in (
+            (px, pz),  # point is bottom-left
+            (px - 1.0, pz),  # point is bottom-right
+            (px, pz - 1.0),  # point is top-left
+            (px - 1.0, pz - 1.0),  # point is top-right
+        ):
+            candidate_origins.add((ox, oz))
+
+    for ox, oz in candidate_origins:
+        # The 4 corners of this candidate square
+        corners_xz = [
+            (ox, oz),
+            (ox + 1.0, oz),
+            (ox + 1.0, oz + 1.0),
+            (ox, oz + 1.0),
+        ]
+
+        # Check 1: all 4 corners within table bounds
+        all_in_bounds = True
+        for cx, cz in corners_xz:
+            if cx < -half_w or cx > half_w or cz < -half_d or cz > half_d:
+                all_in_bounds = False
+                break
+        if not all_in_bounds:
+            continue
+
+        # Check 2: at least 1 corner in range of objective
+        any_in_range = False
+        for cx, cz in corners_xz:
+            dx = cx - obj_cx
+            dz = cz - obj_cz
+            if dx * dx + dz * dz <= r_sq:
+                any_in_range = True
+                break
+        if not any_in_range:
+            continue
+
+        # Check 3: all 4 corners are hidden (exist in sample and are hidden)
+        all_hidden = True
+        for cx, cz in corners_xz:
+            idx = pt_index.get((cx, cz))
+            if idx is None or idx not in hidden_indices:
+                all_hidden = False
+                break
+        if not all_hidden:
+            continue
+
+        # Check 4: no tall terrain OBB overlaps the square
+        square_obb = obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0)
+        terrain_blocks = False
+        for tall_obb in tall_obbs:
+            if obbs_overlap(square_obb, tall_obb):
+                terrain_blocks = True
+                break
+        if terrain_blocks:
+            continue
+
+        # All checks passed — valid hiding square found
+        return True
+
+    return False
+
+
 def compute_layout_visibility(
     layout: TerrainLayout,
     objects_by_id: dict[str, TerrainObject],
@@ -891,6 +1000,8 @@ def compute_layout_visibility(
     )
     # Per-objective sample points
     obj_sample_points: list[list[tuple[float, float]]] = []
+    # Original radii for each objective (used in model-fit check)
+    obj_radii: list[float] = []
     # {dz_id: {obj_index: set of seen sample indices}}
     obj_seen_from_dz: dict[str, dict[int, set[int]]] = {}
 
@@ -898,10 +1009,16 @@ def compute_layout_visibility(
         mission = layout.mission
         for obj_marker in mission.objectives:
             obj_radius = 0.75 + obj_marker.range_inches
+            obj_radii.append(obj_radius)
+            # Expand sample radius by sqrt(2) so that all diagonal grid
+            # neighbors of in-range points are included. This is needed
+            # for the model-fit hiding square check which looks at 1x1"
+            # squares of 4 adjacent grid points.
+            expanded_radius = obj_radius + math.sqrt(2)
             pts = _sample_points_in_circle(
                 obj_marker.position.x,
                 obj_marker.position.z,
-                obj_radius,
+                expanded_radius,
                 1.0,
                 0.0,
             )
@@ -1102,17 +1219,45 @@ def compute_layout_visibility(
             dzs = mission.deployment_zones
             objective_hidability: dict = {}
 
+            # Collect tall OBBs for terrain-intersection check
+            obj_tall_obbs: list[list[tuple[float, float]]] = []
+            effective_features_obj: list[PlacedFeature] = []
+            for pf in layout.placed_features:
+                effective_features_obj.append(pf)
+                if layout.rotationally_symmetric and not _is_at_origin(pf):
+                    effective_features_obj.append(_mirror_placed_feature(pf))
+            for pf in effective_features_obj:
+                for corners in get_tall_world_obbs(
+                    pf, objects_by_id, min_height=1.0
+                ):
+                    obj_tall_obbs.append(corners)
+
             for dz in dzs:
                 # Objectives "safe" for the OPPOSING player means
-                # objectives where at least 1 sample was NOT seen from this DZ
+                # objectives where a model can physically hide (1x1" square
+                # of hidden grid points) from this DZ's threat zone
                 total_objectives = len(mission.objectives)
                 safe_count = 0
                 for oi in range(total_objectives):
                     total_pts = len(obj_sample_points[oi])
                     if total_pts == 0:
                         continue
-                    seen_count = len(obj_seen_from_dz[dz.id][oi])
-                    if seen_count < total_pts:
+                    # Build set of hidden indices (complement of seen)
+                    seen = obj_seen_from_dz[dz.id][oi]
+                    hidden = {i for i in range(total_pts) if i not in seen}
+                    if not hidden:
+                        continue
+                    obj_marker = mission.objectives[oi]
+                    if _has_valid_hiding_square(
+                        obj_marker.position.x,
+                        obj_marker.position.z,
+                        obj_radii[oi],
+                        obj_sample_points[oi],
+                        hidden,
+                        obj_tall_obbs,
+                        half_w,
+                        half_d,
+                    ):
                         safe_count += 1
 
                 # This DZ's threat data: the opposing player can hide at

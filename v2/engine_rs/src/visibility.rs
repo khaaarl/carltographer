@@ -10,8 +10,8 @@ use rayon::prelude::*;
 
 use crate::collision::{
     compose_transform, get_tall_world_obbs, is_at_origin,
-    mirror_placed_feature, obb_corners, point_to_segment_distance_squared,
-    Corners,
+    mirror_placed_feature, obb_corners, obbs_overlap,
+    point_to_segment_distance_squared, Corners,
 };
 use crate::types::{
     DeploymentZone, PlacedFeature, TerrainLayout, TerrainObject, Transform,
@@ -814,6 +814,129 @@ impl<'a> VisibilityCache<'a> {
     }
 }
 
+/// Check if a 1x1" square of hidden grid points exists for model placement.
+///
+/// A model needs physical space to stand, so a single hidden point is not
+/// enough. We look for a 1"x1" axis-aligned square (4 adjacent grid points
+/// at 1" spacing) where:
+///   1. All 4 corners are within table bounds
+///   2. At least 1 corner is within the objective's range circle
+///   3. All 4 corners are hidden from the opposing threat zone
+///   4. No tall terrain shape (height >= 1.0") intersects the square
+///
+/// WARNING: The terrain-intersection check (step 4) uses OBB (oriented
+/// bounding box) geometry via obbs_overlap(). This assumes all terrain
+/// shapes are rectangular. If polygonal or cylindrical terrain shapes are
+/// added in the future, this check will need to be updated to use the
+/// appropriate intersection test.
+fn has_valid_hiding_square(
+    obj_cx: f64,
+    obj_cz: f64,
+    obj_radius: f64,
+    sample_points: &[(f64, f64)],
+    hidden_indices: &HashSet<usize>,
+    tall_obbs: &[Corners],
+    half_w: f64,
+    half_d: f64,
+) -> bool {
+    // Build lookup from (x_bits, z_bits) -> sample index for O(1) access.
+    // Using f64::to_bits() is safe because all coords are integer-valued
+    // from the grid, so there are no floating-point precision issues.
+    let mut pt_index: HashMap<(u64, u64), usize> =
+        HashMap::with_capacity(sample_points.len());
+    for (i, &(px, pz)) in sample_points.iter().enumerate() {
+        pt_index.insert((px.to_bits(), pz.to_bits()), i);
+    }
+
+    let r_sq = obj_radius * obj_radius;
+
+    // Collect candidate square origins (bottom-left corners).
+    // For each hidden, in-range point, it could be any of the 4 corners
+    // of a valid square. Deduplicate via HashSet of (x_bits, z_bits).
+    let mut candidate_origins: HashSet<(u64, u64)> = HashSet::new();
+    for &idx in hidden_indices {
+        let (px, pz) = sample_points[idx];
+        let dx = px - obj_cx;
+        let dz = pz - obj_cz;
+        if dx * dx + dz * dz > r_sq {
+            continue;
+        }
+        // This point is hidden AND in range — generate 4 candidate origins
+        for &(ox, oz) in &[
+            (px, pz),             // point is bottom-left
+            (px - 1.0, pz),       // point is bottom-right
+            (px, pz - 1.0),       // point is top-left
+            (px - 1.0, pz - 1.0), // point is top-right
+        ] {
+            candidate_origins
+                .insert((ox.to_bits(), oz.to_bits()));
+        }
+    }
+
+    for &(ox_bits, oz_bits) in &candidate_origins {
+        let ox = f64::from_bits(ox_bits);
+        let oz = f64::from_bits(oz_bits);
+
+        // The 4 corners of this candidate square
+        let corners_xz = [
+            (ox, oz),
+            (ox + 1.0, oz),
+            (ox + 1.0, oz + 1.0),
+            (ox, oz + 1.0),
+        ];
+
+        // Check 1: all 4 corners within table bounds
+        let all_in_bounds = corners_xz.iter().all(|&(cx, cz)| {
+            cx >= -half_w
+                && cx <= half_w
+                && cz >= -half_d
+                && cz <= half_d
+        });
+        if !all_in_bounds {
+            continue;
+        }
+
+        // Check 2: at least 1 corner in range of objective
+        let any_in_range = corners_xz.iter().any(|&(cx, cz)| {
+            let dx = cx - obj_cx;
+            let dz = cz - obj_cz;
+            dx * dx + dz * dz <= r_sq
+        });
+        if !any_in_range {
+            continue;
+        }
+
+        // Check 3: all 4 corners are hidden (exist in sample and are hidden)
+        let all_hidden = corners_xz.iter().all(|&(cx, cz)| {
+            if let Some(&idx) =
+                pt_index.get(&(cx.to_bits(), cz.to_bits()))
+            {
+                hidden_indices.contains(&idx)
+            } else {
+                false
+            }
+        });
+        if !all_hidden {
+            continue;
+        }
+
+        // Check 4: no tall terrain OBB overlaps the square
+        let square_obb =
+            obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0);
+        let terrain_blocks = tall_obbs
+            .iter()
+            .any(|tall_obb| obbs_overlap(&square_obb, tall_obb));
+        if terrain_blocks {
+            continue;
+        }
+
+        // All checks passed — valid hiding square found
+        return true;
+    }
+
+    false
+}
+
 /// Compute visibility score for a terrain layout.
 ///
 /// Samples observer positions on a grid across the table, computes
@@ -972,15 +1095,22 @@ pub fn compute_layout_visibility(
             .map_or(false, |m| !m.objectives.is_empty());
 
     let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut obj_radii: Vec<f64> = Vec::new();
 
     if has_objectives {
         let mission = layout.mission.as_ref().unwrap();
         for obj_marker in &mission.objectives {
             let obj_radius = 0.75 + obj_marker.range_inches;
+            obj_radii.push(obj_radius);
+            // Expand sample radius by sqrt(2) so that all diagonal grid
+            // neighbors of in-range points are included. This is needed
+            // for the model-fit hiding square check which looks at 1x1"
+            // squares of 4 adjacent grid points.
+            let expanded_radius = obj_radius + std::f64::consts::SQRT_2;
             let pts = sample_points_in_circle(
                 obj_marker.position.x_inches,
                 obj_marker.position.z_inches,
-                obj_radius,
+                expanded_radius,
                 1.0,
                 0.0,
             );
@@ -1351,8 +1481,31 @@ pub fn compute_layout_visibility(
 
         // Build objective hidability results
         if has_objectives {
+            let mission = layout.mission.as_ref().unwrap();
             let total_objectives = obj_sample_points.len();
             let mut objective_hidability = serde_json::Map::new();
+
+            // Collect tall OBBs for terrain-intersection check
+            let mut obj_tall_obbs: Vec<Corners> = Vec::new();
+            for pf in &layout.placed_features {
+                for corners in
+                    get_tall_world_obbs(pf, objects_by_id, 1.0)
+                {
+                    obj_tall_obbs.push(corners);
+                }
+                if layout.rotationally_symmetric
+                    && !is_at_origin(pf)
+                {
+                    let mirror = mirror_placed_feature(pf);
+                    for corners in get_tall_world_obbs(
+                        &mirror,
+                        objects_by_id,
+                        1.0,
+                    ) {
+                        obj_tall_obbs.push(corners);
+                    }
+                }
+            }
 
             for (di, _dd) in dz_data.iter().enumerate() {
                 let mut safe_count = 0;
@@ -1362,11 +1515,24 @@ pub fn compute_layout_visibility(
                     if total_pts == 0 {
                         continue;
                     }
-                    let seen_count = per_obj[oi]
-                        .iter()
-                        .filter(|&&b| b)
-                        .count();
-                    if seen_count < total_pts {
+                    // Build set of hidden indices (complement of seen)
+                    let hidden: HashSet<usize> = (0..total_pts)
+                        .filter(|&i| !per_obj[oi][i])
+                        .collect();
+                    if hidden.is_empty() {
+                        continue;
+                    }
+                    let obj_marker = &mission.objectives[oi];
+                    if has_valid_hiding_square(
+                        obj_marker.position.x_inches,
+                        obj_marker.position.z_inches,
+                        obj_radii[oi],
+                        &obj_sample_points[oi],
+                        &hidden,
+                        &obj_tall_obbs,
+                        half_w,
+                        half_d,
+                    ) {
                         safe_count += 1;
                     }
                 }
