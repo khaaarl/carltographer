@@ -232,7 +232,7 @@ def _precompute_segments(
                     continue
                 comp_t = comp.transform or Transform()
                 for shape in obj.shapes:
-                    if shape.height < min_blocking_height:
+                    if shape.effective_opacity_height() < min_blocking_height:
                         continue
                     shape_t = shape.offset or Transform()
                     world = compose_transform(
@@ -863,11 +863,102 @@ def _has_valid_hiding_square(
     return False
 
 
+def _has_intermediate_shapes(
+    layout: TerrainLayout,
+    objects_by_id: dict[str, TerrainObject],
+    infantry_height: float,
+    standard_height: float,
+) -> bool:
+    """Check if any placed feature has shapes with effective opacity height
+    in [infantry_height, standard_height). If not, the infantry pass would
+    produce identical results to standard — skip it.
+    """
+    for pf in layout.placed_features:
+        if pf.feature.feature_type == "obscuring":
+            continue
+        for comp in pf.feature.components:
+            obj = objects_by_id.get(comp.object_id)
+            if obj is None:
+                continue
+            for shape in obj.shapes:
+                h = shape.effective_opacity_height()
+                if h >= infantry_height and h < standard_height:
+                    return True
+    return False
+
+
+def _merge_dual_pass_results(
+    standard: dict,
+    infantry: dict,
+    standard_height: float,
+    infantry_height: float,
+) -> dict:
+    """Merge standard and infantry visibility results into a dual-pass result.
+
+    For each section, averages the "value" keys and includes both
+    pass breakdowns as "standard" and "infantry" sub-dicts.
+    """
+
+    def _merge_entry(std_entry: dict, inf_entry: dict) -> dict:
+        """Merge two metric entries: average values, include sub-dicts."""
+        merged = {
+            "value": round((std_entry["value"] + inf_entry["value"]) / 2.0, 2),
+            "standard": std_entry,
+            "infantry": inf_entry,
+        }
+        return merged
+
+    result: dict = {}
+
+    # Overall
+    result["overall"] = _merge_entry(standard["overall"], infantry["overall"])
+
+    # DZ visibility (per-DZ entries)
+    if "dz_visibility" in standard and "dz_visibility" in infantry:
+        merged_dz: dict = {}
+        for key in standard["dz_visibility"]:
+            if key in infantry["dz_visibility"]:
+                merged_dz[key] = _merge_entry(
+                    standard["dz_visibility"][key],
+                    infantry["dz_visibility"][key],
+                )
+        result["dz_visibility"] = merged_dz
+
+    # DZ-to-DZ visibility (per-pair entries)
+    if "dz_to_dz_visibility" in standard and "dz_to_dz_visibility" in infantry:
+        merged_cross: dict = {}
+        for key in standard["dz_to_dz_visibility"]:
+            if key in infantry["dz_to_dz_visibility"]:
+                merged_cross[key] = _merge_entry(
+                    standard["dz_to_dz_visibility"][key],
+                    infantry["dz_to_dz_visibility"][key],
+                )
+        result["dz_to_dz_visibility"] = merged_cross
+
+    # Objective hidability (per-DZ entries)
+    if (
+        "objective_hidability" in standard
+        and "objective_hidability" in infantry
+    ):
+        merged_obj: dict = {}
+        for key in standard["objective_hidability"]:
+            if key in infantry["objective_hidability"]:
+                merged_obj[key] = _merge_entry(
+                    standard["objective_hidability"][key],
+                    infantry["objective_hidability"][key],
+                )
+        result["objective_hidability"] = merged_obj
+
+    return result
+
+
 def compute_layout_visibility(
     layout: TerrainLayout,
     objects_by_id: dict[str, TerrainObject],
     min_blocking_height: float = 4.0,
     visibility_cache: VisibilityCache | None = None,
+    infantry_blocking_height: float | None = None,
+    overall_only: bool = False,
 ) -> dict:
     """Compute visibility score for a terrain layout.
 
@@ -963,8 +1054,12 @@ def compute_layout_visibility(
         }
 
     # -- DZ pre-loop setup --
+    # When overall_only=True (e.g. during scoring), skip DZ/objective work
+    # to avoid the expensive per-observer PIP tests (~173ms per call).
     has_dzs = (
-        layout.mission is not None and len(layout.mission.deployment_zones) > 0
+        not overall_only
+        and layout.mission is not None
+        and len(layout.mission.deployment_zones) > 0
     )
     dz_data: list[
         tuple[str, list[list[tuple[float, float]]], list[tuple[float, float]]]
@@ -972,10 +1067,12 @@ def compute_layout_visibility(
 
     # Accumulators for dz_visibility: {dz_id: [total_fraction, observer_count]}
     dz_vis_accum: dict[str, list[float]] = {}
-    # Cross-DZ: track which target sample indices have been seen by ANY observer
-    # {target_id_from_observer_id: set of seen target sample indices}
-    dz_cross_seen: dict[str, set[int]] = {}
+    # Cross-DZ: bool mask tracking which target samples have been seen
+    dz_cross_seen: dict[str, np.ndarray] = {}
     dz_cross_obs_count: dict[str, int] = {}
+    # Numpy arrays for vectorized PIP on DZ sample points
+    dz_np_x: dict[str, np.ndarray] = {}
+    dz_np_z: dict[str, np.ndarray] = {}
 
     if has_dzs:
         mission = layout.mission
@@ -986,10 +1083,12 @@ def compute_layout_visibility(
             dz_samples = _sample_points_in_dz(dz, 1.0, 0.0)
             dz_data.append((dz.id, polys_tuples, dz_samples))
             dz_vis_accum[dz.id] = [0.0, 0]  # [total_fraction, observer_count]
+            dz_np_x[dz.id] = np.array([p[0] for p in dz_samples])
+            dz_np_z[dz.id] = np.array([p[1] for p in dz_samples])
             for other_dz in dzs:
                 if other_dz.id != dz.id:
                     key = f"{dz.id}_from_{other_dz.id}"
-                    dz_cross_seen[key] = set()
+                    dz_cross_seen[key] = np.zeros(len(dz_samples), dtype=bool)
                     dz_cross_obs_count[key] = 0
 
     # -- Objective hidability pre-loop setup --
@@ -1002,8 +1101,11 @@ def compute_layout_visibility(
     obj_sample_points: list[list[tuple[float, float]]] = []
     # Original radii for each objective (used in model-fit check)
     obj_radii: list[float] = []
-    # {dz_id: {obj_index: set of seen sample indices}}
-    obj_seen_from_dz: dict[str, dict[int, set[int]]] = {}
+    # {dz_id: [bool mask per objective]} tracking seen sample indices
+    obj_seen_from_dz: dict[str, list[np.ndarray]] = {}
+    # Numpy arrays for vectorized PIP on objective sample points
+    obj_np_x: list[np.ndarray] = []
+    obj_np_z: list[np.ndarray] = []
 
     if has_objectives:
         mission = layout.mission
@@ -1023,11 +1125,13 @@ def compute_layout_visibility(
                 0.0,
             )
             obj_sample_points.append(pts)
+            obj_np_x.append(np.array([p[0] for p in pts]))
+            obj_np_z.append(np.array([p[1] for p in pts]))
 
         for dz in mission.deployment_zones:
-            obj_seen_from_dz[dz.id] = {
-                i: set() for i in range(len(mission.objectives))
-            }
+            obj_seen_from_dz[dz.id] = [
+                np.zeros(len(pts), dtype=bool) for pts in obj_sample_points
+            ]
 
     # Precompute observer-independent segment data once
     precomputed = _precompute_segments(
@@ -1055,23 +1159,15 @@ def compute_layout_visibility(
                         dz_vis_accum[dz_id][0] += 1.0
                         dz_vis_accum[dz_id][1] += 1
                     if observer_in_expanded_dz:
-                        for (
-                            other_id,
-                            _other_polys,
-                            other_samples,
-                        ) in dz_data:
+                        for other_id, _, _ in dz_data:
                             if other_id != dz_id:
                                 key = f"{other_id}_from_{dz_id}"
                                 if key in dz_cross_seen:
                                     dz_cross_obs_count[key] += 1
-                                    dz_cross_seen[key].update(
-                                        range(len(other_samples))
-                                    )
+                                    dz_cross_seen[key][:] = True
                         if has_objectives:
-                            for oi, obj_pts in enumerate(obj_sample_points):
-                                obj_seen_from_dz[dz_id][oi].update(
-                                    range(len(obj_pts))
-                                )
+                            for oi in range(len(obj_sample_points)):
+                                obj_seen_from_dz[dz_id][oi][:] = True
             continue
 
         vis_poly = _compute_visibility_polygon(
@@ -1092,68 +1188,84 @@ def compute_layout_visibility(
                         dz_vis_accum[dz_id][0] += 1.0
                         dz_vis_accum[dz_id][1] += 1
                     if observer_in_expanded_dz:
-                        for (
-                            other_id,
-                            _other_polys,
-                            other_samples,
-                        ) in dz_data:
+                        for other_id, _, _ in dz_data:
                             if other_id != dz_id:
                                 key = f"{other_id}_from_{dz_id}"
                                 if key in dz_cross_seen:
                                     dz_cross_obs_count[key] += 1
-                                    dz_cross_seen[key].update(
-                                        range(len(other_samples))
-                                    )
+                                    dz_cross_seen[key][:] = True
                         if has_objectives:
-                            for oi, obj_pts in enumerate(obj_sample_points):
-                                obj_seen_from_dz[dz_id][oi].update(
-                                    range(len(obj_pts))
-                                )
+                            for oi in range(len(obj_sample_points)):
+                                obj_seen_from_dz[dz_id][oi][:] = True
             continue
 
         vis_area = _polygon_area(vis_poly)
         ratio = min(vis_area / table_area, 1.0)
         total_ratio += ratio
 
-        # DZ visibility accumulation
+        # DZ visibility accumulation (single batched PIP per observer)
         if has_dzs:
-            for dz_id, dz_polys, dz_samples in dz_data:
-                observer_in_dz = _point_in_any_polygon(sx, sz, dz_polys)
-                observer_in_expanded_dz = (
-                    observer_in_dz
-                    or _point_near_any_polygon(
-                        sx, sz, dz_polys, DZ_EXPANSION_INCHES
-                    )
+            # Determine DZ membership for this observer
+            obs_in_dz: dict[str, bool] = {}
+            obs_in_expanded: dict[str, bool] = {}
+            for dz_id, dz_polys, _ in dz_data:
+                in_dz = _point_in_any_polygon(sx, sz, dz_polys)
+                obs_in_dz[dz_id] = in_dz
+                obs_in_expanded[dz_id] = in_dz or _point_near_any_polygon(
+                    sx, sz, dz_polys, DZ_EXPANSION_INCHES
                 )
-                if not observer_in_dz:
-                    # Observer outside this DZ: contributes to dz_visibility
-                    frac = _fraction_of_dz_visible(vis_poly, dz_samples)
-                    dz_vis_accum[dz_id][0] += frac
-                    dz_vis_accum[dz_id][1] += 1
-                if observer_in_expanded_dz:
-                    # Observer in expanded DZ: mark visible target samples
-                    for (
-                        other_id,
-                        _other_polys,
-                        other_samples,
-                    ) in dz_data:
+
+            # Build combined point arrays + slice metadata
+            batch_x: list[np.ndarray] = []
+            batch_z: list[np.ndarray] = []
+            # Each entry: (purpose, key, n_points)
+            # key type varies by purpose: str for frac/cross, tuple for obj
+            batch_info: list[tuple[str, str | tuple[str, int], int]] = []
+
+            for dz_id, _, dz_samples in dz_data:
+                if not obs_in_dz[dz_id]:
+                    n = len(dz_np_x[dz_id])
+                    batch_x.append(dz_np_x[dz_id])
+                    batch_z.append(dz_np_z[dz_id])
+                    batch_info.append(("frac", dz_id, n))
+                if obs_in_expanded[dz_id]:
+                    for other_id, _, _ in dz_data:
                         if other_id != dz_id:
                             key = f"{other_id}_from_{dz_id}"
                             if key in dz_cross_seen:
                                 dz_cross_obs_count[key] += 1
-                                seen = dz_cross_seen[key]
-                                for i, (px, pz) in enumerate(other_samples):
-                                    if i not in seen:
-                                        if _point_in_polygon(px, pz, vis_poly):
-                                            seen.add(i)
-                    # Objective hidability: mark seen objective samples
+                                n = len(dz_np_x[other_id])
+                                batch_x.append(dz_np_x[other_id])
+                                batch_z.append(dz_np_z[other_id])
+                                batch_info.append(("cross", key, n))
                     if has_objectives:
-                        for oi, obj_pts in enumerate(obj_sample_points):
-                            seen = obj_seen_from_dz[dz_id][oi]
-                            for i, (px, pz) in enumerate(obj_pts):
-                                if i not in seen:
-                                    if _point_in_polygon(px, pz, vis_poly):
-                                        seen.add(i)
+                        for oi in range(len(obj_sample_points)):
+                            n = len(obj_np_x[oi])
+                            batch_x.append(obj_np_x[oi])
+                            batch_z.append(obj_np_z[oi])
+                            batch_info.append(("obj", (dz_id, oi), n))
+
+            if batch_x:
+                all_x = np.concatenate(batch_x)
+                all_z = np.concatenate(batch_z)
+                all_mask = _vectorized_pip_mask(all_x, all_z, vis_poly)
+
+                offset = 0
+                for purpose, batch_key, n in batch_info:
+                    chunk = all_mask[offset : offset + n]
+                    if purpose == "frac":
+                        assert isinstance(batch_key, str)
+                        frac = int(np.sum(chunk)) / n if n > 0 else 0.0
+                        dz_vis_accum[batch_key][0] += frac
+                        dz_vis_accum[batch_key][1] += 1
+                    elif purpose == "cross":
+                        assert isinstance(batch_key, str)
+                        dz_cross_seen[batch_key] |= chunk
+                    elif purpose == "obj":
+                        assert isinstance(batch_key, tuple)
+                        dz_id_obj, oi = batch_key
+                        obj_seen_from_dz[dz_id_obj][oi] |= chunk
+                    offset += n
 
     avg_visibility = total_ratio / len(sample_points)
     value = round(avg_visibility * 100.0, 2)
@@ -1188,7 +1300,7 @@ def compute_layout_visibility(
                 "observer_count": obs_count,
             }
 
-        for key, seen_set in dz_cross_seen.items():
+        for key, seen_mask in dz_cross_seen.items():
             # Extract target_id from key (format: "target_from_observer")
             parts = key.split("_from_")
             target_id = parts[0]
@@ -1197,7 +1309,7 @@ def compute_layout_visibility(
                 if did == target_id:
                     target_samples_count = len(ds)
                     break
-            hidden_count = target_samples_count - len(seen_set)
+            hidden_count = target_samples_count - int(np.sum(seen_mask))
             hidden_pct = (
                 round(hidden_count / target_samples_count * 100.0, 2)
                 if target_samples_count > 0
@@ -1243,8 +1355,8 @@ def compute_layout_visibility(
                     if total_pts == 0:
                         continue
                     # Build set of hidden indices (complement of seen)
-                    seen = obj_seen_from_dz[dz.id][oi]
-                    hidden = {i for i in range(total_pts) if i not in seen}
+                    seen_mask = obj_seen_from_dz[dz.id][oi]
+                    hidden = set(np.where(~seen_mask)[0].tolist())
                     if not hidden:
                         continue
                     obj_marker = mission.objectives[oi]
@@ -1279,5 +1391,25 @@ def compute_layout_visibility(
                         }
 
             result["objective_hidability"] = objective_hidability
+
+    # Dual-pass infantry visibility: if enabled and intermediate shapes exist,
+    # compute a second pass at the infantry blocking height and merge.
+    if infantry_blocking_height is not None and _has_intermediate_shapes(
+        layout, objects_by_id, infantry_blocking_height, min_blocking_height
+    ):
+        infantry_result = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=infantry_blocking_height,
+            visibility_cache=visibility_cache,
+            infantry_blocking_height=None,  # prevent recursion
+            overall_only=overall_only,
+        )
+        return _merge_dual_pass_results(
+            result,
+            infantry_result,
+            min_blocking_height,
+            infantry_blocking_height,
+        )
 
     return result

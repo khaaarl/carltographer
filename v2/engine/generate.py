@@ -74,6 +74,8 @@ def _compute_score(
     scoring_targets: ScoringTargets | None = None,
     visibility_cache: VisibilityCache | None = None,
     phase2_base: float = 10.0,
+    standard_blocking_height: float = 4.0,
+    infantry_blocking_height: float | None = 2.2,
 ) -> float:
     """Compute fitness score for hill-climbing.
 
@@ -95,8 +97,21 @@ def _compute_score(
     if skip_visibility:
         return phase2_base
 
+    # Skip expensive DZ/objective PIP tests during scoring when those
+    # metrics aren't needed — saves ~60% per visibility call.
+    needs_dz = scoring_targets is not None and (
+        scoring_targets.dz_visibility_target is not None
+        or scoring_targets.dz_hidden_target is not None
+        or scoring_targets.objective_hidability_target is not None
+    )
+
     vis = compute_layout_visibility(
-        layout, objects_by_id, visibility_cache=visibility_cache
+        layout,
+        objects_by_id,
+        min_blocking_height=standard_blocking_height,
+        visibility_cache=visibility_cache,
+        infantry_blocking_height=infantry_blocking_height,
+        overall_only=not needs_dz,
     )
 
     if scoring_targets is None:
@@ -210,6 +225,8 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
         params.scoring_targets,
         visibility_cache=vis_cache,
         phase2_base=tuning.phase2_base,
+        standard_blocking_height=params.standard_blocking_height,
+        infantry_blocking_height=params.infantry_blocking_height,
     )
 
     for _ in range(params.num_steps):
@@ -234,6 +251,8 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
             params.scoring_targets,
             visibility_cache=vis_cache,
             phase2_base=tuning.phase2_base,
+            standard_blocking_height=params.standard_blocking_height,
+            infantry_blocking_height=params.infantry_blocking_height,
         )
         if new_score >= current_score:
             current_score = new_score
@@ -243,7 +262,11 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
 
     if not params.skip_visibility:
         layout.visibility = compute_layout_visibility(
-            layout, objects_by_id, visibility_cache=vis_cache
+            layout,
+            objects_by_id,
+            min_blocking_height=params.standard_blocking_height,
+            visibility_cache=vis_cache,
+            infantry_blocking_height=params.infantry_blocking_height,
         )
 
     layout.terrain_objects = _collect_layout_objects(layout, objects_by_id)
@@ -330,6 +353,8 @@ def _generate_tempering(
             params.scoring_targets,
             visibility_cache=vis_cache,
             phase2_base=tuning.phase2_base,
+            standard_blocking_height=params.standard_blocking_height,
+            infantry_blocking_height=params.infantry_blocking_height,
         )
         replicas.append(
             _TemperingReplica(
@@ -401,6 +426,8 @@ def _generate_tempering(
                     params.scoring_targets,
                     visibility_cache=replica.vis_cache,
                     phase2_base=tuning.phase2_base,
+                    standard_blocking_height=params.standard_blocking_height,
+                    infantry_blocking_height=params.infantry_blocking_height,
                 )
 
                 if sa_accept(
@@ -435,7 +462,11 @@ def _generate_tempering(
     if not params.skip_visibility:
         best_vis_cache = VisibilityCache(best_layout, objects_by_id)
         best_layout.visibility = compute_layout_visibility(
-            best_layout, objects_by_id, visibility_cache=best_vis_cache
+            best_layout,
+            objects_by_id,
+            min_blocking_height=params.standard_blocking_height,
+            visibility_cache=best_vis_cache,
+            infantry_blocking_height=params.infantry_blocking_height,
         )
 
     best_layout.terrain_objects = _collect_layout_objects(

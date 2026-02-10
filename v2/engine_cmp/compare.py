@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 # Add parent directory to path to import engine modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -136,8 +136,37 @@ def compare_layouts(layout1: dict, layout2: dict) -> tuple[bool, list[str]]:
     return len(diffs) == 0, diffs
 
 
+def _compare_sub_passes(
+    entry1: dict, entry2: dict, prefix: str, tolerance: float = 0.01
+) -> list[str]:
+    """Compare standard/infantry sub-dicts within a visibility entry."""
+    diffs = []
+    for pass_name in ("standard", "infantry"):
+        sub1 = entry1.get(pass_name)
+        sub2 = entry2.get(pass_name)
+        if (sub1 is None) != (sub2 is None):
+            diffs.append(
+                f"{prefix} {pass_name}: one is None, other is not "
+                f"(py={sub1 is not None}, rs={sub2 is not None})"
+            )
+        elif sub1 is not None and sub2 is not None:
+            v1 = sub1.get("value", 0.0)
+            v2 = sub2.get("value", 0.0)
+            if abs(v1 - v2) > tolerance:
+                diffs.append(f"{prefix} {pass_name} value: {v1} vs {v2}")
+            sc1 = sub1.get("sample_count", 0)
+            sc2 = sub2.get("sample_count", 0)
+            if sc1 != sc2:
+                diffs.append(
+                    f"{prefix} {pass_name} sample_count: {sc1} vs {sc2}"
+                )
+    return diffs
+
+
 def compare_visibility(
-    vis1: dict | None, vis2: dict | None
+    vis1: dict | None,
+    vis2: dict | None,
+    tolerance: float = 0.01,
 ) -> tuple[bool, list[str]]:
     """Compare visibility results between engines.
 
@@ -157,13 +186,16 @@ def compare_visibility(
 
     v1 = o1.get("value", 0.0)
     v2 = o2.get("value", 0.0)
-    if abs(v1 - v2) > 0.01:
+    if abs(v1 - v2) > tolerance:
         diffs.append(f"Visibility value: {v1} vs {v2}")
 
     s1 = o1.get("sample_count", 0)
     s2 = o2.get("sample_count", 0)
     if s1 != s2:
         diffs.append(f"Visibility sample_count: {s1} vs {s2}")
+
+    # Compare standard/infantry sub-passes on overall
+    diffs.extend(_compare_sub_passes(o1, o2, "overall", tolerance))
 
     # Compare DZ visibility
     dz1 = vis1.get("dz_visibility")
@@ -182,8 +214,13 @@ def compare_visibility(
             else:
                 dv1 = dz1[key].get("value", 0.0)
                 dv2 = dz2[key].get("value", 0.0)
-                if abs(dv1 - dv2) > 0.01:
+                if abs(dv1 - dv2) > tolerance:
                     diffs.append(f"dz_visibility[{key}] value: {dv1} vs {dv2}")
+                diffs.extend(
+                    _compare_sub_passes(
+                        dz1[key], dz2[key], f"dz_visibility[{key}]", tolerance
+                    )
+                )
 
     # Compare DZ-to-DZ visibility
     cross1 = vis1.get("dz_to_dz_visibility")
@@ -202,10 +239,18 @@ def compare_visibility(
             else:
                 cv1 = cross1[key].get("value", 0.0)
                 cv2 = cross2[key].get("value", 0.0)
-                if abs(cv1 - cv2) > 0.01:
+                if abs(cv1 - cv2) > tolerance:
                     diffs.append(
                         f"dz_to_dz_visibility[{key}] value: {cv1} vs {cv2}"
                     )
+                diffs.extend(
+                    _compare_sub_passes(
+                        cross1[key],
+                        cross2[key],
+                        f"dz_to_dz_visibility[{key}]",
+                        tolerance,
+                    )
+                )
 
     # Compare objective hidability
     oh1 = vis1.get("objective_hidability")
@@ -224,7 +269,7 @@ def compare_visibility(
             else:
                 ov1 = oh1[key].get("value", 0.0)
                 ov2 = oh2[key].get("value", 0.0)
-                if abs(ov1 - ov2) > 0.01:
+                if abs(ov1 - ov2) > tolerance:
                     diffs.append(
                         f"objective_hidability[{key}] value: {ov1} vs {ov2}"
                     )
@@ -234,6 +279,14 @@ def compare_visibility(
                     diffs.append(
                         f"objective_hidability[{key}] safe_count: {sc1} vs {sc2}"
                     )
+                diffs.extend(
+                    _compare_sub_passes(
+                        oh1[key],
+                        oh2[key],
+                        f"objective_hidability[{key}]",
+                        tolerance,
+                    )
+                )
 
     return len(diffs) == 0, diffs
 
@@ -279,7 +332,9 @@ def compare_missions(
     return len(diffs) == 0, diffs
 
 
-def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
+def compare_results(
+    result1: dict, result2: dict, visibility_tolerance: float = 0.01
+) -> tuple[bool, list[str]]:
     """Compare full EngineResult objects.
 
     Returns (match: bool, diffs: list of error messages).
@@ -295,7 +350,9 @@ def compare_results(result1: dict, result2: dict) -> tuple[bool, list[str]]:
     # Compare visibility
     vis1 = layout1.get("visibility")
     vis2 = layout2.get("visibility")
-    vis_match, vis_diffs = compare_visibility(vis1, vis2)
+    vis_match, vis_diffs = compare_visibility(
+        vis1, vis2, tolerance=visibility_tolerance
+    )
     if not vis_match:
         diffs.extend(vis_diffs)
 
@@ -478,6 +535,140 @@ def make_quantity_limited_catalog() -> TerrainCatalog:
     )
 
 
+def _make_wall_catalog(include_short: bool = True) -> TerrainCatalog:
+    """Catalog for infantry visibility tests.
+
+    Contains a tall wall (5.0") that blocks both standard and infantry LOS,
+    and optionally a short wall (2.5") that blocks infantry only.
+    """
+    objects = [
+        CatalogObject(
+            item=TerrainObject(
+                id="tall_wall",
+                shapes=[Shape(width=1.0, depth=24.0, height=5.0)],
+                name="Tall Wall",
+                tags=["obstacle"],
+            ),
+            quantity=None,
+        ),
+    ]
+    features = [
+        CatalogFeature(
+            item=TerrainFeature(
+                id="tall_wall",
+                feature_type="obstacle",
+                components=[FeatureComponent(object_id="tall_wall")],
+                tags=["obstacle"],
+            ),
+            quantity=None,
+        ),
+    ]
+    if include_short:
+        objects.append(
+            CatalogObject(
+                item=TerrainObject(
+                    id="short_wall",
+                    shapes=[Shape(width=1.0, depth=24.0, height=2.5)],
+                    name="Short Wall",
+                    tags=["obstacle"],
+                ),
+                quantity=None,
+            ),
+        )
+        features.append(
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="short_wall",
+                    feature_type="obstacle",
+                    components=[FeatureComponent(object_id="short_wall")],
+                    tags=["obstacle"],
+                ),
+                quantity=None,
+            ),
+        )
+    return TerrainCatalog(
+        objects=objects,
+        features=features,
+        name="Wall Catalog",
+    )
+
+
+def _validate_infantry_dual_pass(py_dict: dict, rs_dict: dict) -> list[str]:
+    """Validate dual-pass infantry visibility produces correct hidability.
+
+    With a tall wall (5") on objective 2 and a short wall (2.5") on objective 3:
+    - Standard pass: 1 of 5 objectives hidden (only behind the tall wall)
+    - Infantry pass: 2 of 5 objectives hidden (behind both walls)
+    """
+    diffs = []
+    for engine_name, result in [("Python", py_dict), ("Rust", rs_dict)]:
+        vis = result.get("layout", {}).get("visibility", {})
+        oh = vis.get("objective_hidability", {})
+        if not oh:
+            diffs.append(f"{engine_name}: missing objective_hidability")
+            continue
+        for dz_id in ("green", "red"):
+            entry = oh.get(dz_id, {})
+            std = entry.get("standard")
+            inf = entry.get("infantry")
+            if std is None:
+                diffs.append(
+                    f"{engine_name} {dz_id}: missing 'standard' sub-dict"
+                )
+                continue
+            if inf is None:
+                diffs.append(
+                    f"{engine_name} {dz_id}: missing 'infantry' sub-dict"
+                )
+                continue
+            std_safe = std.get("safe_count")
+            if std_safe != 1:
+                diffs.append(
+                    f"{engine_name} {dz_id} standard safe_count: "
+                    f"{std_safe} (expected 1)"
+                )
+            inf_safe = inf.get("safe_count")
+            if inf_safe != 2:
+                diffs.append(
+                    f"{engine_name} {dz_id} infantry safe_count: "
+                    f"{inf_safe} (expected 2)"
+                )
+    return diffs
+
+
+def _validate_infantry_no_intermediate(
+    py_dict: dict, rs_dict: dict
+) -> list[str]:
+    """Validate that without intermediate shapes, no infantry sub-dicts exist.
+
+    With only a tall wall (5") which is above both thresholds, there are no
+    shapes in the [infantry, standard) range, so the infantry pass is skipped.
+    """
+    diffs = []
+    for engine_name, result in [("Python", py_dict), ("Rust", rs_dict)]:
+        vis = result.get("layout", {}).get("visibility", {})
+        oh = vis.get("objective_hidability", {})
+        if not oh:
+            diffs.append(f"{engine_name}: missing objective_hidability")
+            continue
+        for dz_id in ("green", "red"):
+            entry = oh.get(dz_id, {})
+            safe = entry.get("safe_count")
+            if safe != 1:
+                diffs.append(
+                    f"{engine_name} {dz_id} safe_count: {safe} (expected 1)"
+                )
+            if "standard" in entry:
+                diffs.append(
+                    f"{engine_name} {dz_id}: unexpected 'standard' sub-dict"
+                )
+            if "infantry" in entry:
+                diffs.append(
+                    f"{engine_name} {dz_id}: unexpected 'infantry' sub-dict"
+                )
+    return diffs
+
+
 def make_test_params(
     seed: int = 42,
     num_steps: int = 100,
@@ -499,6 +690,8 @@ def make_test_params(
     rotation_granularity_deg: float = 15.0,
     initial_layout: Optional[TerrainLayout] = None,
     tuning: Optional[TuningParams] = None,
+    standard_blocking_height: float = 4.0,
+    infantry_blocking_height: Optional[float] = 2.2,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -522,6 +715,8 @@ def make_test_params(
         swap_interval=swap_interval,
         max_temperature=max_temperature,
         tuning=tuning,
+        standard_blocking_height=standard_blocking_height,
+        infantry_blocking_height=infantry_blocking_height,
     )
 
 
@@ -550,6 +745,10 @@ class TestScenario:
     rotation_granularity_deg: float = 15.0
     initial_layout: Optional[TerrainLayout] = None
     tuning: Optional[TuningParams] = None
+    standard_blocking_height: float = 4.0
+    infantry_blocking_height: Optional[float] = 2.2
+    validate_fn: Optional[Callable[[dict, dict], list[str]]] = None
+    visibility_tolerance: float = 0.01
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -574,6 +773,8 @@ class TestScenario:
             rotation_granularity_deg=self.rotation_granularity_deg,
             initial_layout=self.initial_layout,
             tuning=self.tuning,
+            standard_blocking_height=self.standard_blocking_height,
+            infantry_blocking_height=self.infantry_blocking_height,
         )
 
 
@@ -588,6 +789,14 @@ def _require_mission(deployment_name: str) -> dict:
         raise ValueError(f"Mission {deployment_name!r} not found")
     return m
 
+
+# TODO: Most scenarios below use the standard test catalog (2" crates), which
+# is BELOW the 4.0" blocking threshold. That means no LOS segments are ever
+# created, every observer hits the "no segments" fast path, and the angular
+# sweep + DZ PIP code paths are never exercised. Only the infantry_vis_*
+# scenarios (which use 5" walls) actually test the expensive visibility path.
+# We need scenarios with tall blocking terrain (>= 4") + missions to properly
+# validate parity on the full visibility computation, not just the fast path.
 
 # Test scenarios
 TEST_SCENARIOS = [
@@ -940,6 +1149,85 @@ TEST_SCENARIOS = [
             ],
         ),
     ),
+    # -- Infantry visibility ---
+    # Focused zero-step tests with hand-crafted layouts for correctness checks.
+    # Tall wall (5.0"h) at objective 2 (0, -16): blocks both standard + infantry.
+    # Short wall (2.5"h) at objective 3 (0, 16): blocks infantry only (2.5 < 4.0).
+    # Walls are 1" wide × 24" deep to fully shadow the objective from both DZs.
+    TestScenario(
+        "infantry_vis_dual_pass",
+        seed=42,
+        num_steps=0,
+        num_replicas=1,
+        catalog=_make_wall_catalog(include_short=True),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+        initial_layout=TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="tall_wall",
+                        feature_type="obstacle",
+                        components=[FeatureComponent(object_id="tall_wall")],
+                    ),
+                    transform=Transform(x=0.0, z=-16.0, rotation_deg=0.0),
+                ),
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="short_wall",
+                        feature_type="obstacle",
+                        components=[FeatureComponent(object_id="short_wall")],
+                    ),
+                    transform=Transform(x=0.0, z=16.0, rotation_deg=0.0),
+                ),
+            ],
+            terrain_objects=[
+                TerrainObject(
+                    id="tall_wall",
+                    shapes=[Shape(width=1.0, depth=24.0, height=5.0)],
+                ),
+                TerrainObject(
+                    id="short_wall",
+                    shapes=[Shape(width=1.0, depth=24.0, height=2.5)],
+                ),
+            ],
+        ),
+        validate_fn=_validate_infantry_dual_pass,
+        visibility_tolerance=0.15,
+    ),
+    # Same mission, only the tall wall — no intermediate shapes exist,
+    # so the infantry pass should be skipped entirely.
+    TestScenario(
+        "infantry_vis_no_intermediate",
+        seed=42,
+        num_steps=0,
+        num_replicas=1,
+        catalog=_make_wall_catalog(include_short=False),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+        initial_layout=TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="tall_wall",
+                        feature_type="obstacle",
+                        components=[FeatureComponent(object_id="tall_wall")],
+                    ),
+                    transform=Transform(x=0.0, z=-16.0, rotation_deg=0.0),
+                ),
+            ],
+            terrain_objects=[
+                TerrainObject(
+                    id="tall_wall",
+                    shapes=[Shape(width=1.0, depth=24.0, height=5.0)],
+                ),
+            ],
+        ),
+        validate_fn=_validate_infantry_no_intermediate,
+        visibility_tolerance=0.15,
+    ),
     # -- Feature locking ---
     TestScenario(
         "locked_features",
@@ -998,6 +1286,13 @@ def params_to_json_dict(params: EngineParams) -> dict:
                                 **(
                                     {"offset": shape.offset.to_dict()}
                                     if shape.offset
+                                    else {}
+                                ),
+                                **(
+                                    {
+                                        "opacity_height_inches": shape.opacity_height_inches
+                                    }
+                                    if shape.opacity_height_inches is not None
                                     else {}
                                 ),
                             }
@@ -1107,6 +1402,20 @@ def params_to_json_dict(params: EngineParams) -> dict:
             if params.tuning is not None
             else {}
         ),
+        **(
+            {
+                "standard_blocking_height_inches": params.standard_blocking_height
+            }
+            if params.standard_blocking_height != 4.0
+            else {}
+        ),
+        **(
+            {
+                "infantry_blocking_height_inches": params.infantry_blocking_height
+            }
+            if params.infantry_blocking_height != 2.2
+            else {}
+        ),
     }
 
 
@@ -1125,12 +1434,17 @@ class ComparisonTiming:
 def run_comparison(
     params: EngineParams,
     verbose: bool = False,
+    validate_fn: Optional[Callable[[dict, dict], list[str]]] = None,
+    visibility_tolerance: float = 0.01,
 ) -> tuple[bool, list[str], ComparisonTiming | None]:
     """Execute both engines and compare results.
 
     Args:
         params: Engine parameters
         verbose: Print detailed comparison output
+        validate_fn: Optional callback to validate correctness of results.
+            Receives (py_dict, rs_dict) and returns list of error messages.
+        visibility_tolerance: Tolerance for visibility value comparisons.
 
     Returns:
         (success: bool, diffs: list of error messages, timing or None on error)
@@ -1181,9 +1495,16 @@ def run_comparison(
     timing = ComparisonTiming(python_secs=py_secs, rust_secs=rs_secs)
 
     # Compare results
-    match, compare_diffs = compare_results(py_dict, rs_dict)
+    match, compare_diffs = compare_results(
+        py_dict, rs_dict, visibility_tolerance=visibility_tolerance
+    )
     if not match:
         diffs.extend(compare_diffs)
+
+    # Run correctness validation if provided
+    if validate_fn is not None:
+        validation_diffs = validate_fn(py_dict, rs_dict)
+        diffs.extend(validation_diffs)
 
     if verbose and diffs:
         print("\nDifferences found:")
@@ -1211,15 +1532,28 @@ def main():
         action="store_true",
         help="Print detailed comparison output",
     )
+    parser.add_argument(
+        "--newest-first",
+        action="store_true",
+        help="Run scenarios in reverse order (newest first)",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop on first failure",
+    )
 
     args = parser.parse_args()
 
-    scenarios = TEST_SCENARIOS
+    scenarios = list(TEST_SCENARIOS)
     if args.scenario:
-        scenarios = [s for s in TEST_SCENARIOS if s.name == args.scenario]
+        scenarios = [s for s in scenarios if s.name == args.scenario]
         if not scenarios:
             print(f"Scenario '{args.scenario}' not found")
             return 1
+
+    if args.newest_first:
+        scenarios = list(reversed(scenarios))
 
     passed = 0
     failed = 0
@@ -1227,7 +1561,12 @@ def main():
 
     for scenario in scenarios:
         params = scenario.make_params()
-        success, diffs, timing = run_comparison(params, verbose=args.verbose)
+        success, diffs, timing = run_comparison(
+            params,
+            verbose=args.verbose,
+            validate_fn=scenario.validate_fn,
+            visibility_tolerance=scenario.visibility_tolerance,
+        )
 
         if timing:
             time_str = (
@@ -1248,6 +1587,9 @@ def main():
                 for diff in diffs:
                     print(f"    {diff}")
             failed += 1
+            if args.fail_fast:
+                print(f"\n{passed} passed, {failed} failed (stopped early)")
+                return 1
 
     print(f"\n{passed} passed, {failed} failed ({total_time:.2f}s total)")
 

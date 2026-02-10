@@ -896,3 +896,235 @@ class TestExpandedDZ:
         # With expanded DZ, observer_count should be > 0 for both directions
         assert cross["red_from_green"]["observer_count"] > 0
         assert cross["green_from_red"]["observer_count"] > 0
+
+
+# -- Infantry visibility (dual-height LOS) tests --
+
+
+class TestEffectiveOpacityHeight:
+    def test_default_uses_physical_height(self):
+        """When opacity_height_inches is None, use physical height."""
+        s = Shape(width=5, depth=5, height=6.0)
+        assert s.effective_opacity_height() == 6.0
+
+    def test_override_uses_opacity(self):
+        """When opacity_height_inches is set, use it."""
+        s = Shape(width=5, depth=5, height=6.0, opacity_height_inches=3.0)
+        assert s.effective_opacity_height() == 3.0
+
+    def test_zero_opacity(self):
+        """Zero opacity_height_inches means transparent."""
+        s = Shape(width=5, depth=5, height=6.0, opacity_height_inches=0.0)
+        assert s.effective_opacity_height() == 0.0
+
+
+class TestHasIntermediateShapes:
+    def test_shape_in_range(self):
+        """A 3" tall shape is in [2.2, 4.0) -> True."""
+        from engine.visibility import _has_intermediate_shapes
+
+        obj = _make_object("box", 5, 5, 3.0)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        assert _has_intermediate_shapes(layout, {"box": obj}, 2.2, 4.0)
+
+    def test_all_above_standard(self):
+        """A 5" tall shape is above 4.0 -> False."""
+        from engine.visibility import _has_intermediate_shapes
+
+        obj = _make_object("box", 5, 5, 5.0)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        assert not _has_intermediate_shapes(layout, {"box": obj}, 2.2, 4.0)
+
+    def test_all_below_infantry(self):
+        """A 2.0" tall shape is below 2.2 -> False."""
+        from engine.visibility import _has_intermediate_shapes
+
+        obj = _make_object("box", 5, 5, 2.0)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        assert not _has_intermediate_shapes(layout, {"box": obj}, 2.2, 4.0)
+
+    def test_opacity_override_in_range(self):
+        """Shape with height=6, opacity_height=3 -> in [2.2, 4.0) -> True."""
+        from engine.visibility import _has_intermediate_shapes
+
+        obj = TerrainObject(
+            id="box",
+            shapes=[
+                Shape(width=5, depth=5, height=6.0, opacity_height_inches=3.0)
+            ],
+        )
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        assert _has_intermediate_shapes(layout, {"box": obj}, 2.2, 4.0)
+
+    def test_obscuring_ignored(self):
+        """Obscuring features are excluded from intermediate check."""
+        from engine.visibility import _has_intermediate_shapes
+
+        obj = _make_object("ruins", 12, 6, 3.0)
+        feat = _make_feature("f1", "ruins", "obscuring")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        assert not _has_intermediate_shapes(layout, {"ruins": obj}, 2.2, 4.0)
+
+
+class TestInfantryVisibility:
+    def test_infantry_disabled_no_sub_dicts(self):
+        """infantry_blocking_height=None -> standard-only format."""
+        obj = _make_object("box", 5, 5, 3.0)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"box": obj}
+
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=None
+        )
+        overall = result["overall"]
+        assert "standard" not in overall
+        assert "infantry" not in overall
+        assert "value" in overall
+
+    def test_no_intermediate_shapes_no_sub_dicts(self):
+        """All shapes above standard height -> infantry pass skipped."""
+        obj = _make_object("box", 5, 5, 5.0)  # 5" > 4.0"
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"box": obj}
+
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=2.2
+        )
+        overall = result["overall"]
+        # No intermediate shapes -> no infantry pass -> standard format
+        assert "standard" not in overall
+        assert "infantry" not in overall
+
+    def test_intermediate_shapes_trigger_dual_pass(self):
+        """Shape at 3" with infantry_blocking_height=2.2 -> dual pass."""
+        obj = _make_object("box", 5, 5, 3.0)  # 3" in [2.2, 4.0)
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"box": obj}
+
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=2.2
+        )
+        overall = result["overall"]
+        assert "standard" in overall
+        assert "infantry" in overall
+        assert "value" in overall
+        # Standard pass: 3" shape is below 4.0 -> doesn't block -> ~100%
+        assert overall["standard"]["value"] == 100.0
+        # Infantry pass: 3" shape blocks at 2.2 -> < 100%
+        assert overall["infantry"]["value"] < 100.0
+        # Average should be between the two
+        avg = (overall["standard"]["value"] + overall["infantry"]["value"]) / 2
+        assert abs(overall["value"] - round(avg, 2)) < 0.01
+
+    def test_opacity_override_affects_blocking(self):
+        """Shape with height=6, opacity_height=1 should NOT block at 2.2."""
+        obj = TerrainObject(
+            id="box",
+            shapes=[
+                Shape(width=5, depth=5, height=6.0, opacity_height_inches=1.0)
+            ],
+        )
+        feat = _make_feature("f1", "box", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"box": obj}
+
+        # opacity_height=1.0 < infantry_height=2.2 < standard=4.0
+        # -> NOT an intermediate shape -> no infantry pass
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=2.2
+        )
+        assert "standard" not in result["overall"]
+
+        # Also check that the standard pass treats it correctly:
+        # opacity_height=1.0 < standard=4.0, so it doesn't block at all
+        assert result["overall"]["value"] == 100.0
+
+    def test_opacity_affects_segments(self):
+        """Shape with height=6, opacity_height=3 blocks infantry but not standard."""
+        obj = TerrainObject(
+            id="wall",
+            shapes=[
+                Shape(width=2, depth=10, height=6.0, opacity_height_inches=3.0)
+            ],
+        )
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"wall": obj}
+
+        # Standard pass (4.0): opacity 3.0 < 4.0 -> doesn't block
+        result_standard = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=4.0,
+            infantry_blocking_height=None,
+        )
+        assert result_standard["overall"]["value"] == 100.0
+
+        # Infantry pass (2.2): opacity 3.0 >= 2.2 -> blocks
+        result_infantry = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=2.2,
+            infantry_blocking_height=None,
+        )
+        assert result_infantry["overall"]["value"] < 100.0
+
+    def test_infantry_with_dz_visibility(self):
+        """Infantry pass with DZs produces sub-dicts in dz_visibility."""
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        mission = _make_simple_mission([green_dz, red_dz])
+
+        # 3" tall wall -> intermediate shape -> triggers infantry pass
+        obj = _make_object("wall", 2, 20, 3.0)
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 0, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"wall": obj}
+
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=2.2
+        )
+
+        # Overall should have sub-dicts
+        assert "standard" in result["overall"]
+        assert "infantry" in result["overall"]
+
+        # DZ visibility should also have sub-dicts
+        assert "dz_visibility" in result
+        for dz_id in ["green", "red"]:
+            dz_entry = result["dz_visibility"][dz_id]
+            assert "standard" in dz_entry
+            assert "infantry" in dz_entry
+            assert "value" in dz_entry
+
+        # DZ-to-DZ should also have sub-dicts
+        assert "dz_to_dz_visibility" in result
+        for key in result["dz_to_dz_visibility"]:
+            entry = result["dz_to_dz_visibility"][key]
+            assert "standard" in entry
+            assert "infantry" in entry
+            assert "value" in entry

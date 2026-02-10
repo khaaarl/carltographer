@@ -192,12 +192,19 @@ def build_rust_engine() -> bool:
     return True
 
 
-def run_comparison_tests() -> bool:
+def run_comparison_tests(
+    newest_first: bool = False,
+    fail_fast: bool = False,
+) -> bool:
     log.step("Running engine comparison tests")
 
     cmd = [str(VENV_PYTHON), "-m", "engine_cmp.compare"]
     if not log.quiet:
         cmd.append("--verbose")
+    if newest_first:
+        cmd.append("--newest-first")
+    if fail_fast:
+        cmd.append("--fail-fast")
 
     try:
         run(cmd, cwd=str(V2_DIR))
@@ -238,6 +245,16 @@ def main() -> int:
         description="Build Rust engine and verify parity with Python engine"
     )
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
+    parser.add_argument(
+        "--newest-first",
+        action="store_true",
+        help="Run comparison scenarios newest first",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop on first comparison failure",
+    )
     args = parser.parse_args()
 
     global log
@@ -247,12 +264,15 @@ def main() -> int:
     log.info(f"v2_dir: {V2_DIR}")
     log.info(f"repo_root: {REPO_ROOT}")
 
-    steps = [
+    steps: list = [
         check_venv,
         check_rust,
         check_maturin,
         build_rust_engine,
-        run_comparison_tests,
+        lambda: run_comparison_tests(
+            newest_first=args.newest_first,
+            fail_fast=args.fail_fast,
+        ),
         verify_manifest,
     ]
 

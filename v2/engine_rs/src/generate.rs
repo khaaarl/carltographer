@@ -85,6 +85,8 @@ fn compute_score(
     scoring_targets: Option<&ScoringTargets>,
     visibility_cache: Option<&mut crate::visibility::VisibilityCache>,
     phase2_base: f64,
+    standard_blocking_height: f64,
+    infantry_blocking_height: Option<f64>,
 ) -> f64 {
     // Phase 1: gradient toward satisfying count preferences.
     let counts = count_features_by_type(&layout.placed_features, layout.rotationally_symmetric);
@@ -112,8 +114,9 @@ fn compute_score(
     let vis = crate::visibility::compute_layout_visibility(
         layout,
         objects_by_id,
-        4.0, // min_blocking_height
+        standard_blocking_height,
         visibility_cache,
+        infantry_blocking_height,
     );
 
     let targets = match scoring_targets {
@@ -239,6 +242,8 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         params.scoring_targets.as_ref(),
         vis_cache.as_mut(),
         tuning.phase2_base,
+        params.standard_blocking_height_inches,
+        params.infantry_blocking_height_inches,
     );
 
     for _ in 0..num_steps {
@@ -272,6 +277,8 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
             params.scoring_targets.as_ref(),
             vis_cache.as_mut(),
             tuning.phase2_base,
+            params.standard_blocking_height_inches,
+            params.infantry_blocking_height_inches,
         );
         if new_score >= current_score {
             current_score = new_score;
@@ -288,8 +295,9 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         layout.visibility = Some(crate::visibility::compute_layout_visibility(
             &layout,
             &objects_by_id,
-            4.0, // min_blocking_height
+            params.standard_blocking_height_inches,
             vis_cache.as_mut(),
+            params.infantry_blocking_height_inches,
         ));
     }
 
@@ -375,6 +383,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
             params.scoring_targets.as_ref(),
             None,
             tuning.phase2_base,
+            params.standard_blocking_height_inches,
+            params.infantry_blocking_height_inches,
         );
         replicas.push(Replica {
             layout,
@@ -466,6 +476,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                 params.scoring_targets.as_ref(),
                                 replica.vis_cache.as_mut(),
                                 tuning.phase2_base,
+                                params.standard_blocking_height_inches,
+                                params.infantry_blocking_height_inches,
                             );
 
                             if sa_accept(
@@ -559,8 +571,9 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
         best_layout.visibility = Some(crate::visibility::compute_layout_visibility(
             &best_layout,
             &objects_by_id,
-            4.0,
+            params.standard_blocking_height_inches,
             Some(&mut best_vis_cache),
+            params.infantry_blocking_height_inches,
         ));
     }
 
@@ -640,6 +653,8 @@ mod tests {
             swap_interval: 20,
             max_temperature: 50.0,
             tuning: None,
+            standard_blocking_height_inches: 4.0,
+            infantry_blocking_height_inches: Some(2.2),
         }
     }
 
@@ -725,6 +740,8 @@ mod tests {
             swap_interval: 20,
             max_temperature: 50.0,
             tuning: None,
+            standard_blocking_height_inches: 4.0,
+            infantry_blocking_height_inches: Some(2.2),
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());
@@ -878,6 +895,8 @@ mod tests {
             swap_interval: 20,
             max_temperature: 50.0,
             tuning: None,
+            standard_blocking_height_inches: 4.0,
+            infantry_blocking_height_inches: Some(2.2),
         };
 
         let result = generate(&params);

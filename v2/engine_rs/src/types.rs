@@ -31,6 +31,17 @@ pub struct GeometricShape {
     pub opacity_height_inches: Option<f64>,
 }
 
+impl GeometricShape {
+    /// Return the height used for LOS blocking.
+    ///
+    /// When `opacity_height_inches` is set, it overrides physical height
+    /// (e.g. a tall ruin with windows might only block at 3").
+    /// When `None`, physical height is used (backward compatible).
+    pub fn effective_opacity_height(&self) -> f64 {
+        self.opacity_height_inches.unwrap_or(self.height_inches)
+    }
+}
+
 // -- Objects / features --------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +238,10 @@ pub struct EngineParams {
     pub max_temperature: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuning: Option<TuningParams>,
+    #[serde(default = "default_standard_blocking_height")]
+    pub standard_blocking_height_inches: f64,
+    #[serde(default = "default_infantry_blocking_height")]
+    pub infantry_blocking_height_inches: Option<f64>,
 }
 
 fn default_rotation_granularity() -> f64 {
@@ -239,6 +254,13 @@ fn default_swap_interval() -> u32 {
 
 fn default_max_temperature() -> f64 {
     50.0
+}
+
+fn default_standard_blocking_height() -> f64 {
+    4.0
+}
+fn default_infantry_blocking_height() -> Option<f64> {
+    Some(2.2)
 }
 
 fn default_max_retries() -> u32 {

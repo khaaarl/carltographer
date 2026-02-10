@@ -208,7 +208,7 @@ fn precompute_segments(
                 };
                 let comp_t = comp.transform.as_ref().unwrap_or(&default_t);
                 for shape in &obj.shapes {
-                    if shape.height_inches < min_blocking_height {
+                    if shape.effective_opacity_height() < min_blocking_height {
                         continue;
                     }
                     let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
@@ -1015,6 +1015,98 @@ fn has_valid_hiding_square(
     false
 }
 
+/// Check if any non-obscuring placed feature shape has an effective opacity
+/// height in [infantry_height, standard_height). If so, the infantry pass
+/// would produce different results from the standard pass.
+fn has_intermediate_shapes(
+    layout: &TerrainLayout,
+    objects_by_id: &HashMap<String, &TerrainObject>,
+    infantry_height: f64,
+    standard_height: f64,
+) -> bool {
+    for pf in &layout.placed_features {
+        if pf.feature.feature_type == "obscuring" {
+            continue;
+        }
+        for comp in &pf.feature.components {
+            if let Some(obj) = objects_by_id.get(&comp.object_id) {
+                for shape in &obj.shapes {
+                    let h = shape.effective_opacity_height();
+                    if h >= infantry_height && h < standard_height {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Merge standard and infantry visibility results into a dual-pass output.
+/// For each section (overall, dz_visibility, etc.), sets the top-level "value"
+/// to the average of standard and infantry, and includes "standard"/"infantry"
+/// sub-dicts with the full breakdown.
+fn merge_dual_pass_results(
+    standard: &serde_json::Value,
+    infantry: &serde_json::Value,
+) -> serde_json::Value {
+    let mut result = serde_json::Map::new();
+
+    // Helper: merge a single entry (with "value" key).
+    // Produces {"value": avg, "standard": std_entry, "infantry": inf_entry}.
+    let merge_entry =
+        |std_entry: &serde_json::Value, inf_entry: &serde_json::Value| -> serde_json::Value {
+            let std_val = std_entry
+                .get("value")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let inf_val = inf_entry
+                .get("value")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let avg = ((std_val + inf_val) / 2.0 * 100.0).round() / 100.0;
+
+            serde_json::json!({
+                "value": avg,
+                "standard": std_entry,
+                "infantry": inf_entry,
+            })
+        };
+
+    // Merge overall
+    let std_overall = &standard["overall"];
+    let inf_overall = &infantry["overall"];
+    result.insert("overall".into(), merge_entry(std_overall, inf_overall));
+
+    // Merge section dicts (dz_visibility, dz_to_dz_visibility, objective_hidability)
+    for section_key in &[
+        "dz_visibility",
+        "dz_to_dz_visibility",
+        "objective_hidability",
+    ] {
+        let std_section = standard.get(*section_key);
+        let inf_section = infantry.get(*section_key);
+        if let (Some(std_s), Some(inf_s)) = (std_section, inf_section) {
+            if let (Some(std_obj), Some(inf_obj)) = (std_s.as_object(), inf_s.as_object()) {
+                let mut merged_section = serde_json::Map::new();
+                for (key, std_entry) in std_obj {
+                    if let Some(inf_entry) = inf_obj.get(key) {
+                        merged_section.insert(key.clone(), merge_entry(std_entry, inf_entry));
+                    }
+                }
+                result.insert(
+                    (*section_key).into(),
+                    serde_json::Value::Object(merged_section),
+                );
+            }
+        } else if let Some(std_s) = std_section {
+            result.insert((*section_key).into(), std_s.clone());
+        }
+    }
+
+    serde_json::Value::Object(result)
+}
+
 /// Compute visibility score for a terrain layout.
 ///
 /// Samples observer positions on a grid across the table, computes
@@ -1028,6 +1120,7 @@ pub fn compute_layout_visibility(
     objects_by_id: &HashMap<String, &TerrainObject>,
     min_blocking_height: f64,
     visibility_cache: Option<&mut VisibilityCache>,
+    infantry_blocking_height: Option<f64>,
 ) -> serde_json::Value {
     let half_w = layout.table_width_inches / 2.0;
     let half_d = layout.table_depth_inches / 2.0;
@@ -1238,118 +1331,129 @@ pub fn compute_layout_visibility(
         })
     };
 
-    // Parallel observer loop: each rayon worker folds observers into
-    // its own ThreadAccum, then we reduce (merge) all accumulators.
-    let merged = sample_points
-        .par_iter()
+    // Deterministic parallel observer loop: fixed-size chunks processed in
+    // parallel, collected in index order, then merged sequentially.  This
+    // ensures floating-point accumulation order is independent of thread
+    // scheduling, producing bit-identical results across runs.
+    const CHUNK_SIZE: usize = 128;
+    let chunk_accums: Vec<Box<ThreadAccum>> = sample_points
+        .par_chunks(CHUNK_SIZE)
         .enumerate()
-        .fold(make_accum, |mut acc, (obs_idx, &(sx, sz))| {
-            get_observer_segments(&precomputed, sx, sz, &mut acc.segments);
-            let obs_dz = if has_dzs { observer_dz[obs_idx] } else { None };
-            let obs_expanded_dz = if has_dzs {
-                observer_expanded_dz[obs_idx]
-            } else {
-                None
-            };
+        .map(|(chunk_idx, chunk)| {
+            let mut acc = make_accum();
+            let base = chunk_idx * CHUNK_SIZE;
+            for (local, &(sx, sz)) in chunk.iter().enumerate() {
+                let obs_idx = base + local;
+                get_observer_segments(&precomputed, sx, sz, &mut acc.segments);
+                let obs_dz = if has_dzs { observer_dz[obs_idx] } else { None };
+                let obs_expanded_dz = if has_dzs {
+                    observer_expanded_dz[obs_idx]
+                } else {
+                    None
+                };
 
-            // Helper: accumulate for full visibility (no segments or degenerate polygon)
-            let accumulate_full = |acc: &mut ThreadAccum| {
-                acc.total_ratio += 1.0;
+                // Helper: accumulate for full visibility (no segments or degenerate polygon)
+                let accumulate_full = |acc: &mut ThreadAccum| {
+                    acc.total_ratio += 1.0;
+                    if has_dzs {
+                        for di in 0..num_dzs {
+                            if obs_dz != Some(di) {
+                                acc.dz_vis_accum[di].0 += 1.0;
+                                acc.dz_vis_accum[di].1 += 1;
+                            }
+                            if obs_expanded_dz == Some(di) {
+                                for oi in 0..num_dzs {
+                                    if oi != di {
+                                        let pair = oi * num_dzs + di;
+                                        acc.dz_cross_obs_count[pair] += 1;
+                                        acc.dz_cross_seen[pair].fill(true);
+                                    }
+                                }
+                                if has_objectives {
+                                    for seen in acc.obj_seen_from_dz[di].iter_mut() {
+                                        seen.fill(true);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                if acc.segments.is_empty() {
+                    accumulate_full(&mut acc);
+                    continue;
+                }
+
+                compute_visibility_polygon(
+                    sx,
+                    sz,
+                    &acc.segments,
+                    &table_boundary,
+                    &mut acc.vis_bufs,
+                    &mut acc.vis_poly,
+                );
+                if acc.vis_poly.len() < 3 {
+                    accumulate_full(&mut acc);
+                    continue;
+                }
+
+                let vis_area = polygon_area(&acc.vis_poly);
+                let ratio = (vis_area / table_area).min(1.0);
+                acc.total_ratio += ratio;
+
                 if has_dzs {
-                    for di in 0..num_dzs {
+                    // Step 1: dz_visibility (Z-sorted binary search)
+                    for (di, dd) in dz_data.iter().enumerate() {
                         if obs_dz != Some(di) {
-                            acc.dz_vis_accum[di].0 += 1.0;
+                            let frac = fraction_of_dz_visible_zsorted(
+                                &acc.vis_poly,
+                                &dd.sorted_samples,
+                                &mut acc.pip_buf,
+                            );
+                            acc.dz_vis_accum[di].0 += frac;
                             acc.dz_vis_accum[di].1 += 1;
                         }
-                        if obs_expanded_dz == Some(di) {
-                            for oi in 0..num_dzs {
-                                if oi != di {
-                                    let pair = oi * num_dzs + di;
-                                    acc.dz_cross_obs_count[pair] += 1;
-                                    acc.dz_cross_seen[pair].fill(true);
-                                }
+                    }
+
+                    // Step 2: cross-DZ (Z-sorted, skip-seen)
+                    if let Some(my_dz) = obs_expanded_dz {
+                        for (oi, other_dd) in dz_data.iter().enumerate() {
+                            if oi == my_dz {
+                                continue;
                             }
-                            if has_objectives {
-                                for seen in acc.obj_seen_from_dz[di].iter_mut() {
-                                    seen.fill(true);
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-
-            if acc.segments.is_empty() {
-                accumulate_full(&mut acc);
-                return acc;
-            }
-
-            compute_visibility_polygon(
-                sx,
-                sz,
-                &acc.segments,
-                &table_boundary,
-                &mut acc.vis_bufs,
-                &mut acc.vis_poly,
-            );
-            if acc.vis_poly.len() < 3 {
-                accumulate_full(&mut acc);
-                return acc;
-            }
-
-            let vis_area = polygon_area(&acc.vis_poly);
-            let ratio = (vis_area / table_area).min(1.0);
-            acc.total_ratio += ratio;
-
-            if has_dzs {
-                // Step 1: dz_visibility (Z-sorted binary search)
-                for (di, dd) in dz_data.iter().enumerate() {
-                    if obs_dz != Some(di) {
-                        let frac = fraction_of_dz_visible_zsorted(
-                            &acc.vis_poly,
-                            &dd.sorted_samples,
-                            &mut acc.pip_buf,
-                        );
-                        acc.dz_vis_accum[di].0 += frac;
-                        acc.dz_vis_accum[di].1 += 1;
-                    }
-                }
-
-                // Step 2: cross-DZ (Z-sorted, skip-seen)
-                if let Some(my_dz) = obs_expanded_dz {
-                    for (oi, other_dd) in dz_data.iter().enumerate() {
-                        if oi == my_dz {
-                            continue;
-                        }
-                        let pair = oi * num_dzs + my_dz;
-                        acc.dz_cross_obs_count[pair] += 1;
-                        let seen = &mut acc.dz_cross_seen[pair];
-                        pip_zsorted_update_seen(
-                            &acc.vis_poly,
-                            &other_dd.sorted_samples,
-                            seen,
-                            &mut acc.pip_buf,
-                        );
-                    }
-                    // Step 3: objective hidability (Z-sorted, skip-seen)
-                    if has_objectives {
-                        for (oi, obj_sorted) in obj_sorted_samples.iter().enumerate() {
-                            let seen = &mut acc.obj_seen_from_dz[my_dz][oi];
+                            let pair = oi * num_dzs + my_dz;
+                            acc.dz_cross_obs_count[pair] += 1;
+                            let seen = &mut acc.dz_cross_seen[pair];
                             pip_zsorted_update_seen(
                                 &acc.vis_poly,
-                                obj_sorted,
+                                &other_dd.sorted_samples,
                                 seen,
                                 &mut acc.pip_buf,
                             );
                         }
+                        // Step 3: objective hidability (Z-sorted, skip-seen)
+                        if has_objectives {
+                            for (oi, obj_sorted) in obj_sorted_samples.iter().enumerate() {
+                                let seen = &mut acc.obj_seen_from_dz[my_dz][oi];
+                                pip_zsorted_update_seen(
+                                    &acc.vis_poly,
+                                    obj_sorted,
+                                    seen,
+                                    &mut acc.pip_buf,
+                                );
+                            }
+                        }
                     }
                 }
             }
-
             acc
         })
-        .reduce(make_accum, |mut a, b| {
-            // Merge accumulators: sum scalars, OR booleans
+        .collect();
+
+    // Sequential merge in index order (deterministic reduction).
+    let merged = chunk_accums
+        .into_iter()
+        .reduce(|mut a, b: Box<ThreadAccum>| {
             a.total_ratio += b.total_ratio;
             for di in 0..num_dzs {
                 a.dz_vis_accum[di].0 += b.dz_vis_accum[di].0;
@@ -1377,7 +1481,8 @@ pub fn compute_layout_visibility(
                 }
             }
             a
-        });
+        })
+        .unwrap_or_else(make_accum);
 
     let total_ratio = merged.total_ratio;
     let dz_vis_accum = merged.dz_vis_accum;
@@ -1523,6 +1628,20 @@ pub fn compute_layout_visibility(
         }
     }
 
+    // Dual-pass infantry visibility
+    if let Some(inf_height) = infantry_blocking_height {
+        if has_intermediate_shapes(layout, objects_by_id, inf_height, min_blocking_height) {
+            let infantry_result = compute_layout_visibility(
+                layout,
+                objects_by_id,
+                inf_height,
+                None, // don't reuse cache for different blocking height
+                None, // prevent infinite recursion
+            );
+            return merge_dual_pass_results(&result, &infantry_result);
+        }
+    }
+
     result
 }
 
@@ -1588,7 +1707,7 @@ mod tests {
     fn empty_battlefield_full_visibility() {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1601,7 +1720,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![pf]);
         let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
         assert!(val > 50.0);
@@ -1615,7 +1734,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![pf]);
         let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!((val - 100.0).abs() < 0.01);
     }
@@ -1628,7 +1747,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![pf]);
         let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("ruins".into(), &obj);
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         let val = result["overall"]["value"].as_f64().unwrap();
         assert!(val < 100.0);
     }
@@ -1749,7 +1868,7 @@ mod tests {
         };
         let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
 
         assert!(result.get("dz_visibility").is_some());
         let dz_vis = &result["dz_visibility"];
@@ -1769,7 +1888,7 @@ mod tests {
         };
         let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
 
         let cross = &result["dz_to_dz_visibility"];
         // No terrain -> nothing hidden -> 0%
@@ -1783,7 +1902,7 @@ mod tests {
     fn no_mission_no_dz_keys() {
         let layout = make_layout(60.0, 44.0, vec![]);
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         assert!(result.get("dz_visibility").is_none());
         assert!(result.get("dz_to_dz_visibility").is_none());
     }
@@ -1865,7 +1984,7 @@ mod tests {
         };
         let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
 
         assert!(result.get("objective_hidability").is_some());
         let oh = &result["objective_hidability"];
@@ -1882,7 +2001,8 @@ mod tests {
     fn tall_terrain_reduces_sample_count() {
         let empty_layout = make_layout(60.0, 44.0, vec![]);
         let empty_objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let empty_result = compute_layout_visibility(&empty_layout, &empty_objects, 4.0, None);
+        let empty_result =
+            compute_layout_visibility(&empty_layout, &empty_objects, 4.0, None, None);
         let empty_count = empty_result["overall"]["sample_count"].as_i64().unwrap();
 
         let obj = make_object("box", 10.0, 10.0, 2.0);
@@ -1891,7 +2011,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![pf]);
         let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         let filtered_count = result["overall"]["sample_count"].as_i64().unwrap();
 
         assert!(filtered_count < empty_count);
@@ -1901,7 +2021,8 @@ mod tests {
     fn short_terrain_does_not_reduce_sample_count() {
         let empty_layout = make_layout(60.0, 44.0, vec![]);
         let empty_objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let empty_result = compute_layout_visibility(&empty_layout, &empty_objects, 4.0, None);
+        let empty_result =
+            compute_layout_visibility(&empty_layout, &empty_objects, 4.0, None, None);
         let empty_count = empty_result["overall"]["sample_count"].as_i64().unwrap();
 
         let obj = make_object("box", 10.0, 10.0, 0.5);
@@ -1910,7 +2031,7 @@ mod tests {
         let layout = make_layout(60.0, 44.0, vec![pf]);
         let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
         objects.insert("box".into(), &obj);
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         let filtered_count = result["overall"]["sample_count"].as_i64().unwrap();
 
         assert_eq!(filtered_count, empty_count);
@@ -1928,7 +2049,7 @@ mod tests {
         };
         let layout = make_layout_with_mission(60.0, 44.0, vec![], Some(mission));
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
-        let result = compute_layout_visibility(&layout, &objects, 4.0, None);
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         assert!(result.get("objective_hidability").is_none());
     }
 

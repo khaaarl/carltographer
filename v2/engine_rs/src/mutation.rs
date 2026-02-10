@@ -698,6 +698,8 @@ mod tests {
             swap_interval: 20,
             max_temperature: 50.0,
             tuning: None,
+            standard_blocking_height_inches: 4.0,
+            infantry_blocking_height_inches: Some(2.2),
         }
     }
 

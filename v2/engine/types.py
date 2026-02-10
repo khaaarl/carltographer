@@ -36,6 +36,18 @@ class Shape:
     depth: float
     height: float
     offset: Transform | None = None
+    opacity_height_inches: float | None = None
+
+    def effective_opacity_height(self) -> float:
+        """Return the height used for LOS blocking.
+
+        When opacity_height_inches is set, it overrides physical height
+        (e.g. a tall ruin with windows might only block at 3").
+        When None, physical height is used (backward compatible).
+        """
+        if self.opacity_height_inches is not None:
+            return self.opacity_height_inches
+        return self.height
 
     @staticmethod
     def from_dict(d: dict) -> Shape:
@@ -45,6 +57,7 @@ class Shape:
             depth=d["depth_inches"],
             height=d["height_inches"],
             offset=(Transform.from_dict(offset_d) if offset_d else None),
+            opacity_height_inches=d.get("opacity_height_inches"),
         )
 
     def to_dict(self) -> dict:
@@ -56,6 +69,8 @@ class Shape:
         }
         if self.offset:
             d["offset"] = self.offset.to_dict()
+        if self.opacity_height_inches is not None:
+            d["opacity_height_inches"] = self.opacity_height_inches
         return d
 
 
@@ -465,6 +480,8 @@ class EngineParams:
     swap_interval: int = 20
     max_temperature: float = 50.0
     tuning: TuningParams | None = None
+    standard_blocking_height: float = 4.0
+    infantry_blocking_height: float | None = 2.2
 
     def get_tuning(self) -> TuningParams:
         return self.tuning if self.tuning is not None else TuningParams()
@@ -500,6 +517,12 @@ class EngineParams:
             swap_interval=d.get("swap_interval", 20),
             max_temperature=d.get("max_temperature", 50.0),
             tuning=TuningParams.from_dict(tu) if tu else None,
+            standard_blocking_height=d.get(
+                "standard_blocking_height_inches", 4.0
+            ),
+            infantry_blocking_height=d.get(
+                "infantry_blocking_height_inches", 2.2
+            ),
         )
 
 
