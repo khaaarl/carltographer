@@ -2,7 +2,7 @@
 
 This document organizes the planned features for terrain catalog customization, dynamic assembly, manual placement, and Tabletop Simulator integration. Each feature has a unique ID for dependency tracking.
 
-This is a living document — update the **Status** fields as features progress.
+This is a living document — update the **Status** fields as features progress (states: **Not Started**, **In Progress**, **Done**). When a blocking feature is completed, annotate it as `(Done)` in downstream **Blocked by** fields.
 
 ---
 
@@ -61,7 +61,7 @@ Add a flexible tagging system to terrain objects and features, complementing (no
 ### B2. Tag-based Scoring & Constraints
 
 **Status:** Not Started
-**Blocked by:** B1
+**Blocked by:** B1 (Done)
 
 Extend the engine's feature count preferences and visibility scoring to work with tags. For example, "at least 4 features tagged `obscuring`" rather than (or in addition to) "at least 4 features of type `ruins`."
 
@@ -198,7 +198,7 @@ UI for users to select a terrain feature from the catalog and place it on the ba
 ### D2. Pinning / Locking
 
 **Status:** Done
-**Blocked by:** D1
+**Blocked by:** —
 
 Mark manually-placed (or engine-placed) features as "locked" so the engine treats them as immovable constraints during generation.
 
@@ -209,19 +209,7 @@ Mark manually-placed (or engine-placed) features as "locked" so the engine treat
 - Visual indicator: padlock icon drawn at center of locked features
 - Parity: both engines produce identical output with locked features
 
-### D3. Hybrid Generation
-
-**Status:** Not Started
-**Blocked by:** D2
-
-Combine manual placement with engine optimization: the user places some features, pins them, and the engine fills the rest of the board.
-
-- Engine generation starts with pre-placed pinned features instead of an empty board
-- Scoring accounts for pinned features (they affect visibility, gap constraints, etc.)
-- "Add" mutations only place into remaining space; "delete" cannot remove pinned features
-- UI flow: place features → pin them → click "generate" → engine fills the rest
-
-### D4. Manual Object Placement & Feature Crafting (Lower Priority)
+### D3. Manual Object Placement & Feature Crafting (Lower Priority)
 
 **Status:** Not Started
 **Blocked by:** D1, B3
@@ -344,9 +332,9 @@ Improve the layout diagram output for physical tabletop play.
 
 ### Summary
 
-Six independent roots that can start immediately: **A1**, **B1**, **B5**, **E1**, **F1**, **G1**.
+Independent roots that can start immediately: **A1**, **B5**, **E1**, **F1**, **G1**. Also unblocked: **B2** (via B1 Done), **D2** (Done).
 
-A1 is the most critical — it unblocks the most downstream work (A2, A3, B3→B4, C1→C2/C3, D1→D2→D3, and E2→E3).
+A1 is the most critical — it unblocks the most downstream work (A2, A3, B3→B4, C1→C2/C3, D1→D3, and E2→E3).
 
 ### Dependencies (DAG Edges)
 
@@ -355,7 +343,7 @@ A1 is the most critical — it unblocks the most downstream work (A2, A3, B3→B
 | **A1** (Catalog Persistence) | — | A2, A3, B3, C1, D1, E2 |
 | A2 (Starter Catalogs) | A1 | — |
 | A3 (Import/Export) | A1 | — |
-| **B1** (Tag System) | — | B2 |
+| **B1** (Tag System) — Done | — | B2 |
 | B2 (Tag-based Scoring) | B1 | — |
 | B3 (Custom Object Authoring) | A1 | B4, D4 |
 | B4 (Custom Feature Authoring) | B3 | — |
@@ -364,10 +352,9 @@ A1 is the most critical — it unblocks the most downstream work (A2, A3, B3→B
 | C2 (Assembly in Engine) | C1 | C4 |
 | C3 (Object-level Quantity) | C1 | C4 |
 | C4 (Procedural Segments) | C2, C3 | — |
-| D1 (Manual Placement) | A1 | D2, D4 |
-| D2 (Pinning/Locking) | D1 | D3 |
-| D3 (Hybrid Generation) | D2 | — |
-| D4 (Object Placement + Crafting) | D1, B3 | — |
+| D1 (Manual Placement) | A1 | D2 (Done), D3 |
+| D2 (Pinning/Locking) | — | — |
+| D3 (Object Placement + Crafting) | D1, B3 | — |
 | **E1** (TTS Reference System) | — | E2, E4 |
 | E2 (TTS Associations) | E1, A1 | E3 |
 | E3 (TTS Save Generation) | E2 | E5 |
@@ -412,10 +399,9 @@ Depends on Phase 1. Gives users the tools to represent their physical terrain co
 **Goal**: Users can hand-place terrain and have the engine work around it.
 
 - **D1** — Manual Feature Placement
-- **D2** — Pinning / Locking
-- **D3** — Hybrid Generation
+- **D2** — Pinning / Locking (Done)
 
-D1 shares UI interaction patterns with existing move/copy. D2-D3 require engine changes (both Python and Rust, TDD workflow).
+D1 shares UI interaction patterns with existing move/copy. D2 required engine changes (both Python and Rust, TDD workflow) and is complete.
 
 ### Phase 5: Dynamic Assembly
 **Goal**: The engine can mix and match components within features.
@@ -432,7 +418,7 @@ Most architecturally complex phase. Engine changes in both languages. Benefits f
 
 - **E4** — Custom TTS Reference Saves
 - **E5** — TTS Lua Scripting
-- **D4** — Manual Object Placement & Feature Crafting
+- **D3** — Manual Object Placement & Feature Crafting
 - **C4** — Procedural Segment Assembly
 - **F1** — Polygonal Shape Outlines
 - **G1** — Enhanced Layout Diagrams
@@ -443,7 +429,7 @@ These are lower priority, higher complexity, or both. Order within this phase is
 
 ## Notes
 
-- **Engine parity**: Any feature that touches the engine (C2, C3, D2, D3, B2) requires the TDD workflow from CLAUDE.md — Python first, then parity comparison, then Rust.
+- **Engine parity**: Any feature that touches the engine (C2, C3, B2) requires the TDD workflow from CLAUDE.md — Python first, then parity comparison, then Rust.
 - **Schema evolution**: Features A1, B1, C1, and E2 all modify the catalog/layout JSON schema. Plan schema changes together to minimize breaking changes.
 - **Phases 2 and 3 are parallel**: TTS integration and authoring are independent tracks. Work on whichever has more immediate user value.
 - **The tag system (B1) is small but strategic**: Adding tag fields early means the schema doesn't need to change again when B2 is implemented.
