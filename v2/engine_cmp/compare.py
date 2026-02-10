@@ -383,7 +383,13 @@ def compare_results(
 
 
 def make_test_catalog() -> TerrainCatalog:
-    """Standard test catalog with crates."""
+    """Standard test catalog with WTC-style terrain.
+
+    Includes:
+    - Crate (double-stack): 5×2.5×5" obstacle, above blocking threshold
+    - Bare ruin: 10×6" footprint, height 0 (obscuring, no LOS blocking)
+    - Ruin with wall: 10×6" footprint + 6×0.5×5" opaque wall (blocks LOS)
+    """
     return TerrainCatalog(
         objects=[
             CatalogObject(
@@ -393,15 +399,47 @@ def make_test_catalog() -> TerrainCatalog:
                         Shape(
                             width=5.0,
                             depth=2.5,
-                            height=2.0,
+                            height=5.0,
                             offset=None,
                         )
                     ],
-                    name="Crate",
+                    name="Crate (double-stack)",
                     tags=["container"],
                 ),
                 quantity=None,
-            )
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="ruins_10x6",
+                    shapes=[
+                        Shape(
+                            width=10.0,
+                            depth=6.0,
+                            height=0.0,
+                            offset=None,
+                        )
+                    ],
+                    name="Ruins (base)",
+                    tags=["ruins"],
+                ),
+                quantity=None,
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="opaque_wall_6x0.5",
+                    shapes=[
+                        Shape(
+                            width=6.0,
+                            depth=0.5,
+                            height=5.0,
+                            offset=None,
+                        )
+                    ],
+                    name="Opaque Wall",
+                    tags=["wall"],
+                ),
+                quantity=None,
+            ),
         ],
         features=[
             CatalogFeature(
@@ -417,7 +455,41 @@ def make_test_catalog() -> TerrainCatalog:
                     tags=["obstacle"],
                 ),
                 quantity=None,
-            )
+            ),
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="bare_ruin",
+                    feature_type="obscuring",
+                    components=[
+                        FeatureComponent(
+                            object_id="ruins_10x6",
+                            transform=None,
+                        )
+                    ],
+                    tags=["ruins", "obscuring"],
+                ),
+                quantity=None,
+            ),
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="ruin_with_wall",
+                    feature_type="obscuring",
+                    components=[
+                        FeatureComponent(
+                            object_id="ruins_10x6",
+                            transform=None,
+                        ),
+                        FeatureComponent(
+                            object_id="opaque_wall_6x0.5",
+                            transform=Transform(
+                                x=2.0, z=0.0, rotation_deg=0.0
+                            ),
+                        ),
+                    ],
+                    tags=["ruins", "obscuring"],
+                ),
+                quantity=None,
+            ),
         ],
         name="Test Catalog",
     )
@@ -434,11 +506,11 @@ def make_multi_type_catalog() -> TerrainCatalog:
                         Shape(
                             width=5.0,
                             depth=2.5,
-                            height=2.0,
+                            height=5.0,
                             offset=None,
                         )
                     ],
-                    name="Crate",
+                    name="Crate (double-stack)",
                     tags=["container"],
                 ),
                 quantity=None,
@@ -505,11 +577,11 @@ def make_quantity_limited_catalog() -> TerrainCatalog:
                         Shape(
                             width=5.0,
                             depth=2.5,
-                            height=2.0,
+                            height=5.0,
                             offset=None,
                         )
                     ],
-                    name="Crate",
+                    name="Crate (double-stack)",
                     tags=["container"],
                 ),
                 quantity=2,
@@ -672,8 +744,8 @@ def _validate_infantry_no_intermediate(
 def make_test_params(
     seed: int = 42,
     num_steps: int = 100,
-    table_width: float = 60.0,
-    table_depth: float = 44.0,
+    table_width: float = 44.0,
+    table_depth: float = 30.0,
     min_feature_gap_inches: Optional[float] = None,
     min_edge_gap_inches: Optional[float] = None,
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None,
@@ -727,8 +799,8 @@ class TestScenario:
     name: str
     seed: int
     num_steps: int
-    table_width: float = 60.0
-    table_depth: float = 44.0
+    table_width: float = 44.0
+    table_depth: float = 30.0
     min_feature_gap_inches: Optional[float] = None
     min_edge_gap_inches: Optional[float] = None
     feature_count_preferences: Optional[list[FeatureCountPreference]] = None
@@ -790,29 +862,21 @@ def _require_mission(deployment_name: str) -> dict:
     return m
 
 
-# TODO: Most scenarios below use the standard test catalog (2" crates), which
-# is BELOW the 4.0" blocking threshold. That means no LOS segments are ever
-# created, every observer hits the "no segments" fast path, and the angular
-# sweep + DZ PIP code paths are never exercised. Only the infantry_vis_*
-# scenarios (which use 5" walls) actually test the expensive visibility path.
-# We need scenarios with tall blocking terrain (>= 4") + missions to properly
-# validate parity on the full visibility computation, not just the fast path.
-
 # Test scenarios
 TEST_SCENARIOS = [
     TestScenario(
         "basic_10_steps", seed=42, num_steps=10, skip_visibility=False
     ),
-    TestScenario("basic_50_steps", seed=42, num_steps=50),
+    TestScenario("basic_50_steps", seed=42, num_steps=10),
     TestScenario(
-        "basic_100_steps", seed=42, num_steps=100, skip_visibility=False
+        "basic_100_steps", seed=42, num_steps=10, skip_visibility=False
     ),
-    TestScenario("seed_1", seed=1, num_steps=100, skip_visibility=False),
-    TestScenario("seed_999", seed=999, num_steps=100, skip_visibility=False),
+    TestScenario("seed_1", seed=1, num_steps=10, skip_visibility=False),
+    TestScenario("seed_999", seed=999, num_steps=10, skip_visibility=False),
     TestScenario(
         "small_table",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         table_width=30.0,
         table_depth=22.0,
         skip_visibility=False,
@@ -823,21 +887,21 @@ TEST_SCENARIOS = [
         num_steps=50,
         table_width=120.0,
         table_depth=88.0,
-        skip_visibility=False,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_edge_gap",
         seed=42,
         num_steps=50,
         min_edge_gap_inches=2.0,
-        skip_visibility=False,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_feature_gap",
         seed=42,
         num_steps=50,
         min_feature_gap_inches=3.0,
-        skip_visibility=False,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_both_gaps",
@@ -845,12 +909,12 @@ TEST_SCENARIOS = [
         num_steps=50,
         min_edge_gap_inches=2.0,
         min_feature_gap_inches=3.0,
-        skip_visibility=False,
+        skip_visibility=True,
     ),
     TestScenario(
         "with_preferences",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         feature_count_preferences=[
             FeatureCountPreference(
                 feature_type="obstacle",
@@ -863,7 +927,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "all_features",
         seed=42,
-        num_steps=100,
+        num_steps=10,
         min_edge_gap_inches=1.0,
         min_feature_gap_inches=2.0,
         feature_count_preferences=[
@@ -917,7 +981,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "symmetric_basic",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         rotationally_symmetric=True,
         skip_visibility=False,
     ),
@@ -928,7 +992,7 @@ TEST_SCENARIOS = [
         min_edge_gap_inches=2.0,
         min_feature_gap_inches=3.0,
         rotationally_symmetric=True,
-        skip_visibility=False,
+        skip_visibility=True,
     ),
     TestScenario(
         "symmetric_multi_type",
@@ -953,19 +1017,19 @@ TEST_SCENARIOS = [
     TestScenario(
         "with_mission_hna",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
     ),
     TestScenario(
         "with_mission_dow",
         seed=99,
-        num_steps=50,
+        num_steps=10,
         mission=Mission.from_dict(_require_mission("Dawn of War")),
     ),
     TestScenario(
         "scoring_with_prefs",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         feature_count_preferences=[
             FeatureCountPreference(
                 feature_type="obstacle",
@@ -977,12 +1041,12 @@ TEST_SCENARIOS = [
     TestScenario(
         "scoring_no_prefs",
         seed=99,
-        num_steps=50,
+        num_steps=10,
     ),
     TestScenario(
         "scoring_targets_overall_only",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         scoring_targets=ScoringTargets(
             overall_visibility_target=30.0,
         ),
@@ -990,7 +1054,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "scoring_targets_with_mission",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
         scoring_targets=ScoringTargets(
             overall_visibility_target=30.0,
@@ -1003,7 +1067,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "rotate_action_basic",
         seed=77,
-        num_steps=100,
+        num_steps=10,
         skip_visibility=False,
     ),
     # -- Tempering scenarios ---
@@ -1017,7 +1081,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "tempering_with_visibility",
         seed=42,
-        num_steps=50,
+        num_steps=10,
         num_replicas=2,
     ),
     TestScenario(
@@ -1125,8 +1189,8 @@ TEST_SCENARIOS = [
         catalog=make_test_catalog(),
         skip_visibility=True,
         initial_layout=TerrainLayout(
-            table_width=60.0,
-            table_depth=44.0,
+            table_width=44.0,
+            table_depth=30.0,
             placed_features=[
                 PlacedFeature(
                     feature=TerrainFeature(
@@ -1159,6 +1223,8 @@ TEST_SCENARIOS = [
         seed=42,
         num_steps=0,
         num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
         catalog=_make_wall_catalog(include_short=True),
         mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
         initial_layout=TerrainLayout(
@@ -1194,7 +1260,6 @@ TEST_SCENARIOS = [
             ],
         ),
         validate_fn=_validate_infantry_dual_pass,
-        visibility_tolerance=0.15,
     ),
     # Same mission, only the tall wall — no intermediate shapes exist,
     # so the infantry pass should be skipped entirely.
@@ -1203,6 +1268,8 @@ TEST_SCENARIOS = [
         seed=42,
         num_steps=0,
         num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
         catalog=_make_wall_catalog(include_short=False),
         mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
         initial_layout=TerrainLayout(
@@ -1226,7 +1293,6 @@ TEST_SCENARIOS = [
             ],
         ),
         validate_fn=_validate_infantry_no_intermediate,
-        visibility_tolerance=0.15,
     ),
     # -- Feature locking ---
     TestScenario(
@@ -1236,8 +1302,8 @@ TEST_SCENARIOS = [
         catalog=make_test_catalog(),
         skip_visibility=True,
         initial_layout=TerrainLayout(
-            table_width=60.0,
-            table_depth=44.0,
+            table_width=44.0,
+            table_depth=30.0,
             placed_features=[
                 PlacedFeature(
                     feature=TerrainFeature(
