@@ -20,12 +20,6 @@ from .types import (
     Transform,
 )
 
-MAX_RETRIES = 100
-RETRY_DECAY = 0.95
-MIN_MOVE_RANGE = 2.0
-MAX_EXTRA_MUTATIONS = 3
-TILE_SIZE = 2.0
-
 
 @dataclass
 class StepUndo:
@@ -113,6 +107,8 @@ def _compute_template_weights(
     catalog_quantities: list[int | None],
     placed_features: list[PlacedFeature],
     rotationally_symmetric: bool,
+    shortage_boost: float = 2.0,
+    penalty_factor: float = 0.1,
 ) -> list[float]:
     """Compute weights for selecting which catalog feature to add.
 
@@ -134,9 +130,9 @@ def _compute_template_weights(
         if pref is not None:
             current = feature_counts.get(cf.feature_type, 0)
             if current < pref.min:
-                w = 1.0 + (pref.min - current) * 2.0
+                w = 1.0 + (pref.min - current) * shortage_boost
             elif pref.max is not None and current >= pref.max:
-                w = 0.1
+                w = penalty_factor
         weights.append(w)
     return weights
 
@@ -145,6 +141,8 @@ def _compute_delete_weights(
     features: list[PlacedFeature],
     feature_counts: dict[str, int],
     preferences: list,
+    excess_boost: float = 2.0,
+    penalty_factor: float = 0.1,
 ) -> list[float]:
     """Compute weights for selecting which feature to delete.
 
@@ -158,9 +156,9 @@ def _compute_delete_weights(
         if pref is not None:
             current = feature_counts.get(pf.feature.feature_type, 0)
             if pref.max is not None and current > pref.max:
-                w = 1.0 + (current - pref.max) * 2.0
+                w = 1.0 + (current - pref.max) * excess_boost
             elif current <= pref.min:
-                w = 0.1
+                w = penalty_factor
         weights.append(w)
     return weights
 
@@ -171,10 +169,11 @@ def _compute_tile_weights(
     table_width: float,
     table_depth: float,
     rotationally_symmetric: bool,
+    tile_size: float = 2.0,
 ) -> tuple[list[float], int, int, float, float]:
     """Compute per-tile placement weights inversely proportional to occupancy.
 
-    Divides table into ~TILE_SIZE tiles and counts how many feature OBBs
+    Divides table into ~tile_size tiles and counts how many feature OBBs
     overlap each tile. Weight = 1/(1+count), biasing placement toward
     empty areas.
 
@@ -183,8 +182,8 @@ def _compute_tile_weights(
 
     Returns (weights, nx, nz, tile_w, tile_d).
     """
-    nx = max(1, round(table_width / TILE_SIZE))
-    nz = max(1, round(table_depth / TILE_SIZE))
+    nx = max(1, round(table_width / tile_size))
+    nz = max(1, round(table_depth / tile_size))
     tile_w = table_width / nx
     tile_d = table_depth / nz
     half_w = table_width / 2.0
@@ -235,15 +234,17 @@ def _temperature_move(
     table_depth: float,
     t_factor: float,
     rotation_granularity: float = 15.0,
+    min_move_range: float = 2.0,
+    rotate_on_move_prob: float = 0.5,
 ) -> Transform:
     """Generate a temperature-aware move transform.
 
-    At t_factor=0, displacement is small (±MIN_MOVE_RANGE/2 inches).
+    At t_factor=0, displacement is small (±min_move_range/2 inches).
     At t_factor=1, displacement spans the full table.
     Always consumes exactly 4 PRNG values.
     """
     max_dim = max(table_width, table_depth)
-    move_range = MIN_MOVE_RANGE + t_factor * (max_dim - MIN_MOVE_RANGE)
+    move_range = min_move_range + t_factor * (max_dim - min_move_range)
 
     dx = (rng.next_float() - 0.5) * 2.0 * move_range
     dz = (rng.next_float() - 0.5) * 2.0 * move_range
@@ -253,8 +254,8 @@ def _temperature_move(
     new_x = _quantize_position(old_transform.x + dx)
     new_z = _quantize_position(old_transform.z + dz)
 
-    # Rotation: 0% chance at t=0, 50% chance at t=1
-    if rotate_check < 0.5 * t_factor:
+    # Rotation: 0% chance at t=0, rotate_on_move_prob chance at t=1
+    if rotate_check < rotate_on_move_prob * t_factor:
         rot = _quantize_angle(rot_angle_raw * 360.0, rotation_granularity)
     else:
         rot = old_transform.rotation_deg
@@ -279,6 +280,7 @@ def _try_single_action(
     features = layout.placed_features
     has_features = len(features) > 0
     feature_counts = _count_features_by_type(layout)
+    tuning = params.get_tuning()
 
     # Compute action weights: [add, move, delete, replace, rotate]
     # Non-final mutations in a chain get full delete weight (clearing space
@@ -288,7 +290,11 @@ def _try_single_action(
     move_weight = 1.0 if has_features else 0.0
     is_last = index_in_chain >= chain_length - 1
     delete_weight = (
-        0.25 if has_features and is_last else 1.0 if has_features else 0.0
+        tuning.delete_weight_last
+        if has_features and is_last
+        else 1.0
+        if has_features
+        else 0.0
     )
     replace_weight = 1.0 if (has_features and has_catalog) else 0.0
     rotate_weight = 1.0 if has_features else 0.0
@@ -298,12 +304,12 @@ def _try_single_action(
         current = feature_counts.get(pref.feature_type, 0)
         if current < pref.min:
             shortage = pref.min - current
-            add_weight *= 1.0 + shortage * 2.0
-            delete_weight *= 0.1
+            add_weight *= 1.0 + shortage * tuning.shortage_boost
+            delete_weight *= tuning.penalty_factor
         elif pref.max is not None and current > pref.max:
             excess = current - pref.max
-            delete_weight *= 1.0 + excess * 2.0
-            add_weight *= 0.1
+            delete_weight *= 1.0 + excess * tuning.excess_boost
+            add_weight *= tuning.penalty_factor
 
     weights = [
         add_weight,
@@ -326,6 +332,8 @@ def _try_single_action(
             catalog_quantities,
             features,
             layout.rotationally_symmetric,
+            shortage_boost=tuning.shortage_boost,
+            penalty_factor=tuning.penalty_factor,
         )
         tidx = _weighted_choice(rng, template_weights)
         if tidx < 0:
@@ -340,6 +348,7 @@ def _try_single_action(
             params.table_width,
             params.table_depth,
             params.rotationally_symmetric,
+            tile_size=tuning.tile_size,
         )
         tile_idx = _weighted_choice(rng, tile_weights)
         if tile_idx < 0:
@@ -387,6 +396,8 @@ def _try_single_action(
             params.table_depth,
             t_factor,
             rotation_granularity=params.rotation_granularity_deg,
+            min_move_range=tuning.min_move_range,
+            rotate_on_move_prob=tuning.rotate_on_move_prob,
         )
         features[idx] = PlacedFeature(old.feature, new_transform)
         if is_valid_placement(
@@ -412,7 +423,11 @@ def _try_single_action(
     elif action == 2:
         # Delete
         delete_weights = _compute_delete_weights(
-            features, feature_counts, params.feature_count_preferences
+            features,
+            feature_counts,
+            params.feature_count_preferences,
+            excess_boost=tuning.excess_boost,
+            penalty_factor=tuning.penalty_factor,
         )
         idx = _weighted_choice(rng, delete_weights)
         if idx < 0:
@@ -426,7 +441,11 @@ def _try_single_action(
     elif action == 3:
         # Replace: remove feature, add different template at same position
         delete_weights = _compute_delete_weights(
-            features, feature_counts, params.feature_count_preferences
+            features,
+            feature_counts,
+            params.feature_count_preferences,
+            excess_boost=tuning.excess_boost,
+            penalty_factor=tuning.penalty_factor,
         )
         idx = _weighted_choice(rng, delete_weights)
         if idx < 0:
@@ -438,6 +457,8 @@ def _try_single_action(
             catalog_quantities,
             features,
             layout.rotationally_symmetric,
+            shortage_boost=tuning.shortage_boost,
+            penalty_factor=tuning.penalty_factor,
         )
         tidx = _weighted_choice(rng, template_weights)
         if tidx < 0:
@@ -519,8 +540,9 @@ def _perform_step(
     """Try mutations with decaying temperature until one succeeds or retries exhausted."""
     if catalog_quantities is None:
         catalog_quantities = [None] * len(catalog_features)
+    tuning = params.get_tuning()
     effective_t = t_factor
-    for _ in range(MAX_RETRIES):
+    for _ in range(tuning.max_retries):
         result = _try_single_action(
             layout,
             rng,
@@ -536,7 +558,7 @@ def _perform_step(
         )
         if result is not None:
             return result
-        effective_t *= RETRY_DECAY
+        effective_t *= tuning.retry_decay
     return StepUndo(action="noop"), next_id
 
 

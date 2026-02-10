@@ -10,12 +10,10 @@ from engine.collision import (
     obbs_overlap,
 )
 from engine.generate import (
-    PHASE2_BASE,
     _compute_score,
     generate,
     generate_json,
 )
-from engine.mutation import MAX_EXTRA_MUTATIONS
 from engine.prng import PCG32
 from engine.types import (
     EngineParams,
@@ -23,7 +21,13 @@ from engine.types import (
     PlacedFeature,
     ScoringTargets,
     TerrainLayout,
+    TuningParams,
 )
+
+# Defaults for test assertions
+_DEFAULTS = TuningParams()
+PHASE2_BASE = _DEFAULTS.phase2_base
+MAX_EXTRA_MUTATIONS = _DEFAULTS.max_extra_mutations
 
 
 def _crate_catalog_dict():
@@ -626,6 +630,88 @@ class TestJSON:
             assert "x_inches" in t
             assert "z_inches" in t
             assert "rotation_deg" in t
+
+
+# -- TuningParams -------------------------------------------------------
+
+
+class TestTuningParams:
+    def test_defaults_roundtrip(self):
+        """TuningParams from_dict/to_dict round-trips with defaults."""
+        tp = TuningParams()
+        d = tp.to_dict()
+        tp2 = TuningParams.from_dict(d)
+        assert tp == tp2
+
+    def test_custom_roundtrip(self):
+        """TuningParams from_dict/to_dict round-trips with custom values."""
+        tp = TuningParams(
+            max_retries=50,
+            retry_decay=0.9,
+            min_move_range=3.0,
+            max_extra_mutations=5,
+            tile_size=4.0,
+            delete_weight_last=0.5,
+            rotate_on_move_prob=0.3,
+            shortage_boost=3.0,
+            excess_boost=4.0,
+            penalty_factor=0.05,
+            phase2_base=500.0,
+            temp_ladder_min_ratio=0.05,
+        )
+        d = tp.to_dict()
+        tp2 = TuningParams.from_dict(d)
+        assert tp == tp2
+
+    def test_from_empty_dict_gives_defaults(self):
+        """TuningParams.from_dict({}) returns default values."""
+        tp = TuningParams.from_dict({})
+        assert tp == TuningParams()
+
+    def test_engine_params_tuning_none_gives_defaults(self):
+        """EngineParams.get_tuning() returns defaults when tuning is None."""
+        params = EngineParams.from_dict(
+            _make_params_dict(seed=42, num_steps=10, skip_visibility=True)
+        )
+        assert params.tuning is None
+        tuning = params.get_tuning()
+        assert tuning == TuningParams()
+
+    def test_engine_params_tuning_from_dict(self):
+        """EngineParams deserializes tuning from JSON."""
+        d = _make_params_dict(seed=42, num_steps=10, skip_visibility=True)
+        d["tuning"] = {"max_retries": 50, "phase2_base": 500.0}
+        params = EngineParams.from_dict(d)
+        assert params.tuning is not None
+        assert params.tuning.max_retries == 50
+        assert params.tuning.phase2_base == 500.0
+        # Other fields keep defaults
+        assert params.tuning.retry_decay == 0.95
+
+    def test_default_tuning_identical_output(self):
+        """Explicit default TuningParams produces identical output to None."""
+        d1 = _make_params_dict(seed=42, num_steps=50, skip_visibility=True)
+        d2 = _make_params_dict(seed=42, num_steps=50, skip_visibility=True)
+        d2["tuning"] = TuningParams().to_dict()
+        r1 = generate_json(d1)
+        r2 = generate_json(d2)
+        assert r1 == r2
+
+    def test_custom_tuning_changes_behavior(self):
+        """Non-default TuningParams produces different output."""
+        d1 = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        d2 = _make_params_dict(seed=42, num_steps=100, skip_visibility=True)
+        d2["tuning"] = {
+            "max_retries": 10,
+            "retry_decay": 0.5,
+            "min_move_range": 10.0,
+            "delete_weight_last": 0.9,
+            "shortage_boost": 5.0,
+        }
+        r1 = generate_json(d1)
+        r2 = generate_json(d2)
+        # Different tuning should produce different layouts
+        assert r1 != r2
 
 
 # -- Scoring ------------------------------------------------------------

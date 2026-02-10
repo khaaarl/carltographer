@@ -7,7 +7,6 @@ import math
 from dataclasses import dataclass
 
 from .mutation import (
-    MAX_EXTRA_MUTATIONS,
     StepUndo,
     _count_features_by_type,
     _perform_step,
@@ -25,8 +24,6 @@ from .types import (
     TerrainObject,
 )
 from .visibility import VisibilityCache, compute_layout_visibility
-
-PHASE2_BASE = 1000.0
 
 
 def _build_object_index(
@@ -76,11 +73,12 @@ def _compute_score(
     skip_visibility: bool = False,
     scoring_targets: ScoringTargets | None = None,
     visibility_cache: VisibilityCache | None = None,
+    phase2_base: float = 1000.0,
 ) -> float:
     """Compute fitness score for hill-climbing.
 
-    Phase 1 (score < PHASE2_BASE): gradient toward satisfying count preferences.
-    Phase 2 (score >= PHASE2_BASE): optimize visibility toward targets.
+    Phase 1 (score < phase2_base): gradient toward satisfying count preferences.
+    Phase 2 (score >= phase2_base): optimize visibility toward targets.
     """
     counts = _count_features_by_type(layout)
     total_deficit = 0
@@ -92,10 +90,10 @@ def _compute_score(
             total_deficit += current - pref.max
 
     if total_deficit > 0:
-        return PHASE2_BASE / (1.0 + total_deficit)
+        return phase2_base / (1.0 + total_deficit)
 
     if skip_visibility:
-        return PHASE2_BASE
+        return phase2_base
 
     vis = compute_layout_visibility(
         layout, objects_by_id, visibility_cache=visibility_cache
@@ -103,7 +101,7 @@ def _compute_score(
 
     if scoring_targets is None:
         vis_pct = vis["overall"]["value"]
-        return PHASE2_BASE + (100.0 - vis_pct)
+        return phase2_base + (100.0 - vis_pct)
 
     total_weight = 0.0
     total_weighted_error = 0.0
@@ -150,10 +148,10 @@ def _compute_score(
 
     if total_weight <= 0:
         vis_pct = vis["overall"]["value"]
-        return PHASE2_BASE + (100.0 - vis_pct)
+        return phase2_base + (100.0 - vis_pct)
 
     weighted_avg_error = total_weighted_error / total_weight
-    return PHASE2_BASE + (100.0 - weighted_avg_error)
+    return phase2_base + (100.0 - weighted_avg_error)
 
 
 def _next_feature_id(layout: TerrainLayout) -> int:
@@ -194,6 +192,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
     objects_by_id = _build_object_index(params.catalog)
     _merge_layout_objects(objects_by_id, params.initial_layout)
     layout, next_id = _create_layout(params)
+    tuning = params.get_tuning()
 
     catalog_features = [cf.item for cf in params.catalog.features]
     catalog_quantities = [cf.quantity for cf in params.catalog.features]
@@ -210,6 +209,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
         params.skip_visibility,
         params.scoring_targets,
         visibility_cache=vis_cache,
+        phase2_base=tuning.phase2_base,
     )
 
     for _ in range(params.num_steps):
@@ -233,6 +233,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
             params.skip_visibility,
             params.scoring_targets,
             visibility_cache=vis_cache,
+            phase2_base=tuning.phase2_base,
         )
         if new_score >= current_score:
             current_score = new_score
@@ -306,7 +307,12 @@ def _generate_tempering(
     catalog_features = [cf.item for cf in params.catalog.features]
     catalog_quantities = [cf.quantity for cf in params.catalog.features]
     has_catalog = len(catalog_features) > 0
-    temperatures = compute_temperatures(num_replicas, params.max_temperature)
+    tuning = params.get_tuning()
+    temperatures = compute_temperatures(
+        num_replicas,
+        params.max_temperature,
+        temp_ladder_min_ratio=tuning.temp_ladder_min_ratio,
+    )
 
     # Create replicas
     replicas: list[_TemperingReplica] = []
@@ -323,6 +329,7 @@ def _generate_tempering(
             params.skip_visibility,
             params.scoring_targets,
             visibility_cache=vis_cache,
+            phase2_base=tuning.phase2_base,
         )
         replicas.append(
             _TemperingReplica(
@@ -359,7 +366,7 @@ def _generate_tempering(
                 if max_temperature > 0
                 else 0.0
             )
-            num_mutations = 1 + int(t_factor * MAX_EXTRA_MUTATIONS)
+            num_mutations = 1 + int(t_factor * tuning.max_extra_mutations)
 
             for _ in range(batch_size):
                 # Apply multiple mutations
@@ -393,6 +400,7 @@ def _generate_tempering(
                     params.skip_visibility,
                     params.scoring_targets,
                     visibility_cache=replica.vis_cache,
+                    phase2_base=tuning.phase2_base,
                 )
 
                 if sa_accept(

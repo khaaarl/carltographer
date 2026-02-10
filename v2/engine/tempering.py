@@ -95,13 +95,15 @@ class _ReplicaState:
 
 
 def compute_temperatures(
-    num_replicas: int, max_temperature: float
+    num_replicas: int,
+    max_temperature: float,
+    temp_ladder_min_ratio: float = 0.01,
 ) -> list[float]:
     """Compute temperature ladder for parallel tempering.
 
     K=1: [0.0]
     K=2: [0.0, max_temperature]
-    K>2: [0.0] + geometric from max_temperature*0.01 to max_temperature
+    K>2: [0.0] + geometric from max_temperature*temp_ladder_min_ratio to max_temperature
     """
     if num_replicas <= 0:
         return []
@@ -111,7 +113,7 @@ def compute_temperatures(
         return [0.0, max_temperature]
 
     temps = [0.0]
-    t_min = max_temperature * 0.01
+    t_min = max_temperature * temp_ladder_min_ratio
     for i in range(1, num_replicas):
         frac = (i - 1) / (num_replicas - 2)
         t = t_min * (max_temperature / t_min) ** frac

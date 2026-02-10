@@ -1,0 +1,14 @@
+{
+    "max_retries": [50, 200],
+    "retry_decay": [0.85, 0.99],
+    "min_move_range": [1.0, 5.0],
+    "max_extra_mutations": [1, 6],
+    "tile_size": [1.0, 4.0],
+    "delete_weight_last": [0.05, 0.5],
+    "rotate_on_move_prob": [0.1, 0.9],
+    "shortage_boost": [1.0, 5.0],
+    "excess_boost": [1.0, 5.0],
+    "penalty_factor": [0.01, 0.5],
+    "phase2_base": [100.0, 5000.0],
+    "temp_ladder_min_ratio": [0.001, 0.1]
+}

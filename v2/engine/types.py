@@ -388,6 +388,55 @@ class ScoringTargets:
 
 
 @dataclass
+class TuningParams:
+    max_retries: int = 100
+    retry_decay: float = 0.95
+    min_move_range: float = 2.0
+    max_extra_mutations: int = 3
+    tile_size: float = 2.0
+    delete_weight_last: float = 0.25
+    rotate_on_move_prob: float = 0.5
+    shortage_boost: float = 2.0
+    excess_boost: float = 2.0
+    penalty_factor: float = 0.1
+    phase2_base: float = 1000.0
+    temp_ladder_min_ratio: float = 0.01
+
+    @staticmethod
+    def from_dict(d: dict) -> TuningParams:
+        return TuningParams(
+            max_retries=d.get("max_retries", 100),
+            retry_decay=d.get("retry_decay", 0.95),
+            min_move_range=d.get("min_move_range", 2.0),
+            max_extra_mutations=d.get("max_extra_mutations", 3),
+            tile_size=d.get("tile_size", 2.0),
+            delete_weight_last=d.get("delete_weight_last", 0.25),
+            rotate_on_move_prob=d.get("rotate_on_move_prob", 0.5),
+            shortage_boost=d.get("shortage_boost", 2.0),
+            excess_boost=d.get("excess_boost", 2.0),
+            penalty_factor=d.get("penalty_factor", 0.1),
+            phase2_base=d.get("phase2_base", 1000.0),
+            temp_ladder_min_ratio=d.get("temp_ladder_min_ratio", 0.01),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "max_retries": self.max_retries,
+            "retry_decay": self.retry_decay,
+            "min_move_range": self.min_move_range,
+            "max_extra_mutations": self.max_extra_mutations,
+            "tile_size": self.tile_size,
+            "delete_weight_last": self.delete_weight_last,
+            "rotate_on_move_prob": self.rotate_on_move_prob,
+            "shortage_boost": self.shortage_boost,
+            "excess_boost": self.excess_boost,
+            "penalty_factor": self.penalty_factor,
+            "phase2_base": self.phase2_base,
+            "temp_ladder_min_ratio": self.temp_ladder_min_ratio,
+        }
+
+
+@dataclass
 class EngineParams:
     seed: int
     table_width: float
@@ -410,12 +459,17 @@ class EngineParams:
     num_replicas: int | None = None
     swap_interval: int = 20
     max_temperature: float = 50.0
+    tuning: TuningParams | None = None
+
+    def get_tuning(self) -> TuningParams:
+        return self.tuning if self.tuning is not None else TuningParams()
 
     @staticmethod
     def from_dict(d: dict) -> EngineParams:
         il = d.get("initial_layout")
         m = d.get("mission")
         st = d.get("scoring_targets")
+        tu = d.get("tuning")
         prefs = [
             FeatureCountPreference.from_dict(p)
             for p in d.get("feature_count_preferences", [])
@@ -440,6 +494,7 @@ class EngineParams:
             num_replicas=d.get("num_replicas"),
             swap_interval=d.get("swap_interval", 20),
             max_temperature=d.get("max_temperature", 50.0),
+            tuning=TuningParams.from_dict(tu) if tu else None,
         )
 
 

@@ -28,6 +28,7 @@ from engine.types import (
     TerrainLayout,
     TerrainObject,
     Transform,
+    TuningParams,
 )
 from frontend.missions import get_mission
 
@@ -490,6 +491,7 @@ def make_test_params(
     min_all_edge_gap_inches: Optional[float] = None,
     rotation_granularity_deg: float = 15.0,
     initial_layout: Optional[TerrainLayout] = None,
+    tuning: Optional[TuningParams] = None,
 ) -> EngineParams:
     """Helper to build test params."""
     return EngineParams(
@@ -512,6 +514,7 @@ def make_test_params(
         num_replicas=num_replicas,
         swap_interval=swap_interval,
         max_temperature=max_temperature,
+        tuning=tuning,
     )
 
 
@@ -539,6 +542,7 @@ class TestScenario:
     min_all_edge_gap_inches: Optional[float] = None
     rotation_granularity_deg: float = 15.0
     initial_layout: Optional[TerrainLayout] = None
+    tuning: Optional[TuningParams] = None
 
     def make_params(self) -> EngineParams:
         """Build EngineParams for this scenario."""
@@ -562,6 +566,7 @@ class TestScenario:
             min_all_edge_gap_inches=self.min_all_edge_gap_inches,
             rotation_granularity_deg=self.rotation_granularity_deg,
             initial_layout=self.initial_layout,
+            tuning=self.tuning,
         )
 
 
@@ -859,6 +864,44 @@ TEST_SCENARIOS = [
         min_all_edge_gap_inches=1.0,
         skip_visibility=True,
     ),
+    # -- Tuning params ---
+    TestScenario(
+        "tuning_explicit_defaults",
+        seed=42,
+        num_steps=50,
+        tuning=TuningParams(),
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "tuning_custom_move_params",
+        seed=42,
+        num_steps=100,
+        tuning=TuningParams(
+            min_move_range=4.0,
+            rotate_on_move_prob=0.8,
+            tile_size=4.0,
+        ),
+        skip_visibility=True,
+    ),
+    TestScenario(
+        "tuning_custom_weights",
+        seed=77,
+        num_steps=100,
+        feature_count_preferences=[
+            FeatureCountPreference(
+                feature_type="obstacle",
+                min=3,
+                max=8,
+            )
+        ],
+        tuning=TuningParams(
+            shortage_boost=4.0,
+            excess_boost=4.0,
+            penalty_factor=0.2,
+            delete_weight_last=0.5,
+        ),
+        skip_visibility=True,
+    ),
     TestScenario(
         "orphaned_features",
         seed=99,
@@ -1017,6 +1060,11 @@ def params_to_json_dict(params: EngineParams) -> dict:
         ),
         "swap_interval": params.swap_interval,
         "max_temperature": params.max_temperature,
+        **(
+            {"tuning": params.tuning.to_dict()}
+            if params.tuning is not None
+            else {}
+        ),
     }
 
 

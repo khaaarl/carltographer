@@ -9,12 +9,6 @@ use crate::types::{
     TerrainObject, Transform,
 };
 
-pub(crate) const MAX_RETRIES: u32 = 100;
-pub(crate) const RETRY_DECAY: f64 = 0.95;
-pub(crate) const MIN_MOVE_RANGE: f64 = 2.0;
-pub(crate) const MAX_EXTRA_MUTATIONS: u32 = 3;
-pub(crate) const TILE_SIZE: f64 = 2.0;
-
 /// Undo token for reverting a single mutation step.
 #[derive(Debug)]
 pub(crate) enum StepUndo {
@@ -120,6 +114,8 @@ fn compute_template_weights(
     catalog_quantities: &[Option<u32>],
     placed_features: &[PlacedFeature],
     rotationally_symmetric: bool,
+    shortage_boost: f64,
+    penalty_factor: f64,
 ) -> Vec<f64> {
     // Compute weights for selecting which catalog feature to add.
     // Boosts weight for types below their min, reduces for types at/above max.
@@ -142,10 +138,10 @@ fn compute_template_weights(
         if let Some(pref) = pref_by_type.get(cf.feature_type.as_str()) {
             let current = feature_counts.get(&cf.feature_type).copied().unwrap_or(0);
             if current < pref.min {
-                w = 1.0 + (pref.min - current) as f64 * 2.0;
+                w = 1.0 + (pref.min - current) as f64 * shortage_boost;
             } else if let Some(max) = pref.max {
                 if current >= max {
-                    w = 0.1;
+                    w = penalty_factor;
                 }
             }
         }
@@ -158,6 +154,8 @@ fn compute_delete_weights(
     features: &[PlacedFeature],
     feature_counts: &HashMap<String, u32>,
     preferences: &[FeatureCountPreference],
+    excess_boost: f64,
+    penalty_factor: f64,
 ) -> Vec<f64> {
     // Compute weights for selecting which feature to delete.
     // Boosts weight for types above their max, reduces for types at/below min.
@@ -175,12 +173,12 @@ fn compute_delete_weights(
                 .unwrap_or(0);
             if let Some(max) = pref.max {
                 if current > max {
-                    w = 1.0 + (current - max) as f64 * 2.0;
+                    w = 1.0 + (current - max) as f64 * excess_boost;
                 } else if current <= pref.min {
-                    w = 0.1;
+                    w = penalty_factor;
                 }
             } else if current <= pref.min {
-                w = 0.1;
+                w = penalty_factor;
             }
         }
         weights.push(w);
@@ -190,7 +188,7 @@ fn compute_delete_weights(
 
 /// Compute per-tile placement weights inversely proportional to occupancy.
 ///
-/// Divides table into ~TILE_SIZE tiles and counts how many feature OBBs
+/// Divides table into ~tile_size tiles and counts how many feature OBBs
 /// overlap each tile. Weight = 1/(1+count), biasing placement toward
 /// empty areas.
 ///
@@ -202,9 +200,10 @@ pub(crate) fn compute_tile_weights(
     table_width: f64,
     table_depth: f64,
     rotationally_symmetric: bool,
+    tile_size: f64,
 ) -> (Vec<f64>, usize, usize, f64, f64) {
-    let nx = (table_width / TILE_SIZE).round().max(1.0) as usize;
-    let nz = (table_depth / TILE_SIZE).round().max(1.0) as usize;
+    let nx = (table_width / tile_size).round().max(1.0) as usize;
+    let nz = (table_depth / tile_size).round().max(1.0) as usize;
     let tile_w = table_width / nx as f64;
     let tile_d = table_depth / nz as f64;
     let half_w = table_width / 2.0;
@@ -262,7 +261,7 @@ fn instantiate_feature(template: &TerrainFeature, feature_id: u32) -> TerrainFea
 
 /// Generate a temperature-aware move transform.
 ///
-/// At t_factor=0, displacement is small (±MIN_MOVE_RANGE/2 inches).
+/// At t_factor=0, displacement is small (±min_move_range/2 inches).
 /// At t_factor=1, displacement spans the full table.
 /// Always consumes exactly 4 PRNG values.
 pub(crate) fn temperature_move(
@@ -272,9 +271,11 @@ pub(crate) fn temperature_move(
     table_depth: f64,
     t_factor: f64,
     rotation_granularity: f64,
+    min_move_range: f64,
+    rotate_on_move_prob: f64,
 ) -> Transform {
     let max_dim = table_width.max(table_depth);
-    let move_range = MIN_MOVE_RANGE + t_factor * (max_dim - MIN_MOVE_RANGE);
+    let move_range = min_move_range + t_factor * (max_dim - min_move_range);
 
     let dx = (rng.next_float() - 0.5) * 2.0 * move_range;
     let dz = (rng.next_float() - 0.5) * 2.0 * move_range;
@@ -284,8 +285,8 @@ pub(crate) fn temperature_move(
     let new_x = quantize_position(old_transform.x_inches + dx);
     let new_z = quantize_position(old_transform.z_inches + dz);
 
-    // Rotation: 0% chance at t=0, 50% chance at t=1
-    let rot = if rotate_check < 0.5 * t_factor {
+    // Rotation: 0% chance at t=0, rotate_on_move_prob chance at t=1
+    let rot = if rotate_check < rotate_on_move_prob * t_factor {
         quantize_angle(rot_angle_raw * 360.0, rotation_granularity)
     } else {
         old_transform.rotation_deg
@@ -317,6 +318,7 @@ fn try_single_action(
     let has_features = !layout.placed_features.is_empty();
     let feature_counts =
         count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
+    let tuning = params.tuning();
 
     // Compute action weights: [add, move, delete, replace, rotate]
     // Non-final mutations in a chain get full delete weight (clearing space
@@ -328,7 +330,7 @@ fn try_single_action(
     let mut delete_weight: f64 = if !has_features {
         0.0
     } else if is_last {
-        0.25
+        tuning.delete_weight_last
     } else {
         1.0
     };
@@ -344,13 +346,13 @@ fn try_single_action(
         let current = feature_counts.get(&pref.feature_type).copied().unwrap_or(0);
         if current < pref.min {
             let shortage = pref.min - current;
-            add_weight *= 1.0 + shortage as f64 * 2.0;
-            delete_weight *= 0.1;
+            add_weight *= 1.0 + shortage as f64 * tuning.shortage_boost;
+            delete_weight *= tuning.penalty_factor;
         } else if let Some(max) = pref.max {
             if current > max {
                 let excess = current - max;
-                delete_weight *= 1.0 + excess as f64 * 2.0;
-                add_weight *= 0.1;
+                delete_weight *= 1.0 + excess as f64 * tuning.excess_boost;
+                add_weight *= tuning.penalty_factor;
             }
         }
     }
@@ -377,6 +379,8 @@ fn try_single_action(
                 catalog_quantities,
                 &layout.placed_features,
                 params.rotationally_symmetric,
+                tuning.shortage_boost,
+                tuning.penalty_factor,
             );
             let tidx = weighted_choice(rng, &template_weights)?;
             let template = catalog_features[tidx];
@@ -389,6 +393,7 @@ fn try_single_action(
                 params.table_width_inches,
                 params.table_depth_inches,
                 params.rotationally_symmetric,
+                tuning.tile_size,
             );
             let tile_idx = weighted_choice(rng, &tile_weights)?;
             let tile_iz = tile_idx / nx;
@@ -437,6 +442,8 @@ fn try_single_action(
                 params.table_depth_inches,
                 t_factor,
                 params.rotation_granularity_deg,
+                tuning.min_move_range,
+                tuning.rotate_on_move_prob,
             );
             layout.placed_features[idx].transform = new_transform;
             if is_valid_placement(
@@ -459,16 +466,26 @@ fn try_single_action(
         }
         2 => {
             // Delete
-            let delete_weights =
-                compute_delete_weights(&layout.placed_features, &feature_counts, prefs);
+            let delete_weights = compute_delete_weights(
+                &layout.placed_features,
+                &feature_counts,
+                prefs,
+                tuning.excess_boost,
+                tuning.penalty_factor,
+            );
             let idx = weighted_choice(rng, &delete_weights)?;
             let saved = layout.placed_features.remove(idx);
             Some((StepUndo::Delete { index: idx, saved }, next_id))
         }
         3 => {
             // Replace: remove feature, add different template at same position
-            let delete_weights =
-                compute_delete_weights(&layout.placed_features, &feature_counts, prefs);
+            let delete_weights = compute_delete_weights(
+                &layout.placed_features,
+                &feature_counts,
+                prefs,
+                tuning.excess_boost,
+                tuning.penalty_factor,
+            );
             let idx = weighted_choice(rng, &delete_weights)?;
             let template_weights = compute_template_weights(
                 catalog_features,
@@ -477,6 +494,8 @@ fn try_single_action(
                 catalog_quantities,
                 &layout.placed_features,
                 params.rotationally_symmetric,
+                tuning.shortage_boost,
+                tuning.penalty_factor,
             );
             let tidx = weighted_choice(rng, &template_weights)?;
             let template = catalog_features[tidx];
@@ -552,8 +571,9 @@ pub(crate) fn perform_step(
     index_in_chain: u32,
     chain_length: u32,
 ) -> (StepUndo, u32) {
+    let tuning = params.tuning();
     let mut effective_t = t_factor;
-    for _ in 0..MAX_RETRIES {
+    for _ in 0..tuning.max_retries {
         if let Some(result) = try_single_action(
             layout,
             rng,
@@ -570,7 +590,7 @@ pub(crate) fn perform_step(
         ) {
             return result;
         }
-        effective_t *= RETRY_DECAY;
+        effective_t *= tuning.retry_decay;
     }
     (StepUndo::Noop, next_id)
 }
@@ -607,7 +627,7 @@ mod tests {
     use crate::prng::Pcg32;
     use crate::types::{
         CatalogFeature, CatalogObject, EngineParams, FeatureComponent, GeometricShape,
-        TerrainCatalog, TerrainFeature, Transform,
+        TerrainCatalog, TerrainFeature, Transform, TuningParams,
     };
 
     fn crate_catalog() -> TerrainCatalog {
@@ -665,11 +685,13 @@ mod tests {
             num_replicas: None,
             swap_interval: 20,
             max_temperature: 50.0,
+            tuning: None,
         }
     }
 
     #[test]
     fn temperature_move_small_t() {
+        let defaults = TuningParams::default();
         let mut rng = Pcg32::new(42, 0);
         let old = Transform {
             x_inches: 0.0,
@@ -678,15 +700,25 @@ mod tests {
             rotation_deg: 90.0,
         };
         for _ in 0..100 {
-            let t = temperature_move(&mut rng, &old, 60.0, 44.0, 0.0, 15.0);
-            assert!((t.x_inches - old.x_inches).abs() <= MIN_MOVE_RANGE + 0.1);
-            assert!((t.z_inches - old.z_inches).abs() <= MIN_MOVE_RANGE + 0.1);
+            let t = temperature_move(
+                &mut rng,
+                &old,
+                60.0,
+                44.0,
+                0.0,
+                15.0,
+                defaults.min_move_range,
+                defaults.rotate_on_move_prob,
+            );
+            assert!((t.x_inches - old.x_inches).abs() <= defaults.min_move_range + 0.1);
+            assert!((t.z_inches - old.z_inches).abs() <= defaults.min_move_range + 0.1);
             assert_eq!(t.rotation_deg, 90.0); // no rotation at t=0
         }
     }
 
     #[test]
     fn temperature_move_consumes_4_prng() {
+        let defaults = TuningParams::default();
         let mut rng1 = Pcg32::new(99, 0);
         let mut rng2 = Pcg32::new(99, 0);
         let old = Transform {
@@ -695,7 +727,16 @@ mod tests {
             z_inches: 3.0,
             rotation_deg: 30.0,
         };
-        temperature_move(&mut rng1, &old, 60.0, 44.0, 0.5, 15.0);
+        temperature_move(
+            &mut rng1,
+            &old,
+            60.0,
+            44.0,
+            0.5,
+            15.0,
+            defaults.min_move_range,
+            defaults.rotate_on_move_prob,
+        );
         for _ in 0..4 {
             rng2.next_float();
         }
@@ -704,9 +745,11 @@ mod tests {
 
     #[test]
     fn tile_weights_empty_table() {
+        let defaults = TuningParams::default();
         let catalog = crate_catalog();
         let objs = crate::generate::build_object_index(&catalog);
-        let (weights, nx, nz, _, _) = compute_tile_weights(&[], &objs, 60.0, 44.0, false);
+        let (weights, nx, nz, _, _) =
+            compute_tile_weights(&[], &objs, 60.0, 44.0, false, defaults.tile_size);
         assert_eq!(nx, 30); // 60/2
         assert_eq!(nz, 22); // 44/2
         assert!(weights.iter().all(|&w| w == 1.0));
@@ -714,6 +757,7 @@ mod tests {
 
     #[test]
     fn tile_weights_occupied_lower() {
+        let defaults = TuningParams::default();
         let params = make_params(42, 200);
         let result = crate::generate::generate(&params);
         let objs = crate::generate::build_object_index(&params.catalog);
@@ -723,6 +767,7 @@ mod tests {
             params.table_width_inches,
             params.table_depth_inches,
             false,
+            defaults.tile_size,
         );
         let min_w = weights.iter().cloned().fold(f64::INFINITY, f64::min);
         let max_w = weights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);

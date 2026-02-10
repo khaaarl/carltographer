@@ -1,7 +1,5 @@
 from engine.generate import generate
 from engine.mutation import (
-    MIN_MOVE_RANGE,
-    TILE_SIZE,
     StepUndo,
     _compute_tile_weights,
     _quantize_angle,
@@ -17,7 +15,13 @@ from engine.types import (
     TerrainFeature,
     TerrainLayout,
     Transform,
+    TuningParams,
 )
+
+# Defaults for test assertions
+_DEFAULTS = TuningParams()
+MIN_MOVE_RANGE = _DEFAULTS.min_move_range
+TILE_SIZE = _DEFAULTS.tile_size
 
 
 def _crate_catalog_dict():

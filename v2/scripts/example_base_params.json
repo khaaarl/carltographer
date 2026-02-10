@@ -1,0 +1,89 @@
+{
+    "seed": 0,
+    "table_width_inches": 60.0,
+    "table_depth_inches": 44.0,
+    "num_steps": 200,
+    "num_replicas": 4,
+    "swap_interval": 20,
+    "max_temperature": 50.0,
+    "min_feature_gap_inches": 3.0,
+    "min_edge_gap_inches": 2.0,
+    "catalog": {
+        "name": "Tuning Catalog",
+        "objects": [
+            {
+                "item": {
+                    "id": "crate_5x2.5",
+                    "shapes": [
+                        {
+                            "shape_type": "rectangular_prism",
+                            "width_inches": 5.0,
+                            "depth_inches": 2.5,
+                            "height_inches": 2.0
+                        }
+                    ],
+                    "name": "Crate"
+                }
+            },
+            {
+                "item": {
+                    "id": "container_8x3",
+                    "shapes": [
+                        {
+                            "shape_type": "rectangular_prism",
+                            "width_inches": 8.0,
+                            "depth_inches": 3.0,
+                            "height_inches": 3.0
+                        }
+                    ],
+                    "name": "Container"
+                }
+            },
+            {
+                "item": {
+                    "id": "ruins_12x6",
+                    "shapes": [
+                        {
+                            "shape_type": "rectangular_prism",
+                            "width_inches": 12.0,
+                            "depth_inches": 6.0,
+                            "height_inches": 0.0
+                        }
+                    ],
+                    "name": "Ruins"
+                }
+            }
+        ],
+        "features": [
+            {
+                "item": {
+                    "id": "crate",
+                    "feature_type": "obstacle",
+                    "components": [{"object_id": "crate_5x2.5"}]
+                }
+            },
+            {
+                "item": {
+                    "id": "container",
+                    "feature_type": "obstacle",
+                    "components": [{"object_id": "container_8x3"}]
+                }
+            },
+            {
+                "item": {
+                    "id": "ruins",
+                    "feature_type": "obscuring",
+                    "components": [{"object_id": "ruins_12x6"}]
+                }
+            }
+        ]
+    },
+    "feature_count_preferences": [
+        {"feature_type": "obstacle", "min": 4, "max": 8},
+        {"feature_type": "obscuring", "min": 2, "max": 4}
+    ],
+    "scoring_targets": {
+        "overall_visibility_target": 30.0,
+        "overall_visibility_weight": 1.0
+    }
+}

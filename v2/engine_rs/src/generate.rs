@@ -2,16 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::mutation::{
-    count_features_by_type, perform_step, undo_step, StepUndo, MAX_EXTRA_MUTATIONS,
-};
+use crate::mutation::{count_features_by_type, perform_step, undo_step, StepUndo};
 use crate::prng::Pcg32;
 use crate::types::{
     EngineParams, EngineResult, FeatureCountPreference, PlacedFeature, ScoringTargets,
     TerrainCatalog, TerrainFeature, TerrainLayout, TerrainObject,
 };
-
-const PHASE2_BASE: f64 = 1000.0;
 
 pub(crate) fn build_object_index(catalog: &TerrainCatalog) -> HashMap<String, &TerrainObject> {
     let mut index = HashMap::new();
@@ -88,6 +84,7 @@ fn compute_score(
     skip_visibility: bool,
     scoring_targets: Option<&ScoringTargets>,
     visibility_cache: Option<&mut crate::visibility::VisibilityCache>,
+    phase2_base: f64,
 ) -> f64 {
     // Phase 1: gradient toward satisfying count preferences.
     let counts = count_features_by_type(&layout.placed_features, layout.rotationally_symmetric);
@@ -104,11 +101,11 @@ fn compute_score(
     }
 
     if total_deficit > 0 {
-        return PHASE2_BASE / (1.0 + total_deficit as f64);
+        return phase2_base / (1.0 + total_deficit as f64);
     }
 
     if skip_visibility {
-        return PHASE2_BASE;
+        return phase2_base;
     }
 
     // Phase 2: optimize visibility toward targets.
@@ -122,7 +119,7 @@ fn compute_score(
     let targets = match scoring_targets {
         None => {
             let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
-            return PHASE2_BASE + (100.0 - vis_pct);
+            return phase2_base + (100.0 - vis_pct);
         }
         Some(t) => t,
     };
@@ -170,11 +167,11 @@ fn compute_score(
 
     if total_weight <= 0.0 {
         let vis_pct = vis["overall"]["value"].as_f64().unwrap_or(100.0);
-        return PHASE2_BASE + (100.0 - vis_pct);
+        return phase2_base + (100.0 - vis_pct);
     }
 
     let weighted_avg_error = total_weighted_error / total_weight;
-    PHASE2_BASE + (100.0 - weighted_avg_error)
+    phase2_base + (100.0 - weighted_avg_error)
 }
 
 pub fn generate(params: &EngineParams) -> EngineResult {
@@ -191,6 +188,7 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
     if let Some(ref initial) = params.initial_layout {
         merge_layout_objects(&mut objects_by_id, &initial.terrain_objects);
     }
+    let tuning = params.tuning();
 
     let (initial_features, mut nid) = match &params.initial_layout {
         Some(initial) => {
@@ -240,6 +238,7 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         params.skip_visibility,
         params.scoring_targets.as_ref(),
         vis_cache.as_mut(),
+        tuning.phase2_base,
     );
 
     for _ in 0..num_steps {
@@ -272,6 +271,7 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
             params.skip_visibility,
             params.scoring_targets.as_ref(),
             vis_cache.as_mut(),
+            tuning.phase2_base,
         );
         if new_score >= current_score {
             current_score = new_score;
@@ -309,6 +309,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
     if let Some(ref initial) = params.initial_layout {
         merge_layout_objects(&mut objects_by_id, &initial.terrain_objects);
     }
+    let tuning = params.tuning();
     let catalog_features: Vec<&TerrainFeature> =
         params.catalog.features.iter().map(|cf| &cf.item).collect();
     let catalog_quantities: Vec<Option<u32>> = params
@@ -320,7 +321,11 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
     let has_catalog = !catalog_features.is_empty();
     let num_steps = params.steps();
     let prefs = params.feature_count_preferences.as_deref().unwrap_or(&[]);
-    let temperatures = compute_temperatures(num_replicas, params.max_temperature);
+    let temperatures = compute_temperatures(
+        num_replicas,
+        params.max_temperature,
+        tuning.temp_ladder_min_ratio,
+    );
     let max_temperature = params.max_temperature;
     let swap_interval = params.swap_interval;
 
@@ -369,6 +374,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
             params.skip_visibility,
             params.scoring_targets.as_ref(),
             None,
+            tuning.phase2_base,
         );
         replicas.push(Replica {
             layout,
@@ -418,7 +424,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                         } else {
                             0.0
                         };
-                        let num_mutations = 1 + (t_factor * MAX_EXTRA_MUTATIONS as f64) as u32;
+                        let num_mutations =
+                            1 + (t_factor * tuning.max_extra_mutations as f64) as u32;
 
                         for _ in 0..batch_size {
                             let mut sub_undos: Vec<(StepUndo, u32)> =
@@ -458,6 +465,7 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                 params.skip_visibility,
                                 params.scoring_targets.as_ref(),
                                 replica.vis_cache.as_mut(),
+                                tuning.phase2_base,
                             );
 
                             if sa_accept(
@@ -631,6 +639,7 @@ mod tests {
             num_replicas: None,
             swap_interval: 20,
             max_temperature: 50.0,
+            tuning: None,
         }
     }
 
@@ -715,6 +724,7 @@ mod tests {
             num_replicas: None,
             swap_interval: 20,
             max_temperature: 50.0,
+            tuning: None,
         };
         let result = generate(&params);
         assert!(result.layout.placed_features.is_empty());
@@ -866,6 +876,7 @@ mod tests {
             num_replicas: None,
             swap_interval: 20,
             max_temperature: 50.0,
+            tuning: None,
         };
 
         let result = generate(&params);

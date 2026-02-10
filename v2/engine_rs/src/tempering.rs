@@ -84,8 +84,12 @@ struct ReplicaState<C> {
 ///
 /// K=1: [0.0]
 /// K=2: [0.0, max_temperature]
-/// K>2: [0.0] + geometric from max_temperature*0.01 to max_temperature
-pub fn compute_temperatures(num_replicas: u32, max_temperature: f64) -> Vec<f64> {
+/// K>2: [0.0] + geometric from max_temperature*temp_ladder_min_ratio to max_temperature
+pub fn compute_temperatures(
+    num_replicas: u32,
+    max_temperature: f64,
+    temp_ladder_min_ratio: f64,
+) -> Vec<f64> {
     if num_replicas == 0 {
         return vec![];
     }
@@ -97,7 +101,7 @@ pub fn compute_temperatures(num_replicas: u32, max_temperature: f64) -> Vec<f64>
     }
 
     let mut temps = vec![0.0];
-    let t_min = max_temperature * 0.01;
+    let t_min = max_temperature * temp_ladder_min_ratio;
     for i in 1..num_replicas {
         let frac = (i - 1) as f64 / (num_replicas - 2) as f64;
         let t = t_min * (max_temperature / t_min).powf(frac);
@@ -201,7 +205,7 @@ pub fn run_tempering<C: TemperingCandidate>(
     params: &TemperingParams,
     create_candidate: impl Fn(&mut Pcg32) -> C,
 ) -> TemperingResult<C> {
-    let temperatures = compute_temperatures(params.num_replicas, params.max_temperature);
+    let temperatures = compute_temperatures(params.num_replicas, params.max_temperature, 0.01);
 
     let mut replicas: Vec<ReplicaState<C>> = Vec::with_capacity(params.num_replicas as usize);
     for i in 0..params.num_replicas {
@@ -354,17 +358,17 @@ mod tests {
 
     #[test]
     fn test_compute_temperatures_single() {
-        assert_eq!(compute_temperatures(1, 50.0), vec![0.0]);
+        assert_eq!(compute_temperatures(1, 50.0, 0.01), vec![0.0]);
     }
 
     #[test]
     fn test_compute_temperatures_two() {
-        assert_eq!(compute_temperatures(2, 50.0), vec![0.0, 50.0]);
+        assert_eq!(compute_temperatures(2, 50.0, 0.01), vec![0.0, 50.0]);
     }
 
     #[test]
     fn test_compute_temperatures_four() {
-        let temps = compute_temperatures(4, 50.0);
+        let temps = compute_temperatures(4, 50.0, 0.01);
         assert_eq!(temps.len(), 4);
         assert_eq!(temps[0], 0.0);
         assert!((temps[3] - 50.0).abs() < 1e-9);
@@ -375,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_compute_temperatures_eight_geometric() {
-        let temps = compute_temperatures(8, 100.0);
+        let temps = compute_temperatures(8, 100.0, 0.01);
         assert_eq!(temps.len(), 8);
         assert_eq!(temps[0], 0.0);
         assert!((temps[7] - 100.0).abs() < 1e-9);
