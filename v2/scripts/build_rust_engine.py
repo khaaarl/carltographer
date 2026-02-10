@@ -195,6 +195,7 @@ def build_rust_engine() -> bool:
 def run_comparison_tests(
     newest_first: bool = False,
     fail_fast: bool = False,
+    step_multiplier: int = 1,
 ) -> bool:
     log.step("Running engine comparison tests")
 
@@ -205,6 +206,8 @@ def run_comparison_tests(
         cmd.append("--newest-first")
     if fail_fast:
         cmd.append("--fail-fast")
+    if step_multiplier > 1:
+        cmd.extend(["--step-multiplier", str(step_multiplier)])
 
     try:
         run(cmd, cwd=str(V2_DIR))
@@ -255,6 +258,13 @@ def main() -> int:
         action="store_true",
         help="Stop on first comparison failure",
     )
+    parser.add_argument(
+        "--step-multiplier",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Multiply num_steps for each scenario by N (e.g. 5 for thorough testing)",
+    )
     args = parser.parse_args()
 
     global log
@@ -272,6 +282,7 @@ def main() -> int:
         lambda: run_comparison_tests(
             newest_first=args.newest_first,
             fail_fast=args.fail_fast,
+            step_multiplier=args.step_multiplier,
         ),
         verify_manifest,
     ]

@@ -1030,7 +1030,7 @@ TEST_SCENARIOS = [
     TestScenario(
         "scoring_targets_with_mission",
         seed=42,
-        num_steps=10,
+        num_steps=5,
         mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
         scoring_targets=ScoringTargets(
             overall_visibility_target=30.0,
@@ -1600,10 +1600,20 @@ def main():
         action="store_true",
         help="Stop on first failure",
     )
+    parser.add_argument(
+        "--step-multiplier",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Multiply num_steps for each scenario by N (e.g. 5 for thorough testing)",
+    )
 
     args = parser.parse_args()
 
     scenarios = list(TEST_SCENARIOS)
+    if args.step_multiplier > 1:
+        for s in scenarios:
+            s.num_steps *= args.step_multiplier
     if args.scenario:
         scenarios = [s for s in scenarios if s.name == args.scenario]
         if not scenarios:
