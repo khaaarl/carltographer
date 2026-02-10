@@ -404,7 +404,7 @@ class TuningParams:
     shortage_boost: float = 2.0
     excess_boost: float = 2.0
     penalty_factor: float = 0.1
-    phase2_base: float = 1000.0
+    phase2_base: float = 10.0
     temp_ladder_min_ratio: float = 0.01
 
     @staticmethod
@@ -420,7 +420,7 @@ class TuningParams:
             shortage_boost=d.get("shortage_boost", 2.0),
             excess_boost=d.get("excess_boost", 2.0),
             penalty_factor=d.get("penalty_factor", 0.1),
-            phase2_base=d.get("phase2_base", 1000.0),
+            phase2_base=d.get("phase2_base", 10.0),
             temp_ladder_min_ratio=d.get("temp_ladder_min_ratio", 0.01),
         )
 

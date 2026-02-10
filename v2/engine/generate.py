@@ -73,7 +73,7 @@ def _compute_score(
     skip_visibility: bool = False,
     scoring_targets: ScoringTargets | None = None,
     visibility_cache: VisibilityCache | None = None,
-    phase2_base: float = 1000.0,
+    phase2_base: float = 10.0,
 ) -> float:
     """Compute fitness score for hill-climbing.
 
@@ -90,7 +90,7 @@ def _compute_score(
             total_deficit += current - pref.max
 
     if total_deficit > 0:
-        return phase2_base / (1.0 + total_deficit)
+        return phase2_base - total_deficit * 0.01
 
     if skip_visibility:
         return phase2_base

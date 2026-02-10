@@ -47,10 +47,12 @@ TUNING_PARAM_NAMES = [
     "shortage_boost",
     "excess_boost",
     "penalty_factor",
-    "phase2_base",
     "temp_ladder_min_ratio",
 ]
 
+# phase2_base is intentionally excluded — it controls the boundary between
+# phase 1 (feature count) and phase 2 (visibility) scoring and should not
+# be tuned. Changing it just shifts scores without improving layout quality.
 TUNING_DEFAULTS = {
     "max_retries": 100,
     "retry_decay": 0.95,
@@ -62,7 +64,6 @@ TUNING_DEFAULTS = {
     "shortage_boost": 2.0,
     "excess_boost": 2.0,
     "penalty_factor": 0.1,
-    "phase2_base": 1000.0,
     "temp_ladder_min_ratio": 0.01,
 }
 

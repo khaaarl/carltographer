@@ -101,7 +101,7 @@ fn compute_score(
     }
 
     if total_deficit > 0 {
-        return phase2_base / (1.0 + total_deficit as f64);
+        return phase2_base - total_deficit as f64 * 0.01;
     }
 
     if skip_visibility {

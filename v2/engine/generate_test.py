@@ -755,14 +755,14 @@ class TestScoring:
         assert r_long.score >= r_short.score
 
     def test_score_phase1_with_zero_steps(self):
-        """Empty layout with min=5 preference -> score = PHASE2_BASE / 6."""
+        """Empty layout with min=5 preference -> score = PHASE2_BASE - 5*0.01."""
         layout = TerrainLayout(
             table_width=60.0,
             table_depth=44.0,
         )
         prefs = [FeatureCountPreference(feature_type="obstacle", min=5)]
         score = _compute_score(layout, prefs, {})
-        expected = PHASE2_BASE / (1.0 + 5)
+        expected = PHASE2_BASE - 5 * 0.01
         assert abs(score - expected) < 1e-6
 
     def test_delete_reversion(self):
@@ -864,7 +864,7 @@ class TestScoringTargets:
         prefs = [FeatureCountPreference(feature_type="obstacle", min=5)]
         targets = ScoringTargets(overall_visibility_target=30.0)
         score = _compute_score(layout, prefs, {}, scoring_targets=targets)
-        expected = PHASE2_BASE / (1.0 + 5)
+        expected = PHASE2_BASE - 5 * 0.01
         assert abs(score - expected) < 1e-6
 
 

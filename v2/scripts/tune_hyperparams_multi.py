@@ -13,7 +13,7 @@ Workflow:
            --output tuning_results.csv --include-baseline
 
   2. Examine the CSV to identify the best candidates (sort by mean_score
-     or by adjusted score = mean_score - phase2_base).
+     or by other aggregated columns).
 
   3. Phase 2 — Re-run the best candidates with different seeds to confirm
      they generalize (not yet automated; use --num-trials 1 with manually
@@ -24,7 +24,7 @@ differences between trials are purely from TuningParams. Per-scenario seeds
 are derived from the --seed flag, making results fully reproducible.
 
 Output CSV columns:
-  trial_name, 12 tuning params, mean_score, std_score, min_score,
+  trial_name, 11 tuning params, mean_score, std_score, min_score,
   mean_steps_{10,20,50,100} (mean score at each step budget),
   mean_{wtc,gw,omnium} (per-catalog), mean_sym_{true,false} (per-symmetry),
   elapsed_s, score_<scenario_name> (all 24 per-scenario scores)
@@ -65,10 +65,12 @@ TUNING_PARAM_NAMES = [
     "shortage_boost",
     "excess_boost",
     "penalty_factor",
-    "phase2_base",
     "temp_ladder_min_ratio",
 ]
 
+# phase2_base is intentionally excluded — it controls the boundary between
+# phase 1 (feature count) and phase 2 (visibility) scoring and should not
+# be tuned. Changing it just shifts scores without improving layout quality.
 TUNING_DEFAULTS = {
     "max_retries": 100,
     "retry_decay": 0.95,
@@ -80,7 +82,6 @@ TUNING_DEFAULTS = {
     "shortage_boost": 2.0,
     "excess_boost": 2.0,
     "penalty_factor": 0.1,
-    "phase2_base": 1000.0,
     "temp_ladder_min_ratio": 0.01,
 }
 

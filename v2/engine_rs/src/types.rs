@@ -272,7 +272,7 @@ fn default_penalty_factor() -> f64 {
     0.1
 }
 fn default_phase2_base() -> f64 {
-    1000.0
+    10.0
 }
 fn default_temp_ladder_min_ratio() -> f64 {
     0.01
@@ -319,7 +319,7 @@ impl Default for TuningParams {
             shortage_boost: 2.0,
             excess_boost: 2.0,
             penalty_factor: 0.1,
-            phase2_base: 1000.0,
+            phase2_base: 10.0,
             temp_ladder_min_ratio: 0.01,
         }
     }
