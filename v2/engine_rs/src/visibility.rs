@@ -751,6 +751,64 @@ fn fraction_of_dz_visible_zsorted(
     count as f64 / sorted.count as f64
 }
 
+/// Z-sorted PIP that directly updates a `seen` boolean array.
+/// Only processes unseen points (skips already-seen entries in the
+/// edge loop). After all edges, marks newly-inside points as seen.
+fn pip_zsorted_update_seen(
+    vis_poly: &[(f64, f64)],
+    sorted: &DzSortedSamples,
+    seen: &mut [bool],
+    inside: &mut Vec<bool>,
+) {
+    if sorted.count == 0 || vis_poly.len() < 3 {
+        return;
+    }
+
+    inside.clear();
+    inside.resize(sorted.count, false);
+
+    let n = vis_poly.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, zi) = vis_poly[i];
+        let (xj, zj) = vis_poly[j];
+
+        if zi == zj {
+            j = i;
+            continue;
+        }
+
+        let (z_lo, z_hi) = if zi < zj { (zi, zj) } else { (zj, zi) };
+        let start =
+            sorted.sorted.partition_point(|s| s.0 < z_lo);
+        let end =
+            sorted.sorted.partition_point(|s| s.0 < z_hi);
+
+        let inv_dz = 1.0 / (zj - zi);
+        let dx = xj - xi;
+        for k in start..end {
+            let (pz, px, orig_idx) = sorted.sorted[k];
+            let oidx = orig_idx as usize;
+            if seen[oidx] {
+                continue;
+            }
+            let intersect_x = dx * (pz - zi) * inv_dz + xi;
+            if px < intersect_x {
+                inside[oidx] = !inside[oidx];
+            }
+        }
+
+        j = i;
+    }
+
+    // Mark newly visible unseen points as seen
+    for (i, &is_inside) in inside.iter().enumerate() {
+        if is_inside && !seen[i] {
+            seen[i] = true;
+        }
+    }
+}
+
 /// Build the full sample grid for a table + mission (same logic as
 /// the grid generation in `compute_layout_visibility`).
 fn build_sample_grid(layout: &TerrainLayout) -> Vec<(f64, f64)> {
@@ -1181,6 +1239,7 @@ pub fn compute_layout_visibility(
             .map_or(false, |m| !m.objectives.is_empty());
 
     let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut obj_sorted_samples: Vec<DzSortedSamples> = Vec::new();
     let mut obj_radii: Vec<f64> = Vec::new();
 
     if has_objectives {
@@ -1200,6 +1259,8 @@ pub fn compute_layout_visibility(
                 1.0,
                 0.0,
             );
+            obj_sorted_samples
+                .push(DzSortedSamples::from_points(&pts));
             obj_sample_points.push(pts);
         }
     }
@@ -1228,8 +1289,6 @@ pub fn compute_layout_visibility(
         vis_bufs: VisBuffers,
         vis_poly: Vec<(f64, f64)>,
         pip_buf: Vec<bool>,
-        unseen_indices: Vec<usize>,
-        unseen_points: Vec<(f64, f64)>,
     }
 
     // Closure to create a fresh per-thread accumulator.
@@ -1264,8 +1323,6 @@ pub fn compute_layout_visibility(
         vis_bufs: VisBuffers::new(),
         vis_poly: Vec::new(),
         pip_buf: Vec::new(),
-        unseen_indices: Vec::new(),
-        unseen_points: Vec::new(),
     });
 
     // Parallel observer loop: each rayon worker folds observers into
@@ -1361,7 +1418,7 @@ pub fn compute_layout_visibility(
                     }
                 }
 
-                // Step 2: cross-DZ + objective
+                // Step 2: cross-DZ (Z-sorted, skip-seen)
                 if let Some(my_dz) = obs_expanded_dz {
                     for (oi, other_dd) in
                         dz_data.iter().enumerate()
@@ -1373,67 +1430,26 @@ pub fn compute_layout_visibility(
                         acc.dz_cross_obs_count[pair] += 1;
                         let seen =
                             &mut acc.dz_cross_seen[pair];
-                        acc.unseen_indices.clear();
-                        acc.unseen_points.clear();
-                        for (i, &pt) in other_dd
-                            .samples
-                            .iter()
-                            .enumerate()
-                        {
-                            if !seen[i] {
-                                acc.unseen_indices.push(i);
-                                acc.unseen_points.push(pt);
-                            }
-                        }
-                        if !acc.unseen_points.is_empty() {
-                            batch_point_in_polygon(
-                                &acc.unseen_points,
-                                &acc.vis_poly,
-                                &mut acc.pip_buf,
-                            );
-                            for (k, &idx) in acc
-                                .unseen_indices
-                                .iter()
-                                .enumerate()
-                            {
-                                if acc.pip_buf[k] {
-                                    seen[idx] = true;
-                                }
-                            }
-                        }
+                        pip_zsorted_update_seen(
+                            &acc.vis_poly,
+                            &other_dd.sorted_samples,
+                            seen,
+                            &mut acc.pip_buf,
+                        );
                     }
+                    // Step 3: objective hidability (Z-sorted, skip-seen)
                     if has_objectives {
-                        for (oi, obj_pts) in
-                            obj_sample_points.iter().enumerate()
+                        for (oi, obj_sorted) in
+                            obj_sorted_samples.iter().enumerate()
                         {
                             let seen = &mut acc
                                 .obj_seen_from_dz[my_dz][oi];
-                            acc.unseen_indices.clear();
-                            acc.unseen_points.clear();
-                            for (i, &pt) in
-                                obj_pts.iter().enumerate()
-                            {
-                                if !seen[i] {
-                                    acc.unseen_indices.push(i);
-                                    acc.unseen_points.push(pt);
-                                }
-                            }
-                            if !acc.unseen_points.is_empty() {
-                                batch_point_in_polygon(
-                                    &acc.unseen_points,
-                                    &acc.vis_poly,
-                                    &mut acc.pip_buf,
-                                );
-                                for (k, &idx) in acc
-                                    .unseen_indices
-                                    .iter()
-                                    .enumerate()
-                                {
-                                    if acc.pip_buf[k] {
-                                        seen[idx] = true;
-                                    }
-                                }
-                            }
+                            pip_zsorted_update_seen(
+                                &acc.vis_poly,
+                                obj_sorted,
+                                seen,
+                                &mut acc.pip_buf,
+                            );
                         }
                     }
                 }
@@ -2219,4 +2235,5 @@ mod tests {
         // Point at (20, 5) is 10" from the right edge — beyond 6"
         assert!(!point_near_any_polygon(20.0, 5.0, &[poly], 6.0));
     }
+
 }

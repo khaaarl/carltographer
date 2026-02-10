@@ -73,18 +73,37 @@ Data structure: `DzSortedSamples` holds `Vec<(z, x, original_index)>` sorted by 
 
 Additional micro-optimization: precompute `1.0 / (zj - zi)` once per edge instead of dividing in the inner loop. Skip horizontal edges (zi == zj) entirely since they have no crossings.
 
-Only applied to the `dz_vis` path (`fraction_of_dz_visible_zsorted`). The `cross_dz` and `obj_hide` paths continue using the original `batch_point_in_polygon` because their point sets change per-observer (unseen filtering).
+Initially applied only to the `dz_vis` path (`fraction_of_dz_visible_zsorted`). The `cross_dz` and `obj_hide` paths continued using the original `batch_point_in_polygon`.
 
 - visibility_50: ~178ms → ~189ms (no DZs — unaffected, within noise)
 - visibility_100: ~551ms → ~582ms (no DZs — unaffected, within noise)
 - **mission_hna: ~1.92s → ~985ms (-49%)**
 
-### Cumulative improvement (all optimizations including Z-sorted PIP)
-| Benchmark | Original | After ST opts | After rayon | After Z-sorted | Total improvement |
-|---|---|---|---|---|---|
-| visibility_50 | 872 ms | 476 ms | 178 ms | ~178 ms | **-80%** |
-| visibility_100 | 3.80 s | 1.68 s | 551 ms | ~551 ms | **-85%** |
-| mission_hna | 5.70 s | 4.93 s | 1.92 s | ~985 ms | **-83%** |
+### 6. Z-sorted PIP for cross_dz and obj_hide (skip-seen)
+
+Post-Z-sorted profiling showed the new bottleneck distribution:
+- cross_dz: **~45-50%** (was 27%, now dominant)
+- obj_hide: **~25-30%** (was 7%)
+- vis_poly: **~15-18%** (was 8%)
+- dz_vis: **~9-12%** (was 60%, dramatically reduced by opt #5)
+
+Applied the same Z-sorted binary search to cross_dz and obj_hide paths via a new `pip_zsorted_update_seen()` function. This function:
+- Uses the same pre-sorted DzSortedSamples (DZ points for cross_dz, objective sample points for obj_hide)
+- Skips already-seen entries in the inner loop (`if seen[oidx] { continue; }`) — avoids building the `unseen_points` Vec entirely
+- Directly updates the `seen` boolean array after the edge loop
+
+Objective sample points are also pre-sorted during setup (`obj_sorted_samples`). Removed the now-unused `unseen_indices` and `unseen_points` working buffers from ThreadAccum.
+
+- visibility_50: ~178ms (unaffected)
+- visibility_100: ~551ms (unaffected)
+- **mission_hna: ~985ms → ~584ms (-41%)**
+
+### Cumulative improvement (all optimizations)
+| Benchmark | Original | After ST opts | After rayon | After Z-sorted (dz_vis) | After Z-sorted (all PIP) | Total |
+|---|---|---|---|---|---|---|
+| visibility_50 | 872 ms | 476 ms | 178 ms | ~178 ms | ~191 ms | **-78%** |
+| visibility_100 | 3.80 s | 1.68 s | 551 ms | ~551 ms | ~586 ms | **-85%** |
+| mission_hna | 5.70 s | 4.93 s | 1.92 s | ~985 ms | **~584 ms** | **-90%** |
 
 ## Attempted But Abandoned
 
@@ -110,7 +129,22 @@ Replace atan2 with a cheap pseudoangle function `p = dx / (|dx| + |dz|)` that ma
 
 **Result**: Mixed. Helped visibility_50 (-19%) and visibility_100 (-14%), but mission_hna regressed (+12%). The pseudoangle maps non-linearly to real angles, causing uneven bucket distribution. Buckets near the cardinal axes become wider (more segments), creating load imbalance. Needs more investigation — the regression may have been noise (other workloads were running on the machine during benchmarking). **Worth retrying with a clean machine.**
 
-## Profiling Results (mission_hna, post-rayon, pre-Z-sorted)
+## Profiling Results
+
+### Post-Z-sorted-dz_vis, pre-Z-sorted-cross_dz (mission_hna)
+
+Late-game steps (~760 observers, ~20 segments):
+
+| Phase | Thread-ms | % of observer loop |
+|---|---|---|
+| `compute_visibility_polygon` | 30-50 | **~15-18%** |
+| `dz_vis` (Z-sorted) | 20-30 | **~9-12%** |
+| `cross_dz` (batch PIP) | 100-130 | **~45-50%** |
+| `obj_hide` (batch PIP) | 55-80 | **~25-30%** |
+
+cross_dz became the dominant bottleneck after dz_vis was optimized. This motivated extending Z-sorted PIP to cross_dz and obj_hide paths.
+
+### Post-rayon, pre-Z-sorted (mission_hna, historical)
 
 Instrumented `compute_layout_visibility` with per-phase timing (sum of all thread-nanoseconds). Late-game steps (more terrain, ~730 observers, ~20 segments):
 
@@ -131,19 +165,11 @@ The `dz_vis` phase tests ~792 DZ sample points against each observer's visibilit
 
 Organized by expected impact. Updated after Z-sorted PIP optimization.
 
-### Tier 1: Remaining PIP optimization (cross_dz + obj_hide paths)
+### Tier 1: Further PIP optimization
 
-The Z-sorted binary search addressed the `dz_vis` path (~60% of pre-optimization observer time). The `cross_dz` (~27%) and `obj_hide` (~7%) paths still use the original O(E×P) `batch_point_in_polygon`. However, these paths already shrink their point sets via unseen filtering, so the effective P decreases over time. Fresh profiling post-Z-sorted would clarify the new bottleneck distribution.
+All three PIP paths (dz_vis, cross_dz, obj_hide) now use Z-sorted binary search. The remaining PIP optimization ideas target algorithmic improvements or further reducing per-point work.
 
-#### 1a. Z-sorted binary search for cross_dz/obj_hide
-
-Apply the same Z-sort technique to the cross_dz and obj_hide paths. Challenge: these paths work on `unseen_points` which change per-observer (points are filtered as they become seen). Options:
-- Pre-sort the full DZ points once, then maintain a parallel `unseen` bitmask instead of building `unseen_points` Vec. The Z-sorted PIP would iterate the sorted array, skip seen entries, and only process unseen ones in the Z-range.
-- Or: accept the O(P log P) sort cost per-call. With P shrinking quickly (few hundred → few dozen), the sort is cheap.
-
-**Expected impact**: Moderate. The cross_dz/obj_hide paths already benefit from unseen filtering. The Z-sort would help most in early iterations when most points are still unseen.
-
-#### 1b. Horizontal slab decomposition for PIP
+#### 1a. Horizontal slab decomposition for PIP
 
 Preprocess the visibility polygon into horizontal slabs by sorting its vertices by Z coordinate. For each test point, binary-search to find its slab in O(log E), then test against only the 1-2 edges in that slab instead of all E edges. Turns PIP from O(E) per point to O(log E) per point, with O(E log E) setup per observer.
 
@@ -207,8 +233,7 @@ Use coarser grid in open areas, finer near terrain or DZ boundaries. Would chang
 
 ### Recommended next steps
 
-1. **Re-profile mission_hna** to see the new bottleneck distribution post-Z-sorted. The dz_vis path should be dramatically faster; cross_dz and vis_polygon may now be the top targets.
-2. **Try 2a (pseudoangle hybrid)** for the non-mission benchmarks (visibility_50/100). This addresses the raycasting path which is still the bottleneck when DZs are absent.
-3. **Try 1a (Z-sorted cross_dz)** — apply Z-sorted binary search to the cross_dz path using a bitmask approach (skip seen points in the sorted array rather than building unseen_points).
-4. **3a (OBB caching)** is worth doing opportunistically — it's a clean code improvement regardless of performance impact.
-5. **Add a denser benchmark fixture** — the current mission_hna uses sparse 5×2.5" crates. A fixture with 10+ large ruins/obstacles would better represent real-world usage and stress different code paths.
+1. **Re-profile mission_hna** post-all-Z-sorted to see new bottleneck. vis_polygon (~15-18%) is likely the top target now, since all PIP paths have been optimized.
+2. **Try 2a (pseudoangle hybrid)** — addresses raycasting for both mission and non-mission benchmarks. vis_polygon is now a larger fraction of mission time.
+3. **3a (OBB caching)** is worth doing opportunistically — it's a clean code improvement regardless of performance impact.
+4. **Add a denser benchmark fixture** — the current mission_hna uses sparse 5×2.5" crates. A fixture with 10+ large ruins/obstacles would better represent real-world usage and stress different code paths.
