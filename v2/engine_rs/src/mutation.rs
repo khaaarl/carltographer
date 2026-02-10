@@ -256,6 +256,7 @@ fn instantiate_feature(template: &TerrainFeature, feature_id: u32) -> TerrainFea
         id: format!("feature_{}", feature_id),
         feature_type: template.feature_type.clone(),
         components: template.components.clone(),
+        tags: template.tags.clone(),
     }
 }
 
@@ -635,6 +636,7 @@ mod tests {
                         object_id: "crate_5x2.5".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 quantity: None,
             }],

@@ -55,6 +55,8 @@ pub struct TerrainFeature {
     pub id: String,
     pub feature_type: String,
     pub components: Vec<FeatureComponent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

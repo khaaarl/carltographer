@@ -224,6 +224,7 @@ def _instantiate_feature(
         id=f"feature_{feature_id}",
         feature_type=template.feature_type,
         components=list(template.components),
+        tags=list(template.tags),
     )
 
 

@@ -97,6 +97,7 @@ CRATE_FEATURE = {
     "id": "crate",
     "feature_type": "obstacle",
     "components": [{"object_id": "crate"}],
+    "tags": ["obstacle"],
 }
 
 WTC_RUINS_BASE_TALL = {
@@ -214,6 +215,7 @@ WTC_THREE_STOREY_FEATURE = {
         {"object_id": "ruins"},
         {"object_id": "wtc_three_storey_walls"},
     ],
+    "tags": ["ruins", "obscuring", "wtc"],
 }
 
 WTC_SHORT_FEATURE = {
@@ -223,6 +225,7 @@ WTC_SHORT_FEATURE = {
         {"object_id": "ruins_short"},
         {"object_id": "wtc_short_walls"},
     ],
+    "tags": ["ruins", "obscuring", "wtc"],
 }
 
 # ---------------------------------------------------------------------------
@@ -403,6 +406,7 @@ GW_FLAT_RUIN_FEATURE = {
     "id": "gw_flat_ruin",
     "feature_type": "obscuring",
     "components": [{"object_id": "gw_flat_ruin_base"}],
+    "tags": ["ruins", "obscuring"],
 }
 
 GW_RUIN_L_4X8_FEATURE = {
@@ -412,6 +416,7 @@ GW_RUIN_L_4X8_FEATURE = {
         {"object_id": "gw_ruin_base_12x6"},
         {"object_id": "gw_tall_L_4x8"},
     ],
+    "tags": ["ruins", "obscuring"],
 }
 
 GW_RUIN_U_8X4_FEATURE = {
@@ -421,6 +426,7 @@ GW_RUIN_U_8X4_FEATURE = {
         {"object_id": "gw_ruin_base_12x6"},
         {"object_id": "gw_tall_U_8x4"},
     ],
+    "tags": ["ruins", "obscuring"],
 }
 
 GW_RUIN_J_6X5_FEATURE = {
@@ -430,6 +436,7 @@ GW_RUIN_J_6X5_FEATURE = {
         {"object_id": "gw_ruin_base_10x5"},
         {"object_id": "gw_tall_J_6x5"},
     ],
+    "tags": ["ruins", "obscuring"],
 }
 
 GW_RUIN_L_6X5_FEATURE = {
@@ -439,6 +446,7 @@ GW_RUIN_L_6X5_FEATURE = {
         {"object_id": "gw_ruin_base_10x5"},
         {"object_id": "gw_tall_L_6x5"},
     ],
+    "tags": ["ruins", "obscuring"],
 }
 
 

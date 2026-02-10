@@ -48,7 +48,7 @@ Allow users to share catalog files with each other.
 
 ### B1. Tag System
 
-**Status:** Not Started
+**Status:** Done
 **Blocked by:** —
 
 Add a flexible tagging system to terrain objects and features, complementing (not replacing) the existing `feature_type` field. Tags enable edition-neutral rules modeling — e.g., a feature tagged `obscuring` behaves correctly in both 10th and future editions without hardcoding edition-specific feature types.

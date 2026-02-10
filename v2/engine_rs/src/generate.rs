@@ -602,6 +602,7 @@ mod tests {
                         object_id: "crate_5x2.5".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 quantity: None,
             }],
@@ -797,6 +798,7 @@ mod tests {
                         object_id: "small_block".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 quantity: None,
             }],
@@ -829,6 +831,7 @@ mod tests {
                         object_id: "big_block".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 transform: crate::types::Transform {
                     x_inches: 10.0,

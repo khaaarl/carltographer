@@ -112,6 +112,7 @@ class TerrainFeature:
     id: str
     feature_type: str
     components: list[FeatureComponent]
+    tags: list[str] = field(default_factory=list)
 
     @staticmethod
     def from_dict(d: dict) -> TerrainFeature:
@@ -121,14 +122,18 @@ class TerrainFeature:
             components=[
                 FeatureComponent.from_dict(c) for c in d["components"]
             ],
+            tags=d.get("tags", []),
         )
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "id": self.id,
             "feature_type": self.feature_type,
             "components": [c.to_dict() for c in self.components],
         }
+        if self.tags:
+            d["tags"] = self.tags
+        return d
 
 
 @dataclass

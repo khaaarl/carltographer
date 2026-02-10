@@ -1555,6 +1555,7 @@ mod tests {
                 object_id: obj_id.into(),
                 transform: None,
             }],
+            tags: vec![],
         }
     }
 

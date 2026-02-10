@@ -539,6 +539,7 @@ mod tests {
                     object_id: "crate_5x2.5".into(),
                     transform: None,
                 }],
+                tags: vec![],
             },
             transform: Transform {
                 x_inches: 27.0, // Close to edge at 30.0
@@ -586,6 +587,7 @@ mod tests {
                     object_id: "crate_5x2.5".into(),
                     transform: None,
                 }],
+                tags: vec![],
             },
             transform: Transform {
                 x_inches: -5.0,
@@ -603,6 +605,7 @@ mod tests {
                     object_id: "crate_5x2.5".into(),
                     transform: None,
                 }],
+                tags: vec![],
             },
             transform: Transform {
                 x_inches: 4.0, // 2 inch gap: (-5+2.5) to (4-2.5) = -2.5 to 1.5
@@ -661,6 +664,7 @@ mod tests {
                         object_id: "short_box".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 quantity: None,
             }],
@@ -682,6 +686,7 @@ mod tests {
                     object_id: "short_box".into(),
                     transform: None,
                 }],
+                tags: vec![],
             },
             transform: Transform {
                 x_inches: 27.0, // Close to edge at 30.0
@@ -755,6 +760,7 @@ mod tests {
                         object_id: "short_box".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 transform: Transform {
                     x_inches: -5.0,
@@ -771,6 +777,7 @@ mod tests {
                         object_id: "short_box".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 transform: Transform {
                     x_inches: 4.0, // ~4 inch gap between features
@@ -853,6 +860,7 @@ mod tests {
                         object_id: "crate_5x2.5".into(),
                         transform: None,
                     }],
+                    tags: vec![],
                 },
                 quantity: None,
             }],

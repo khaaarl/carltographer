@@ -119,6 +119,11 @@
           "items": { "$ref": "#/$defs/feature_component" },
           "minItems": 1,
           "description": "The terrain objects that make up this feature, each with a relative transform."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Freeform tags for categorization and filtering (e.g. 'obscuring', 'ruins', 'wtc')."
         }
       },
       "required": ["id", "feature_type", "components"],

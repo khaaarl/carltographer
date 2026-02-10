@@ -111,6 +111,12 @@ def compare_layouts(layout1: dict, layout2: dict) -> tuple[bool, list[str]]:
         if ft1 != ft2:
             diffs.append(f"Feature {i} type: {ft1} vs {ft2}")
 
+        # Compare feature tags
+        tags1 = sorted(f1.get("feature", {}).get("tags", []))
+        tags2 = sorted(f2.get("feature", {}).get("tags", []))
+        if tags1 != tags2:
+            diffs.append(f"Feature {i} tags: {tags1} vs {tags2}")
+
         # Compare transform
         t1 = f1.get("transform", {})
         t2 = f2.get("transform", {})
@@ -327,7 +333,7 @@ def make_test_catalog() -> TerrainCatalog:
                         )
                     ],
                     name="Crate",
-                    tags=[],
+                    tags=["container"],
                 ),
                 quantity=None,
             )
@@ -343,6 +349,7 @@ def make_test_catalog() -> TerrainCatalog:
                             transform=None,
                         )
                     ],
+                    tags=["obstacle"],
                 ),
                 quantity=None,
             )
@@ -367,7 +374,7 @@ def make_multi_type_catalog() -> TerrainCatalog:
                         )
                     ],
                     name="Crate",
-                    tags=[],
+                    tags=["container"],
                 ),
                 quantity=None,
             ),
@@ -383,7 +390,7 @@ def make_multi_type_catalog() -> TerrainCatalog:
                         )
                     ],
                     name="Ruins",
-                    tags=[],
+                    tags=["ruins"],
                 ),
                 quantity=None,
             ),
@@ -399,6 +406,7 @@ def make_multi_type_catalog() -> TerrainCatalog:
                             transform=None,
                         )
                     ],
+                    tags=["obstacle"],
                 ),
                 quantity=None,
             ),
@@ -412,6 +420,7 @@ def make_multi_type_catalog() -> TerrainCatalog:
                             transform=None,
                         )
                     ],
+                    tags=["ruins", "obscuring"],
                 ),
                 quantity=None,
             ),
@@ -436,7 +445,7 @@ def make_quantity_limited_catalog() -> TerrainCatalog:
                         )
                     ],
                     name="Crate",
-                    tags=[],
+                    tags=["container"],
                 ),
                 quantity=2,
             )
@@ -452,6 +461,7 @@ def make_quantity_limited_catalog() -> TerrainCatalog:
                             transform=None,
                         )
                     ],
+                    tags=["obstacle"],
                 ),
                 quantity=2,
             )
@@ -931,6 +941,7 @@ def params_to_json_dict(params: EngineParams) -> dict:
                             }
                             for comp in feat.item.components
                         ],
+                        **({"tags": feat.item.tags} if feat.item.tags else {}),
                     },
                     **({"quantity": feat.quantity} if feat.quantity else {}),
                 }
