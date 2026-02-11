@@ -96,9 +96,7 @@ class Logger:
 log = Logger()
 
 
-def run(  # type: ignore[no-any-explicit]
-    args: list[str], **kwargs: Any
-) -> subprocess.CompletedProcess[Any]:
+def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
     defaults: dict[str, Any] = {"check": True}
     defaults.update(kwargs)
     return subprocess.run(args, **defaults)

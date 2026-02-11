@@ -1196,7 +1196,7 @@ class HistoryPanel(ttk.Frame):
         super().__init__(parent, padding=10)
         self.on_load_layout = on_load_layout
         self.layout_history = []  # list of (timestamp, layout_dict) tuples
-        self.history_listbox = None
+        self.history_listbox: tk.Listbox | None = None
         self._build()
 
     def _build(self):
@@ -1222,6 +1222,7 @@ class HistoryPanel(ttk.Frame):
 
     def add_to_history(self, layout):
         """Add a layout to the history with current timestamp."""
+        assert self.history_listbox is not None
         timestamp = int(time.time())
         self.layout_history.append((timestamp, copy.deepcopy(layout)))
 
@@ -1237,6 +1238,7 @@ class HistoryPanel(ttk.Frame):
 
     def _on_history_select(self, event):
         """Load selected layout from history."""
+        assert self.history_listbox is not None
         selection = self.history_listbox.curselection()
         if not selection:
             return

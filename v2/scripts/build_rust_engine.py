@@ -73,9 +73,7 @@ class Logger:
 log = Logger()
 
 
-def run(  # type: ignore[no-any-explicit]
-    args: list[str], **kwargs: Any
-) -> subprocess.CompletedProcess[Any]:
+def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
     """Run a command, letting stdout/stderr pass through unless quiet."""
     defaults: dict[str, Any] = {
         "check": True,

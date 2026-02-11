@@ -1100,6 +1100,7 @@ def compute_layout_visibility(
 
     if has_dzs:
         mission = layout.mission
+        assert mission is not None
         dzs = mission.deployment_zones
 
         for dz in dzs:
@@ -1126,6 +1127,7 @@ def compute_layout_visibility(
 
     if has_objectives:
         mission = layout.mission
+        assert mission is not None
         for obj_marker in mission.objectives:
             obj_radius = 0.75 + obj_marker.range_inches
             obj_radii.append(obj_radius)
@@ -1244,6 +1246,7 @@ def compute_layout_visibility(
     # Build DZ hideability results
     if has_dzs:
         mission = layout.mission
+        assert mission is not None
         dzs = mission.deployment_zones
 
         dz_hideability: dict = {}
@@ -1266,6 +1269,7 @@ def compute_layout_visibility(
         # Build objective hidability results
         if has_objectives:
             mission = layout.mission
+            assert mission is not None
             dzs = mission.deployment_zones
             objective_hidability: dict = {}
 
