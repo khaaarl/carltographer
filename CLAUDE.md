@@ -184,7 +184,7 @@ git rebase main
 
 # 4. Fast-forward merge into main (no new commit — just moves the pointer)
 git checkout main
-git merge feature/my-branch-rebase
+git merge --ff-only feature/my-branch-rebase
 
 # 5. Push and clean up
 git push
