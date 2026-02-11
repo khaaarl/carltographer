@@ -12,16 +12,20 @@ Steps:
   5. Run PyInstaller with --onefile
   6. Verify output exists, report file size
 
-Output naming:
+Output naming (without --version):
   carltographer-linux-x86_64
-  carltographer-linux-arm64
   carltographer-mac-arm64
-  carltographer-mac-x86_64
   carltographer-windows-x86_64.exe
 
+Output naming (with --version v20260211-143025):
+  carltographer-v20260211-143025-linux-x86_64
+  carltographer-v20260211-143025-mac-arm64
+  carltographer-v20260211-143025-windows-x86_64.exe
+
 Usage:
-  python package_executable.py                   # full build
-  python package_executable.py --skip-rust-build # skip Rust engine rebuild
+  python package_executable.py                                    # full build
+  python package_executable.py --skip-rust-build                  # skip Rust rebuild
+  python package_executable.py --version v20260211-143025         # versioned name
 
 Exit codes:
   0 = packaging succeeded
@@ -69,9 +73,18 @@ def _os_name() -> str:
     return s.lower()
 
 
-def executable_name() -> str:
-    """Build the output executable name for this platform."""
-    name = f"carltographer-{_os_name()}-{_normalize_arch(platform.machine())}"
+def executable_name(version: str | None = None) -> str:
+    """Build the output executable name for this platform.
+
+    If *version* is given (e.g. "v20260211-143025"), the name becomes
+    ``carltographer-v20260211-143025-linux-x86_64``.  Without a version it
+    stays ``carltographer-linux-x86_64`` for backward-compatibility.
+    """
+    parts = ["carltographer"]
+    if version:
+        parts.append(version)
+    parts.append(f"{_os_name()}-{_normalize_arch(platform.machine())}")
+    name = "-".join(parts)
     if IS_WINDOWS:
         name += ".exe"
     return name
@@ -186,10 +199,9 @@ def find_site_packages() -> str | None:
     return site_packages
 
 
-def run_pyinstaller(site_packages: str) -> bool:
+def run_pyinstaller(site_packages: str, name: str) -> bool:
     log.step("Running PyInstaller")
 
-    name = executable_name()
     # Strip .exe suffix for PyInstaller --name (it adds .exe on Windows)
     pyinstaller_name = name.removesuffix(".exe")
 
@@ -234,10 +246,9 @@ def run_pyinstaller(site_packages: str) -> bool:
     return True
 
 
-def verify_output() -> bool:
+def verify_output(name: str) -> bool:
     log.step("Verifying output")
 
-    name = executable_name()
     output = V2_DIR / "dist" / name
 
     if not output.exists():
@@ -271,9 +282,15 @@ def main() -> int:
         action="store_true",
         help="Skip Rust engine rebuild",
     )
+    parser.add_argument(
+        "--version",
+        type=str,
+        default=None,
+        help="Version tag to embed in the executable name (e.g. v20260211-143025)",
+    )
     args = parser.parse_args()
 
-    name = executable_name()
+    name = executable_name(args.version)
     log.step(f"Packaging Carltographer: {name}")
     log.info(f"v2_dir: {V2_DIR}")
     log.info(f"repo_root: {REPO_ROOT}")
@@ -291,10 +308,10 @@ def main() -> int:
     if site_packages is None:
         return 1
 
-    if not run_pyinstaller(site_packages):
+    if not run_pyinstaller(site_packages, name):
         return 1
 
-    if not verify_output():
+    if not verify_output(name):
         return 1
 
     log.step("\u2713 Packaging complete!")
