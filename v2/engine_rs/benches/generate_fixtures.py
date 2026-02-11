@@ -2,12 +2,12 @@
 """Generate benchmark fixture JSON files for the Rust engine.
 
 Uses pairwise (all-pairs) testing to cover all 2-way parameter interactions
-with 28 test cases across 10 parameters:
+with 35 test cases across 10 parameters:
 
   - Table size: 44x30 (incursion), 60x44 (strike), 90x44 (onslaught)
   - Symmetry: off, on
   - Mission: none + 6 deployment types
-  - Terrain: crates-only (5" tall), WTC mixed (crates + ruins + walls)
+  - Terrain: crates-only, WTC mixed (rects), WTC+poly (rects + polygon shapes)
   - Steps: 10, 20, 50, 100
   - min_feature_gap_inches: 0, 5.2
   - min_edge_gap_inches: 0, 5.2
@@ -168,6 +168,112 @@ WTC_CATALOG: dict[str, Any] = {
     "name": "WTC-style Catalog",
 }
 
+# Kidney-bean woods vertices (~8"x5" organic shape, traced clockwise from right end)
+_KIDNEY_BEAN_VERTICES: list[list[float]] = [
+    [4.0, 0.0],
+    [3.5, -1.2],
+    [2.5, -2.0],
+    [1.0, -2.4],
+    [-1.0, -2.4],
+    [-2.5, -2.0],
+    [-3.5, -1.2],
+    [-4.0, 0.0],
+    [-3.5, 1.2],
+    [-2.8, 1.8],
+    [-2.2, 2.2],
+    [-1.6, 2.4],
+    [-0.8, 1.8],
+    [-0.3, 1.2],
+    [0.3, 1.2],
+    [0.8, 1.8],
+    [1.6, 2.4],
+    [2.2, 2.2],
+    [2.8, 1.8],
+    [3.5, 1.2],
+]
+
+# Industrial tank: 5" diameter 24-gon (radius=2.5")
+_TANK_VERTICES: list[list[float]] = [
+    [2.5, 0.0],
+    [2.4148, 0.647],
+    [2.1651, 1.25],
+    [1.7678, 1.7678],
+    [1.25, 2.1651],
+    [0.647, 2.4148],
+    [0.0, 2.5],
+    [-0.647, 2.4148],
+    [-1.25, 2.1651],
+    [-1.7678, 1.7678],
+    [-2.1651, 1.25],
+    [-2.4148, 0.647],
+    [-2.5, 0.0],
+    [-2.4148, -0.647],
+    [-2.1651, -1.25],
+    [-1.7678, -1.7678],
+    [-1.25, -2.1651],
+    [-0.647, -2.4148],
+    [-0.0, -2.5],
+    [0.647, -2.4148],
+    [1.25, -2.1651],
+    [1.7678, -1.7678],
+    [2.1651, -1.25],
+    [2.4148, -0.647],
+]
+
+WTC_POLY_CATALOG: dict[str, Any] = {
+    "objects": WTC_CATALOG["objects"]
+    + [
+        {
+            "item": {
+                "id": "kidney_bean_woods",
+                "shapes": [
+                    {
+                        "shape_type": "polygon",
+                        "vertices": _KIDNEY_BEAN_VERTICES,
+                        "width_inches": 8.0,
+                        "depth_inches": 4.8,
+                        "height_inches": 0.0,
+                    }
+                ],
+                "name": "Kidney-Bean Woods",
+            }
+        },
+        {
+            "item": {
+                "id": "industrial_tank",
+                "shapes": [
+                    {
+                        "shape_type": "polygon",
+                        "vertices": _TANK_VERTICES,
+                        "width_inches": 5.0,
+                        "depth_inches": 5.0,
+                        "height_inches": 5.0,
+                    }
+                ],
+                "name": 'Industrial Tank (5" dia)',
+            }
+        },
+    ],
+    "features": WTC_CATALOG["features"]
+    + [
+        {
+            "item": {
+                "id": "kidney_bean_woods",
+                "feature_type": "woods",
+                "components": [{"object_id": "kidney_bean_woods"}],
+            }
+        },
+        {
+            "item": {
+                "id": "industrial_tank",
+                "feature_type": "obstacle",
+                "components": [{"object_id": "industrial_tank"}],
+            }
+        },
+    ],
+    "name": "WTC + Polygons",
+}
+
 # Scoring targets matching UI defaults (fixed, not varied)
 SCORING_TARGETS: dict[str, Any] = {
     "overall_visibility_target": 30.0,
@@ -216,7 +322,7 @@ def _build_mission_json(
 
 
 # ---------------------------------------------------------------------------
-# 28-case covering array (10 parameters, pairwise coverage)
+# 35-case covering array (10 parameters, pairwise coverage)
 # ---------------------------------------------------------------------------
 
 # Each tuple:
@@ -269,6 +375,14 @@ COVERING_ARRAY: list[CaseRow] = [
     (44, 30, True, "SnD", "crates", 20, 5.2, 0, 0, 0, 8),  # 26
     (44, 30, False, "SnD", "wtc", 50, 0, 0, 3, 0, 1),  # 27
     (90, 44, True, "SnD", "crates", 100, 5.2, 5.2, 0, 3, 2),  # 28
+    # -- 29-35: WTC + polygon shapes --
+    (60, 44, False, "none", "wtcPoly", 20, 0, 5.2, 0, 3, 4),  # 29
+    (44, 30, True, "HnA", "wtcPoly", 10, 5.2, 0, 3, 0, 8),  # 30
+    (90, 44, False, "DoW", "wtcPoly", 50, 0, 0, 3, 3, 2),  # 31
+    (60, 44, True, "TipPt", "wtcPoly", 100, 5.2, 5.2, 0, 0, 1),  # 32
+    (44, 30, False, "SwpEng", "wtcPoly", 10, 0, 5.2, 3, 0, 8),  # 33
+    (90, 44, True, "Crucible", "wtcPoly", 20, 5.2, 0, 0, 3, 1),  # 34
+    (44, 30, True, "SnD", "wtcPoly", 50, 0, 0, 0, 0, 2),  # 35
     # fmt: on
 ]
 
@@ -307,7 +421,12 @@ def generate_fixture(row: CaseRow) -> dict[str, Any]:
         aeg,
         rep,
     ) = row
-    catalog = CRATES_CATALOG if catalog_key == "crates" else WTC_CATALOG
+    catalog_map = {
+        "crates": CRATES_CATALOG,
+        "wtc": WTC_CATALOG,
+        "wtcPoly": WTC_POLY_CATALOG,
+    }
+    catalog = catalog_map[catalog_key]
 
     params: dict[str, Any] = {
         "seed": 42,
@@ -425,13 +544,13 @@ def generate_readme() -> str:
         "",
         "Generated by `generate_fixtures.py`. Do not edit manually.",
         "",
-        "## Pairwise covering array (28 cases, 10 parameters)",
+        "## Pairwise covering array (35 cases, 10 parameters)",
         "",
         "Parameters:",
         "- **Table**: 44x30 (incursion), 60x44 (strike), 90x44 (onslaught)",
         "- **Symmetry**: off, on (forced off when mission=none)",
         "- **Mission**: none, HnA, DoW, TipPt, SwpEng, Crucible, SnD",
-        '- **Terrain**: crates (5" tall), WTC (crates + ruins + walls)',
+        "- **Terrain**: crates (rects only), WTC (rects), WTC+poly (rects + polygons)",
         "- **Steps**: 10, 20, 50, 100",
         '- **Feature gap**: 0 or 5.2" (min_feature_gap_inches)',
         '- **Edge gap**: 0 or 5.2" (min_edge_gap_inches)',

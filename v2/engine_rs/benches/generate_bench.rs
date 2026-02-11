@@ -1,7 +1,7 @@
 //! Criterion benchmarks for the Carltographer terrain generation engine.
 //!
-//! 28 cases from a pairwise (all-pairs) covering array over 10 parameters:
-//!   Table size (3) × Symmetry (2) × Mission (7) × Terrain (2) × Steps (4)
+//! 35 cases from a pairwise (all-pairs) covering array over 10 parameters:
+//!   Table size (3) × Symmetry (2) × Mission (7) × Terrain (3) × Steps (4)
 //!   × Feature gap (2) × Edge gap (2) × All-feature gap (2) × All-edge gap (2)
 //!   × Replicas (4: 1, 2, 4, 8)
 //!
@@ -184,6 +184,43 @@ bench_case!(
     "fixtures/90x44_crates_SnD_sym_100_g1101_r2.json"
 );
 
+// -- 29-35: WTC + polygon shapes --
+bench_case!(
+    bench_29,
+    "60x44_wtcPoly_none_nosym_20_g0101_r4",
+    "fixtures/60x44_wtcPoly_none_nosym_20_g0101_r4.json"
+);
+bench_case!(
+    bench_30,
+    "44x30_wtcPoly_HnA_sym_10_g1010_r8",
+    "fixtures/44x30_wtcPoly_HnA_sym_10_g1010_r8.json"
+);
+bench_case!(
+    bench_31,
+    "90x44_wtcPoly_DoW_nosym_50_g0011_r2",
+    "fixtures/90x44_wtcPoly_DoW_nosym_50_g0011_r2.json"
+);
+bench_case!(
+    bench_32,
+    "60x44_wtcPoly_TipPt_sym_100_g1100_r1",
+    "fixtures/60x44_wtcPoly_TipPt_sym_100_g1100_r1.json"
+);
+bench_case!(
+    bench_33,
+    "44x30_wtcPoly_SwpEng_nosym_10_g0110_r8",
+    "fixtures/44x30_wtcPoly_SwpEng_nosym_10_g0110_r8.json"
+);
+bench_case!(
+    bench_34,
+    "90x44_wtcPoly_Crucible_sym_20_g1001_r1",
+    "fixtures/90x44_wtcPoly_Crucible_sym_20_g1001_r1.json"
+);
+bench_case!(
+    bench_35,
+    "44x30_wtcPoly_SnD_sym_50_g0000_r2",
+    "fixtures/44x30_wtcPoly_SnD_sym_50_g0000_r2.json"
+);
+
 fn config() -> Criterion {
     Criterion::default()
         .sample_size(10)
@@ -202,5 +239,7 @@ criterion_group! {
         bench_17, bench_18, bench_19, bench_20,
         bench_21, bench_22, bench_23, bench_24,
         bench_25, bench_26, bench_27, bench_28,
+        bench_29, bench_30, bench_31, bench_32,
+        bench_33, bench_34, bench_35,
 }
 criterion_main!(benches);

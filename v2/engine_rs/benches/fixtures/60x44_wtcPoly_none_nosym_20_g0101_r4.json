@@ -1,0 +1,338 @@
+{
+  "seed": 42,
+  "table_width_inches": 60,
+  "table_depth_inches": 44,
+  "catalog": {
+    "objects": [
+      {
+        "item": {
+          "id": "crate_5x2.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 5.0,
+              "depth_inches": 2.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Crate (double-stack)"
+        }
+      },
+      {
+        "item": {
+          "id": "ruins_10x6",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 10.0,
+              "depth_inches": 6.0,
+              "height_inches": 0.0
+            }
+          ],
+          "name": "Ruins (base)"
+        }
+      },
+      {
+        "item": {
+          "id": "opaque_wall_6x0.5",
+          "shapes": [
+            {
+              "shape_type": "rectangular_prism",
+              "width_inches": 6.0,
+              "depth_inches": 0.5,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Opaque Wall"
+        }
+      },
+      {
+        "item": {
+          "id": "kidney_bean_woods",
+          "shapes": [
+            {
+              "shape_type": "polygon",
+              "vertices": [
+                [
+                  4.0,
+                  0.0
+                ],
+                [
+                  3.5,
+                  -1.2
+                ],
+                [
+                  2.5,
+                  -2.0
+                ],
+                [
+                  1.0,
+                  -2.4
+                ],
+                [
+                  -1.0,
+                  -2.4
+                ],
+                [
+                  -2.5,
+                  -2.0
+                ],
+                [
+                  -3.5,
+                  -1.2
+                ],
+                [
+                  -4.0,
+                  0.0
+                ],
+                [
+                  -3.5,
+                  1.2
+                ],
+                [
+                  -2.8,
+                  1.8
+                ],
+                [
+                  -2.2,
+                  2.2
+                ],
+                [
+                  -1.6,
+                  2.4
+                ],
+                [
+                  -0.8,
+                  1.8
+                ],
+                [
+                  -0.3,
+                  1.2
+                ],
+                [
+                  0.3,
+                  1.2
+                ],
+                [
+                  0.8,
+                  1.8
+                ],
+                [
+                  1.6,
+                  2.4
+                ],
+                [
+                  2.2,
+                  2.2
+                ],
+                [
+                  2.8,
+                  1.8
+                ],
+                [
+                  3.5,
+                  1.2
+                ]
+              ],
+              "width_inches": 8.0,
+              "depth_inches": 4.8,
+              "height_inches": 0.0
+            }
+          ],
+          "name": "Kidney-Bean Woods"
+        }
+      },
+      {
+        "item": {
+          "id": "industrial_tank",
+          "shapes": [
+            {
+              "shape_type": "polygon",
+              "vertices": [
+                [
+                  2.5,
+                  0.0
+                ],
+                [
+                  2.4148,
+                  0.647
+                ],
+                [
+                  2.1651,
+                  1.25
+                ],
+                [
+                  1.7678,
+                  1.7678
+                ],
+                [
+                  1.25,
+                  2.1651
+                ],
+                [
+                  0.647,
+                  2.4148
+                ],
+                [
+                  0.0,
+                  2.5
+                ],
+                [
+                  -0.647,
+                  2.4148
+                ],
+                [
+                  -1.25,
+                  2.1651
+                ],
+                [
+                  -1.7678,
+                  1.7678
+                ],
+                [
+                  -2.1651,
+                  1.25
+                ],
+                [
+                  -2.4148,
+                  0.647
+                ],
+                [
+                  -2.5,
+                  0.0
+                ],
+                [
+                  -2.4148,
+                  -0.647
+                ],
+                [
+                  -2.1651,
+                  -1.25
+                ],
+                [
+                  -1.7678,
+                  -1.7678
+                ],
+                [
+                  -1.25,
+                  -2.1651
+                ],
+                [
+                  -0.647,
+                  -2.4148
+                ],
+                [
+                  -0.0,
+                  -2.5
+                ],
+                [
+                  0.647,
+                  -2.4148
+                ],
+                [
+                  1.25,
+                  -2.1651
+                ],
+                [
+                  1.7678,
+                  -1.7678
+                ],
+                [
+                  2.1651,
+                  -1.25
+                ],
+                [
+                  2.4148,
+                  -0.647
+                ]
+              ],
+              "width_inches": 5.0,
+              "depth_inches": 5.0,
+              "height_inches": 5.0
+            }
+          ],
+          "name": "Industrial Tank (5\" dia)"
+        }
+      }
+    ],
+    "features": [
+      {
+        "item": {
+          "id": "crate",
+          "feature_type": "obstacle",
+          "components": [
+            {
+              "object_id": "crate_5x2.5"
+            }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "bare_ruin",
+          "feature_type": "obscuring",
+          "components": [
+            {
+              "object_id": "ruins_10x6"
+            }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "ruin_with_wall",
+          "feature_type": "obscuring",
+          "components": [
+            {
+              "object_id": "ruins_10x6"
+            },
+            {
+              "object_id": "opaque_wall_6x0.5",
+              "transform": {
+                "x_inches": 2.0,
+                "y_inches": 0.0,
+                "z_inches": 0.0,
+                "rotation_deg": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "kidney_bean_woods",
+          "feature_type": "woods",
+          "components": [
+            {
+              "object_id": "kidney_bean_woods"
+            }
+          ]
+        }
+      },
+      {
+        "item": {
+          "id": "industrial_tank",
+          "feature_type": "obstacle",
+          "components": [
+            {
+              "object_id": "industrial_tank"
+            }
+          ]
+        }
+      }
+    ],
+    "name": "WTC + Polygons"
+  },
+  "num_steps": 20,
+  "num_replicas": 4,
+  "scoring_targets": {
+    "overall_visibility_target": 30.0,
+    "overall_visibility_weight": 1.0,
+    "dz_hideability_target": 70.0,
+    "dz_hideability_weight": 5.0,
+    "objective_hidability_target": 50.0,
+    "objective_hidability_weight": 5.0
+  },
+  "min_edge_gap_inches": 5.2,
+  "min_all_edge_gap_inches": 3
+}

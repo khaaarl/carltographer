@@ -34,12 +34,11 @@ Before changing any code, establish the current baseline:
 cd v2/engine_rs && cargo bench
 ```
 
-Record the numbers for the key benchmarks. The main ones (as of writing):
-- `visibility_50` — pure visibility, no DZs (60×44, crates only)
-- `visibility_100` — pure visibility, no DZs, more features (60×44, crates only)
-- `mission_hna` — full mission workload with DZs and objectives (60×44, crates only)
-- `mission_ruins` — mission workload with mixed terrain (44×30, crates + ruins + walls)
-- `basic_100` / `all_features` — mutation-heavy, no visibility
+Record the numbers for the key benchmarks. There are 35 benchmarks in the pairwise covering array (see OPTIMIZATION_NOTES.md for the full table). Some particularly useful subsets for filtering:
+- `cargo bench -- _r1` — single-replica cases (pure per-step cost, no tempering overhead)
+- `cargo bench -- wtcPoly` — polygon terrain cases (7 cases, isolates polygon overhead)
+- `cargo bench -- _100_` — 100-step cases (heaviest workloads, most sensitive to per-step improvements)
+- `cargo bench -- _sym_` — symmetric cases (tests mirror feature overhead)
 
 If your optimization targets a path not covered by existing benchmarks, consider adding a benchmark. But keep it simple — don't spend your whole attempt on benchmark infrastructure.
 
