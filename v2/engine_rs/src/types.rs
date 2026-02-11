@@ -22,7 +22,9 @@ pub struct Transform {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeometricShape {
     pub shape_type: String,
+    #[serde(default)]
     pub width_inches: f64,
+    #[serde(default)]
     pub depth_inches: f64,
     pub height_inches: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

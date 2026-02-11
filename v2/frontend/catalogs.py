@@ -444,6 +444,8 @@ KIDNEY_BEAN_WOODS_OBJECT = {
         {
             "shape_type": "polygon",
             "vertices": _KIDNEY_BEAN_VERTICES,
+            "width_inches": 8.0,
+            "depth_inches": 4.8,
             "height_inches": 0.0,
         }
     ],
@@ -476,6 +478,8 @@ INDUSTRIAL_TANK_OBJECT = {
         {
             "shape_type": "polygon",
             "vertices": _TANK_VERTICES,
+            "width_inches": 5.0,
+            "depth_inches": 5.0,
             "height_inches": 5.0,
         }
     ],
