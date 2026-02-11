@@ -86,6 +86,14 @@ Performance notes:
   added/moved/removed during mutation, only that feature's blocked-point
   mask is recomputed rather than re-testing all ~600 observers against all
   footprints. This uses NumPy vectorized point-in-polygon for batch testing.
+- Objective hidability uses a two-phase optimization: the main observer loop
+  already computes vis polys for ~50% of objective sample points (inner
+  points within obj_radius). Rather than recomputing those vis polys in a
+  post-loop pass, we run the cheap DZ intersection test (polygons_overlap)
+  right there and store booleans. The post-loop pass reads booleans for inner
+  points and only computes fresh vis polys for "fringe" points (between
+  obj_radius and obj_radius + sqrt(2)) when no fully-inner hiding square
+  exists. See _find_hiding_square_with_fringe for the inner/fringe logic.
 - The Rust engine (engine_rs) reimplements this module for ~10x throughput.
   Both produce identical scores for the same layout.
 """
@@ -832,6 +840,111 @@ class VisibilityCache:
         ]
 
 
+def _find_hiding_square_with_fringe(
+    obj_cx: float,
+    obj_cz: float,
+    obj_radius: float,
+    sample_points: list[tuple[float, float]],
+    inner_hidden: set[int],
+    inner_flags: list[bool],
+    tall_obbs: list[list[tuple[float, float]]],
+    half_w: float,
+    half_d: float,
+) -> tuple[bool, set[int]]:
+    """Search for hiding square using known-hidden inner points, tracking fringe needs.
+
+    Like _has_valid_hiding_square, but distinguishes between inner points
+    (whose hidden status is known from the main loop) and fringe points
+    (whose status is unknown and would require fresh vis poly computation).
+
+    Returns (found, needed_fringe):
+    - found=True: a valid hiding square exists using only known-hidden inner points
+    - found=False, needed_fringe non-empty: these fringe point indices need vis
+      poly computation to resolve pending candidate squares
+    - found=False, needed_fringe empty: no hiding square is possible
+    """
+    pt_index: dict[tuple[float, float], int] = {}
+    for i, (px, pz) in enumerate(sample_points):
+        pt_index[(px, pz)] = i
+
+    r_sq = obj_radius * obj_radius
+    needed_fringe: set[int] = set()
+
+    # Candidate origins from hidden, in-range inner points
+    candidate_origins: set[tuple[float, float]] = set()
+    for idx in inner_hidden:
+        px, pz = sample_points[idx]
+        dx = px - obj_cx
+        dz = pz - obj_cz
+        if dx * dx + dz * dz > r_sq:
+            continue
+        for ox, oz in (
+            (px, pz),
+            (px - 1.0, pz),
+            (px, pz - 1.0),
+            (px - 1.0, pz - 1.0),
+        ):
+            candidate_origins.add((ox, oz))
+
+    for ox, oz in candidate_origins:
+        corners = [
+            (ox, oz),
+            (ox + 1.0, oz),
+            (ox + 1.0, oz + 1.0),
+            (ox, oz + 1.0),
+        ]
+
+        # Check 1: all 4 corners within table bounds
+        if any(
+            cx < -half_w or cx > half_w or cz < -half_d or cz > half_d
+            for cx, cz in corners
+        ):
+            continue
+
+        # Check 2: at least 1 corner in range of objective
+        if not any(
+            (cx - obj_cx) ** 2 + (cz - obj_cz) ** 2 <= r_sq
+            for cx, cz in corners
+        ):
+            continue
+
+        # Check 3: all corners must be known-hidden or unknown-fringe
+        all_known_hidden = True
+        has_unknown = False
+        unknown_pts: list[int] = []
+        for cx, cz in corners:
+            idx = pt_index.get((cx, cz))
+            if idx is None:
+                all_known_hidden = False
+                break
+            if idx in inner_hidden:
+                continue  # known hidden -- good
+            if not inner_flags[idx]:
+                # Fringe point with unknown status
+                has_unknown = True
+                unknown_pts.append(idx)
+            else:
+                # Inner point that is NOT hidden -> square impossible
+                all_known_hidden = False
+                break
+        if not all_known_hidden:
+            continue
+
+        # Check 4: terrain overlap
+        square_obb = obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0)
+        if any(polygons_overlap(square_obb, t) for t in tall_obbs):
+            continue
+
+        if not has_unknown:
+            # All corners are known-hidden inner points -> found!
+            return True, set()
+
+        # Has unknown fringe corners -- track as pending
+        needed_fringe.update(unknown_pts)
+
+    return False, needed_fringe
+
+
 def _has_valid_hiding_square(
     obj_cx: float,
     obj_cz: float,
@@ -1032,14 +1145,27 @@ def compute_layout_visibility(
     Observer grid uses integer coordinates, skips table edges, uses 2" spacing
     (even coordinates only) except near objectives where 1" spacing is used.
 
-    Returns dict with format:
-    {
-        "overall": {
-            "value": 72.53,
-            "min_blocking_height_inches": 4.0,
-            "sample_count": 2640
-        }
-    }
+    When missions with objectives are present, objective hidability is computed
+    via a two-phase approach optimized to reuse the main loop's vis polys:
+
+    Pre-loop: objective sample points are classified as "inner" (within
+    obj_radius, overlapping the main observer grid) or "fringe" (between
+    obj_radius and obj_radius + sqrt(2), outside the main grid). A position
+    lookup (obj_point_lookup) maps main-loop observer positions to their
+    objective sample point identities.
+
+    Phase A (in main loop): when the main loop computes a vis poly for an
+    observer that's also an inner objective sample point, it runs
+    polygons_overlap against each DZ's expanded polygons and stores the
+    boolean result in obj_hidden[obj_idx][pt_idx][dz_idx].
+
+    Phase B (post-loop): for each (objective, DZ) pair, inner booleans are
+    read and _find_hiding_square_with_fringe checks for valid hiding squares.
+    Fresh vis polys are only computed for fringe points when the inner region
+    doesn't already contain a valid hiding square.
+
+    Returns dict with "overall" key always present, plus optional
+    "dz_hideability" and "objective_hidability" when missions are configured.
     """
     half_w = layout.table_width / 2.0
     half_d = layout.table_depth / 2.0
@@ -1148,11 +1274,61 @@ def compute_layout_visibility(
             dz_hide_accum[dz.id] = [0, 0]  # [hidden_count, total_count]
 
     # -- Objective hidability pre-loop setup --
+    # Generate sample points per objective and classify as inner vs fringe.
+    # Inner points overlap with the main observer grid (within obj_radius)
+    # and will get their hidden status computed in the main loop.
+    # Fringe points (between obj_radius and obj_radius+sqrt(2)) are only
+    # in the objective sample set and need fresh vis poly computation if needed.
     has_objectives = (
         has_dzs
         and layout.mission is not None
         and len(layout.mission.objectives) > 0
     )
+
+    obj_sample_points: list[list[tuple[float, float]]] = []
+    obj_radii: list[float] = []
+    obj_inner_flags: list[
+        list[bool]
+    ] = []  # True if point is inner (in main grid)
+    # Position lookup: (x, z) -> list of (obj_idx, pt_idx)
+    obj_point_lookup: dict[tuple[float, float], list[tuple[int, int]]] = {}
+    # Hidden status: obj_hidden[obj_idx][pt_idx][dz_idx] is None/True/False
+    obj_hidden: list[list[list[bool | None]]] = []
+
+    if has_objectives:
+        mission = layout.mission
+        assert mission is not None
+        num_dzs = len(dz_data)
+        for oi, obj_marker in enumerate(mission.objectives):
+            obj_radius = 0.75 + obj_marker.range_inches
+            obj_radii.append(obj_radius)
+            expanded_radius = obj_radius + math.sqrt(2)
+            pts = _sample_points_in_circle(
+                obj_marker.position.x,
+                obj_marker.position.z,
+                expanded_radius,
+                1.0,
+                0.0,
+            )
+            obj_sample_points.append(pts)
+
+            r_sq = obj_radius * obj_radius
+            inner_flags: list[bool] = []
+            for pi, (px, pz) in enumerate(pts):
+                dx = px - obj_marker.position.x
+                dz = pz - obj_marker.position.z
+                is_inner = (dx * dx + dz * dz) <= r_sq
+                inner_flags.append(is_inner)
+                if is_inner:
+                    key = (px, pz)
+                    if key not in obj_point_lookup:
+                        obj_point_lookup[key] = []
+                    obj_point_lookup[key].append((oi, pi))
+            obj_inner_flags.append(inner_flags)
+
+            # Initialize hidden status: None = unknown, per DZ
+            obj_hidden.append([[None] * num_dzs for _ in range(len(pts))])
+
     # Precompute observer-independent segment data once
     precomputed = _precompute_segments(
         layout, objects_by_id, min_blocking_height
@@ -1173,6 +1349,11 @@ def compute_layout_visibility(
                         # Observer inside this DZ: check vs opponent expanded DZ
                         dz_hide_accum[dz_id][1] += 1
                         # Full visibility -> overlaps opponent -> not hidden
+            # Full visibility -> visible from all DZs -> not hidden
+            if has_objectives and (sx, sz) in obj_point_lookup:
+                for oi, pi in obj_point_lookup[(sx, sz)]:
+                    for di in range(len(dz_data)):
+                        obj_hidden[oi][pi][di] = False
             continue
 
         vis_poly = _compute_visibility_polygon(
@@ -1184,6 +1365,11 @@ def compute_layout_visibility(
                 for dz_id, dz_polys, expanded_polys in dz_data:
                     if _point_in_any_polygon(sx, sz, dz_polys):
                         dz_hide_accum[dz_id][1] += 1
+            # Degenerate vis poly -> full visibility -> not hidden
+            if has_objectives and (sx, sz) in obj_point_lookup:
+                for oi, pi in obj_point_lookup[(sx, sz)]:
+                    for di in range(len(dz_data)):
+                        obj_hidden[oi][pi][di] = False
             continue
 
         vis_area = _polygon_area(vis_poly)
@@ -1208,6 +1394,15 @@ def compute_layout_visibility(
                     )
                     if not overlaps:
                         dz_hide_accum[dz_id][0] += 1
+
+        # Objective hidability: check vis poly vs each DZ's expanded polys
+        if has_objectives and (sx, sz) in obj_point_lookup:
+            for oi, pi in obj_point_lookup[(sx, sz)]:
+                for di, (dz_id, _, expanded_polys) in enumerate(dz_data):
+                    overlaps = any(
+                        polygons_overlap(vis_poly, ep) for ep in expanded_polys
+                    )
+                    obj_hidden[oi][pi][di] = not overlaps
 
     avg_visibility = total_ratio / len(sample_points)
     value = round(avg_visibility * 100.0, 2)
@@ -1244,52 +1439,15 @@ def compute_layout_visibility(
         result["dz_hideability"] = dz_hideability
 
         # Build objective hidability results.
-        # Compute vis polys from each objective-vicinity sample point, then
-        # check polygon-polygon intersection with each DZ's expanded polygons.
-        # This correctly handles obscuring terrain asymmetry: the vis poly is
-        # computed from the model's perspective, so being inside a ruin means
-        # no blocking edges (full visibility), matching the game rule that
-        # obscuring terrain doesn't block LoS to/from models within it.
+        # Two-phase approach: Phase A uses booleans computed in the main loop
+        # (inner points). Phase B computes fresh vis polys only for fringe
+        # points needed by pending candidate squares.
         if has_objectives:
             mission = layout.mission
             assert mission is not None
             objective_hidability: dict = {}
 
-            # 1. Generate sample points per objective
-            obj_sample_points: list[list[tuple[float, float]]] = []
-            obj_radii: list[float] = []
-            for obj_marker in mission.objectives:
-                obj_radius = 0.75 + obj_marker.range_inches
-                obj_radii.append(obj_radius)
-                # Expand by sqrt(2) so diagonal grid neighbors of in-range
-                # points are included (needed for 1x1" hiding square check)
-                expanded_radius = obj_radius + math.sqrt(2)
-                pts = _sample_points_in_circle(
-                    obj_marker.position.x,
-                    obj_marker.position.z,
-                    expanded_radius,
-                    1.0,
-                    0.0,
-                )
-                obj_sample_points.append(pts)
-
-            # 2. Compute vis poly from each objective sample point (once,
-            #    reused across DZs). None means full visibility.
-            obj_vis_polys: list[list[list[tuple[float, float]] | None]] = []
-            for pts in obj_sample_points:
-                polys: list[list[tuple[float, float]] | None] = []
-                for px, pz in pts:
-                    segs = _get_observer_segments(precomputed, px, pz)
-                    if not segs:
-                        polys.append(None)
-                    else:
-                        vp = _compute_visibility_polygon(
-                            px, pz, segs, half_w, half_d
-                        )
-                        polys.append(vp if len(vp) >= 3 else None)
-                obj_vis_polys.append(polys)
-
-            # 3. Collect tall OBBs for terrain-intersection check
+            # Collect tall OBBs for terrain-intersection check
             obj_tall_obbs: list[list[tuple[float, float]]] = []
             effective_features_obj: list[PlacedFeature] = []
             for pf in layout.placed_features:
@@ -1302,27 +1460,81 @@ def compute_layout_visibility(
                 ):
                     obj_tall_obbs.append(corners)
 
-            # 4. For each DZ, determine hidden points per objective.
-            #    A point is "hidden" from a DZ if its vis poly does NOT
-            #    intersect that DZ's expanded polygons.
             total_objectives = len(mission.objectives)
-            for dz_id, _, expanded_polys in dz_data:
+            for dz_idx, (dz_id, _, expanded_polys) in enumerate(dz_data):
                 safe_count = 0
                 for oi, obj_marker in enumerate(mission.objectives):
-                    hidden: set[int] = set()
-                    for pi, vp in enumerate(obj_vis_polys[oi]):
-                        if vp is None:
-                            continue  # full visibility -> not hidden
-                        if not any(
-                            polygons_overlap(vp, ep) for ep in expanded_polys
-                        ):
-                            hidden.add(pi)
-                    if hidden and _has_valid_hiding_square(
+                    pts = obj_sample_points[oi]
+
+                    # Phase A: Check inner points (booleans from main loop)
+                    inner_hidden: set[int] = set()
+                    for pi in range(len(pts)):
+                        status = obj_hidden[oi][pi][dz_idx]
+                        if status is True:
+                            inner_hidden.add(pi)
+
+                    if not inner_hidden:
+                        # No hidden inner points -> no hiding square possible
+                        continue
+
+                    # Try finding a hiding square using only inner points.
+                    # If a candidate has unknown (fringe) corners, track them.
+                    found, needed_fringe = _find_hiding_square_with_fringe(
                         obj_marker.position.x,
                         obj_marker.position.z,
                         obj_radii[oi],
-                        obj_sample_points[oi],
-                        hidden,
+                        pts,
+                        inner_hidden,
+                        obj_inner_flags[oi],
+                        obj_tall_obbs,
+                        half_w,
+                        half_d,
+                    )
+                    if found:
+                        safe_count += 1
+                        continue
+
+                    if not needed_fringe:
+                        # No pending candidates -> no hiding square
+                        continue
+
+                    # Phase B: Compute vis polys for needed fringe points
+                    fringe_hidden: set[int] = set()
+                    for pi in needed_fringe:
+                        # Check if already computed for another DZ
+                        status = obj_hidden[oi][pi][dz_idx]
+                        if status is not None:
+                            if status:
+                                fringe_hidden.add(pi)
+                            continue
+                        # Compute fresh vis poly
+                        px, pz = pts[pi]
+                        segs = _get_observer_segments(precomputed, px, pz)
+                        if not segs:
+                            obj_hidden[oi][pi][dz_idx] = False
+                            continue
+                        vp = _compute_visibility_polygon(
+                            px, pz, segs, half_w, half_d
+                        )
+                        if len(vp) < 3:
+                            obj_hidden[oi][pi][dz_idx] = False
+                            continue
+                        overlaps = any(
+                            polygons_overlap(vp, ep) for ep in expanded_polys
+                        )
+                        hidden = not overlaps
+                        obj_hidden[oi][pi][dz_idx] = hidden
+                        if hidden:
+                            fringe_hidden.add(pi)
+
+                    # Re-check with combined hidden set
+                    all_hidden = inner_hidden | fringe_hidden
+                    if all_hidden and _has_valid_hiding_square(
+                        obj_marker.position.x,
+                        obj_marker.position.z,
+                        obj_radii[oi],
+                        pts,
+                        all_hidden,
                         obj_tall_obbs,
                         half_w,
                         half_d,

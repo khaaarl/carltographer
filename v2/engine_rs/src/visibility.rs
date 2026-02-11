@@ -36,6 +36,18 @@
 //! - **sin_cos()**: Epsilon ray generation uses `f64::sin_cos()` to compute
 //!   both values in one call. Bit-identical to separate calls on glibc but
 //!   platform-dependent — must be re-verified on musl/non-x86.
+//!
+//! - **Objective hidability boolean tracking**: The main observer loop already
+//!   computes vis polys for ~50% of objective sample points (inner points
+//!   within `obj_radius`). Instead of recomputing them in a post-loop pass,
+//!   we run `polygons_overlap_aabb` against each DZ's expanded polygons right
+//!   there and store booleans in `ThreadAccum::obj_hidden_updates`. After the
+//!   parallel loop, updates are merged sequentially. The post-loop pass reads
+//!   booleans for inner points and only computes fresh vis polys for "fringe"
+//!   points (between `obj_radius` and `obj_radius + sqrt(2)`) when no
+//!   fully-inner hiding square exists. See `find_hiding_square_with_fringe`.
+//!   This recovers 49-70% of the regression introduced by the objective
+//!   hidability correctness fix.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -1035,6 +1047,136 @@ fn has_valid_hiding_square(
     false
 }
 
+/// Search for hiding square using known-hidden inner points, tracking fringe needs.
+///
+/// Like `has_valid_hiding_square`, but distinguishes between inner points
+/// (whose hidden status is known from the main loop) and fringe points
+/// (whose status is unknown and would require fresh vis poly computation).
+///
+/// Returns `(found, needed_fringe)`:
+/// - found=true: a valid hiding square exists using only known-hidden inner points
+/// - found=false, needed_fringe non-empty: these fringe indices need vis poly computation
+/// - found=false, needed_fringe empty: no hiding square is possible
+fn find_hiding_square_with_fringe(
+    obj_cx: f64,
+    obj_cz: f64,
+    obj_radius: f64,
+    sample_points: &[(f64, f64)],
+    inner_hidden: &FxHashSet<usize>,
+    inner_flags: &[bool],
+    tall_obbs: &[Corners],
+    half_w: f64,
+    half_d: f64,
+) -> (bool, FxHashSet<usize>) {
+    let mut pt_index: FxHashMap<(u64, u64), usize> =
+        FxHashMap::with_capacity_and_hasher(sample_points.len(), FxBuildHasher::default());
+    for (i, &(px, pz)) in sample_points.iter().enumerate() {
+        pt_index.insert((px.to_bits(), pz.to_bits()), i);
+    }
+
+    let r_sq = obj_radius * obj_radius;
+    let mut needed_fringe: FxHashSet<usize> = FxHashSet::default();
+
+    // Candidate origins from hidden, in-range inner points
+    let mut candidate_origins: FxHashSet<(u64, u64)> = FxHashSet::default();
+    for &idx in inner_hidden {
+        let (px, pz) = sample_points[idx];
+        let dx = px - obj_cx;
+        let dz = pz - obj_cz;
+        if dx * dx + dz * dz > r_sq {
+            continue;
+        }
+        for &(ox, oz) in &[
+            (px, pz),
+            (px - 1.0, pz),
+            (px, pz - 1.0),
+            (px - 1.0, pz - 1.0),
+        ] {
+            candidate_origins.insert((ox.to_bits(), oz.to_bits()));
+        }
+    }
+
+    for &(ox_bits, oz_bits) in &candidate_origins {
+        let ox = f64::from_bits(ox_bits);
+        let oz = f64::from_bits(oz_bits);
+
+        let corners_xz = [
+            (ox, oz),
+            (ox + 1.0, oz),
+            (ox + 1.0, oz + 1.0),
+            (ox, oz + 1.0),
+        ];
+
+        // Check 1: all 4 corners within table bounds
+        if !corners_xz
+            .iter()
+            .all(|&(cx, cz)| cx >= -half_w && cx <= half_w && cz >= -half_d && cz <= half_d)
+        {
+            continue;
+        }
+
+        // Check 2: at least 1 corner in range of objective
+        if !corners_xz.iter().any(|&(cx, cz)| {
+            let dx = cx - obj_cx;
+            let dz = cz - obj_cz;
+            dx * dx + dz * dz <= r_sq
+        }) {
+            continue;
+        }
+
+        // Check 3: all corners must be known-hidden or unknown-fringe
+        let mut all_known_hidden = true;
+        let mut has_unknown = false;
+        let mut unknown_pts: Vec<usize> = Vec::new();
+        for &(cx, cz) in &corners_xz {
+            if let Some(&idx) = pt_index.get(&(cx.to_bits(), cz.to_bits())) {
+                if inner_hidden.contains(&idx) {
+                    continue; // known hidden -- good
+                }
+                if !inner_flags[idx] {
+                    // Fringe point with unknown status
+                    has_unknown = true;
+                    unknown_pts.push(idx);
+                } else {
+                    // Inner point that is NOT hidden -> square impossible
+                    all_known_hidden = false;
+                    break;
+                }
+            } else {
+                all_known_hidden = false;
+                break;
+            }
+        }
+        if !all_known_hidden {
+            continue;
+        }
+
+        // Check 4: terrain overlap
+        let square_obb = obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0);
+        if tall_obbs.iter().any(|tall_obb| {
+            if tall_obb.len() == 4 {
+                obbs_overlap(&square_obb, tall_obb)
+            } else {
+                polygons_overlap(&square_obb, tall_obb)
+            }
+        }) {
+            continue;
+        }
+
+        if !has_unknown {
+            // All corners are known-hidden inner points -> found!
+            return (true, FxHashSet::default());
+        }
+
+        // Has unknown fringe corners -- track as pending
+        for pi in unknown_pts {
+            needed_fringe.insert(pi);
+        }
+    }
+
+    (false, needed_fringe)
+}
+
 /// Check if any non-obscuring placed feature shape has an effective opacity
 /// height in [infantry_height, standard_height). If so, the infantry pass
 /// would produce different results from the standard pass.
@@ -1244,11 +1386,80 @@ pub fn compute_layout_visibility(
     // polygon-polygon intersection (vis_poly vs expanded_polys) instead of PIP sampling.
 
     // -- Objective hidability pre-loop setup --
+    // Generate sample points per objective and classify as inner vs fringe.
+    // Inner points overlap with the main observer grid (within obj_radius)
+    // and will get their hidden status computed in the main loop.
+    // Fringe points (between obj_radius and obj_radius+sqrt(2)) are only
+    // in the objective sample set and need fresh vis poly computation if needed.
     let has_objectives = has_dzs
         && layout
             .mission
             .as_ref()
             .is_some_and(|m| !m.objectives.is_empty());
+
+    let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut obj_radii: Vec<f64> = Vec::new();
+    let mut obj_inner_flags: Vec<Vec<bool>> = Vec::new();
+    // Position lookup: observer_idx -> Vec<(obj_idx, pt_idx)>
+    let obj_point_lookup: Vec<Vec<(usize, usize)>>;
+    // Hidden status: obj_hidden[obj_idx][pt_idx * num_dzs + dz_idx]
+    // None = unknown, Some(true) = hidden, Some(false) = visible
+    let mut obj_hidden: Vec<Vec<Option<bool>>>;
+
+    if has_objectives {
+        let mission = layout.mission.as_ref().unwrap();
+
+        // Build position-keyed lookup first, then convert to observer-indexed
+        let mut pos_lookup: FxHashMap<(u64, u64), Vec<(usize, usize)>> = FxHashMap::default();
+
+        for (oi, obj_marker) in mission.objectives.iter().enumerate() {
+            let obj_radius = 0.75 + obj_marker.range_inches;
+            obj_radii.push(obj_radius);
+            let expanded_radius = obj_radius + std::f64::consts::SQRT_2;
+            let pts = sample_points_in_circle(
+                obj_marker.position.x_inches,
+                obj_marker.position.z_inches,
+                expanded_radius,
+                1.0,
+                0.0,
+            );
+
+            let r_sq = obj_radius * obj_radius;
+            let mut inner_flags = Vec::with_capacity(pts.len());
+            for (pi, &(px, pz)) in pts.iter().enumerate() {
+                let dx = px - obj_marker.position.x_inches;
+                let dz = pz - obj_marker.position.z_inches;
+                let is_inner = dx * dx + dz * dz <= r_sq;
+                inner_flags.push(is_inner);
+                if is_inner {
+                    let key = (px.to_bits(), pz.to_bits());
+                    pos_lookup.entry(key).or_default().push((oi, pi));
+                }
+            }
+            obj_inner_flags.push(inner_flags);
+
+            // Initialize hidden status
+            obj_sample_points.push(pts);
+        }
+
+        // Initialize hidden arrays
+        obj_hidden = obj_sample_points
+            .iter()
+            .map(|pts| vec![None; pts.len() * num_dzs])
+            .collect();
+
+        // Convert position lookup to observer-indexed lookup
+        obj_point_lookup = sample_points
+            .iter()
+            .map(|&(sx, sz)| {
+                let key = (sx.to_bits(), sz.to_bits());
+                pos_lookup.get(&key).cloned().unwrap_or_default()
+            })
+            .collect();
+    } else {
+        obj_point_lookup = Vec::new();
+        obj_hidden = Vec::new();
+    }
 
     // Precompute static segments and obscuring shape data once
     let precomputed = precompute_segments(layout, objects_by_id, min_blocking_height);
@@ -1266,6 +1477,8 @@ pub fn compute_layout_visibility(
         total_ratio: f64,
         // DZ hideability: (hidden_count, total_count) per DZ
         dz_hide_accum: Vec<(u32, u32)>,
+        // Objective hidden status updates: (obj_idx, pt_idx, dz_idx, is_hidden)
+        obj_hidden_updates: Vec<(usize, usize, usize, bool)>,
         // Working buffers (not merged — just avoids per-call allocation)
         segments: Vec<Segment>,
         vis_bufs: VisBuffers,
@@ -1277,6 +1490,7 @@ pub fn compute_layout_visibility(
         Box::new(ThreadAccum {
             total_ratio: 0.0,
             dz_hide_accum: vec![(0, 0); num_dzs],
+            obj_hidden_updates: Vec::new(),
             segments: Vec::new(),
             vis_bufs: VisBuffers::new(),
             vis_poly: Vec::new(),
@@ -1308,6 +1522,14 @@ pub fn compute_layout_visibility(
                         // Just increment total_count (not hidden_count).
                         if let Some(my_dz) = obs_dz {
                             acc.dz_hide_accum[my_dz].1 += 1;
+                        }
+                    }
+                    // Full visibility -> visible from all DZs -> not hidden
+                    if has_objectives && !obj_point_lookup[obs_idx].is_empty() {
+                        for &(oi, pi) in &obj_point_lookup[obs_idx] {
+                            for di in 0..num_dzs {
+                                acc.obj_hidden_updates.push((oi, pi, di, false));
+                            }
                         }
                     }
                 };
@@ -1361,12 +1583,38 @@ pub fn compute_layout_visibility(
                         }
                     }
                 }
+
+                // Objective hidability: check vis poly vs each DZ's expanded polys
+                if has_objectives && !obj_point_lookup[obs_idx].is_empty() {
+                    for &(oi, pi) in &obj_point_lookup[obs_idx] {
+                        for (di, dd) in dz_data.iter().enumerate() {
+                            let overlaps =
+                                dd.expanded_polys.iter().zip(dd.expanded_aabbs.iter()).any(
+                                    |(ep, ep_aabb)| {
+                                        crate::collision::polygons_overlap_aabb(
+                                            &acc.vis_poly,
+                                            ep,
+                                            ep_aabb,
+                                        )
+                                    },
+                                );
+                            acc.obj_hidden_updates.push((oi, pi, di, !overlaps));
+                        }
+                    }
+                }
             }
             acc
         })
         .collect();
 
     // Sequential merge in index order (deterministic reduction).
+    // Apply objective hidden updates from all chunks before reducing.
+    for chunk_acc in &chunk_accums {
+        for &(oi, pi, di, is_hidden) in &chunk_acc.obj_hidden_updates {
+            obj_hidden[oi][pi * num_dzs + di] = Some(is_hidden);
+        }
+    }
+
     let merged = chunk_accums
         .into_iter()
         .reduce(|mut a, b: Box<ThreadAccum>| {
@@ -1417,64 +1665,14 @@ pub fn compute_layout_visibility(
         result["dz_hideability"] = serde_json::Value::Object(dz_hideability);
 
         // Build objective hidability results.
-        // Compute vis polys from each objective-vicinity sample point, then
-        // check polygon-polygon intersection with each DZ's expanded polygons.
-        // This correctly handles obscuring terrain asymmetry.
+        // Two-phase approach: Phase A uses booleans computed in the main loop
+        // (inner points). Phase B computes fresh vis polys only for fringe
+        // points needed by pending candidate squares.
         if has_objectives {
             let mission = layout.mission.as_ref().unwrap();
             let mut objective_hidability = serde_json::Map::new();
 
-            // 1. Generate sample points per objective
-            let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
-            let mut obj_radii: Vec<f64> = Vec::new();
-            for obj_marker in &mission.objectives {
-                let obj_radius = 0.75 + obj_marker.range_inches;
-                obj_radii.push(obj_radius);
-                let expanded_radius = obj_radius + std::f64::consts::SQRT_2;
-                let pts = sample_points_in_circle(
-                    obj_marker.position.x_inches,
-                    obj_marker.position.z_inches,
-                    expanded_radius,
-                    1.0,
-                    0.0,
-                );
-                obj_sample_points.push(pts);
-            }
-
-            // 2. Compute vis poly from each objective sample point (once,
-            //    reused across DZs). None means full visibility.
-            type VisPoly = Option<Vec<(f64, f64)>>;
-            let obj_vis_polys: Vec<Vec<VisPoly>> = obj_sample_points
-                .iter()
-                .map(|pts| {
-                    pts.iter()
-                        .map(|&(px, pz)| {
-                            let mut segs = Vec::new();
-                            get_observer_segments(&precomputed, px, pz, &mut segs);
-                            if segs.is_empty() {
-                                return None;
-                            }
-                            let mut bufs = VisBuffers::new();
-                            let mut vis_poly = Vec::new();
-                            compute_visibility_polygon(
-                                px,
-                                pz,
-                                &segs,
-                                &table_boundary,
-                                &mut bufs,
-                                &mut vis_poly,
-                            );
-                            if vis_poly.len() < 3 {
-                                None
-                            } else {
-                                Some(vis_poly)
-                            }
-                        })
-                        .collect()
-                })
-                .collect();
-
-            // 3. Collect tall OBBs for terrain-intersection check
+            // Collect tall OBBs for terrain-intersection check
             let mut obj_tall_obbs: Vec<Corners> = Vec::new();
             for pf in &layout.placed_features {
                 for corners in get_tall_world_obbs(pf, objects_by_id, 1.0) {
@@ -1488,38 +1686,99 @@ pub fn compute_layout_visibility(
                 }
             }
 
-            // 4. For each DZ, determine hidden points per objective.
-            //    A point is "hidden" if its vis poly does NOT intersect
-            //    that DZ's expanded polygons.
             let total_objectives = obj_sample_points.len();
-            for (di, dd) in dz_data.iter().enumerate() {
+            for (dz_idx, dd) in dz_data.iter().enumerate() {
                 let mut safe_count = 0;
                 for (oi, obj_marker) in mission.objectives.iter().enumerate() {
-                    let hidden: FxHashSet<usize> = obj_vis_polys[oi]
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(pi, vp_opt)| {
-                            let vp = vp_opt.as_ref()?; // None = full vis = not hidden
-                            let overlaps =
-                                dd.expanded_polys.iter().zip(dd.expanded_aabbs.iter()).any(
-                                    |(ep, ep_aabb)| {
-                                        crate::collision::polygons_overlap_aabb(vp, ep, ep_aabb)
-                                    },
-                                );
-                            if overlaps {
-                                None
-                            } else {
-                                Some(pi)
-                            }
-                        })
+                    let pts = &obj_sample_points[oi];
+
+                    // Phase A: Check inner points (booleans from main loop)
+                    let inner_hidden: FxHashSet<usize> = (0..pts.len())
+                        .filter(|&pi| obj_hidden[oi][pi * num_dzs + dz_idx] == Some(true))
                         .collect();
-                    if !hidden.is_empty()
+
+                    if inner_hidden.is_empty() {
+                        // No hidden inner points -> no hiding square possible
+                        continue;
+                    }
+
+                    // Try finding a hiding square using only inner points.
+                    let (found, needed_fringe) = find_hiding_square_with_fringe(
+                        obj_marker.position.x_inches,
+                        obj_marker.position.z_inches,
+                        obj_radii[oi],
+                        pts,
+                        &inner_hidden,
+                        &obj_inner_flags[oi],
+                        &obj_tall_obbs,
+                        half_w,
+                        half_d,
+                    );
+                    if found {
+                        safe_count += 1;
+                        continue;
+                    }
+
+                    if needed_fringe.is_empty() {
+                        // No pending candidates -> no hiding square
+                        continue;
+                    }
+
+                    // Phase B: Compute vis polys for needed fringe points
+                    let mut fringe_hidden: FxHashSet<usize> = FxHashSet::default();
+                    let mut segs_buf = Vec::new();
+                    let mut bufs = VisBuffers::new();
+                    let mut vp_buf = Vec::new();
+                    for &pi in &needed_fringe {
+                        // Check if already computed for another DZ
+                        let status = obj_hidden[oi][pi * num_dzs + dz_idx];
+                        if let Some(is_hidden) = status {
+                            if is_hidden {
+                                fringe_hidden.insert(pi);
+                            }
+                            continue;
+                        }
+                        // Compute fresh vis poly
+                        let (px, pz) = pts[pi];
+                        get_observer_segments(&precomputed, px, pz, &mut segs_buf);
+                        if segs_buf.is_empty() {
+                            obj_hidden[oi][pi * num_dzs + dz_idx] = Some(false);
+                            continue;
+                        }
+                        compute_visibility_polygon(
+                            px,
+                            pz,
+                            &segs_buf,
+                            &table_boundary,
+                            &mut bufs,
+                            &mut vp_buf,
+                        );
+                        if vp_buf.len() < 3 {
+                            obj_hidden[oi][pi * num_dzs + dz_idx] = Some(false);
+                            continue;
+                        }
+                        let overlaps = dd.expanded_polys.iter().zip(dd.expanded_aabbs.iter()).any(
+                            |(ep, ep_aabb)| {
+                                crate::collision::polygons_overlap_aabb(&vp_buf, ep, ep_aabb)
+                            },
+                        );
+                        let hidden = !overlaps;
+                        obj_hidden[oi][pi * num_dzs + dz_idx] = Some(hidden);
+                        if hidden {
+                            fringe_hidden.insert(pi);
+                        }
+                    }
+
+                    // Re-check with combined hidden set
+                    let all_hidden: FxHashSet<usize> =
+                        inner_hidden.union(&fringe_hidden).copied().collect();
+                    if !all_hidden.is_empty()
                         && has_valid_hiding_square(
                             obj_marker.position.x_inches,
                             obj_marker.position.z_inches,
                             obj_radii[oi],
-                            &obj_sample_points[oi],
-                            &hidden,
+                            pts,
+                            &all_hidden,
                             &obj_tall_obbs,
                             half_w,
                             half_d,
@@ -1531,7 +1790,7 @@ pub fn compute_layout_visibility(
 
                 // Store under the opposing player's DZ id
                 for (oi, other_dd) in dz_data.iter().enumerate() {
-                    if oi != di {
+                    if oi != dz_idx {
                         let pct = if total_objectives > 0 {
                             (safe_count as f64 / total_objectives as f64 * 100.0 * 100.0).round()
                                 / 100.0

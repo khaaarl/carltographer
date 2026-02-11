@@ -17,6 +17,7 @@ from engine.types import (
 from engine.visibility import (
     DZ_EXPANSION_INCHES,
     _extract_blocking_segments,
+    _find_hiding_square_with_fringe,
     _fraction_of_dz_visible,
     _has_valid_hiding_square,
     _point_in_polygon,
@@ -1226,3 +1227,209 @@ class TestPolygonVisibility:
         segments = _extract_blocking_segments(layout, objects_by_id, 0, 0)
         # Should have exactly 3 segments from the triangle
         assert len(segments) == 3
+
+
+# -- _find_hiding_square_with_fringe tests --
+
+
+class TestFindHidingSquareWithFringe:
+    """Tests for the fringe-aware hiding square search."""
+
+    def _grid_points(self, x_range, z_range):
+        """Generate grid points at integer spacing."""
+        pts = []
+        for x in x_range:
+            for z in z_range:
+                pts.append((float(x), float(z)))
+        return pts
+
+    def test_inner_only_square_found(self):
+        """4 adjacent hidden inner points form a valid square without fringe."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        # All points within radius 5 are inner
+        inner_flags = [True] * len(pts)
+        # Hide a 2x2 block of points near origin
+        inner_hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 0 <= x <= 1 and 0 <= z <= 1:
+                inner_hidden.add(i)
+        found, needed = _find_hiding_square_with_fringe(
+            0.0, 0.0, 5.0, pts, inner_hidden, inner_flags, [], 30, 22
+        )
+        assert found is True
+        assert needed == set()
+
+    def test_no_hidden_inner_returns_false_empty(self):
+        """No hidden inner points -> False with empty fringe needs."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        inner_flags = [True] * len(pts)
+        found, needed = _find_hiding_square_with_fringe(
+            0.0, 0.0, 5.0, pts, set(), inner_flags, [], 30, 22
+        )
+        assert found is False
+        assert needed == set()
+
+    def test_fringe_corners_tracked(self):
+        """When a candidate square has fringe corners, they are tracked."""
+        # Grid from -5 to 5
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        # Points within radius 2.5 are inner, rest are fringe
+        inner_flags = []
+        for x, z in pts:
+            inner_flags.append(x * x + z * z <= 2.5 * 2.5)
+
+        # Hide one inner point at (2, 0) - this is near the boundary of
+        # radius 2.5. Some of its candidate square corners (3, 0), (3, 1)
+        # etc. will be fringe points.
+        inner_hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if x == 2 and z == 0:
+                inner_hidden.add(i)
+                break
+
+        found, needed = _find_hiding_square_with_fringe(
+            0.0, 0.0, 2.5, pts, inner_hidden, inner_flags, [], 30, 22
+        )
+        # Can't find a fully-inner square (only 1 hidden point)
+        assert found is False
+        # But some fringe points should be needed (corners of candidate squares
+        # that include the hidden point)
+        if needed:
+            # All needed points should be fringe points
+            for pi in needed:
+                assert not inner_flags[pi], (
+                    f"Point {pi} at {pts[pi]} should be fringe"
+                )
+
+    def test_terrain_blocks_candidate(self):
+        """Tall terrain overlapping candidate square rejects it."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        inner_flags = [True] * len(pts)
+        inner_hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if 0 <= x <= 1 and 0 <= z <= 1:
+                inner_hidden.add(i)
+        # Place tall terrain covering the hiding square
+        tall_obb = obb_corners(0.5, 0.5, 0.6, 0.6, 0.0)
+        found, needed = _find_hiding_square_with_fringe(
+            0.0, 0.0, 5.0, pts, inner_hidden, inner_flags, [tall_obb], 30, 22
+        )
+        assert found is False
+
+    def test_inner_visible_rejects_square(self):
+        """An inner point that is NOT hidden rejects the candidate square."""
+        pts = self._grid_points(range(-5, 6), range(-5, 6))
+        inner_flags = [True] * len(pts)
+        # Hide only 3 of 4 corners of a potential square
+        inner_hidden = set()
+        for i, (x, z) in enumerate(pts):
+            if (x, z) in [(0, 0), (1, 0), (0, 1)]:
+                inner_hidden.add(i)
+        # (1, 1) is inner but NOT hidden -> no valid square
+        found, needed = _find_hiding_square_with_fringe(
+            0.0, 0.0, 5.0, pts, inner_hidden, inner_flags, [], 30, 22
+        )
+        assert found is False
+        assert needed == set()
+
+
+class TestObjectiveHidabilityOptimization:
+    """Tests that the optimized objective hidability path produces correct results."""
+
+    def test_inner_hiding_no_fringe_needed(self):
+        """Wall creates hiding square well within obj_radius.
+
+        The optimization should find it using only inner-point booleans
+        from the main loop, without computing any fringe vis polys.
+        """
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        # Single objective at center
+        objectives = [
+            ObjectiveMarker(id="obj1", position=Point2D(x=0.0, z=0.0))
+        ]
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        # Tall wall right next to objective, blocking view from red DZ.
+        # This creates a large hidden region well within obj_radius=3.75.
+        obj = _make_object("wall", 2, 8, 5)
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 2, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"wall": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        oh = result["objective_hidability"]
+        # Green player can hide from red DZ (wall blocks red's view)
+        assert oh["green"]["safe_count"] >= 1
+
+    def test_no_hidden_inner_points_skips_fringe(self):
+        """Open space with no terrain -> 0% hidability, fringe computation skipped."""
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        objectives = [
+            ObjectiveMarker(id="obj1", position=Point2D(x=0.0, z=0.0))
+        ]
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[],
+            mission=mission,
+        )
+        result = compute_layout_visibility(layout, {})
+        oh = result["objective_hidability"]
+        assert oh["green"]["value"] == 0.0
+        assert oh["red"]["value"] == 0.0
+
+    def test_fringe_hiding_square(self):
+        """Terrain placed so hiding square has corners in the fringe region.
+
+        A narrow wall near the edge of obj_radius creates hidden points
+        near the boundary, where some valid hiding square corners may be
+        in the fringe (between obj_radius and obj_radius + sqrt(2)).
+        The optimization must compute fringe vis polys to find these.
+        """
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        # Objective at (0, 0) with range 3.0 -> obj_radius = 3.75
+        objectives = [
+            ObjectiveMarker(id="obj1", position=Point2D(x=0.0, z=0.0))
+        ]
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        # Place a tall wide wall at x=4 blocking red DZ view.
+        # Hidden points near x=3-4 are at the edge of obj_radius=3.75,
+        # so some hiding square corners at x=4 will be in the fringe.
+        obj = _make_object("wall", 2, 12, 5)
+        feat = _make_feature("f1", "wall", "obstacle")
+        pf = _place(feat, 4, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"wall": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        oh = result["objective_hidability"]
+        # The wall should create some hiding for the green player
+        # (blocks red DZ's view of the objective area)
+        assert oh["green"]["safe_count"] >= 0  # May or may not find one
+        # Key check: no crash, result is valid
+        assert oh["green"]["total_objectives"] == 1

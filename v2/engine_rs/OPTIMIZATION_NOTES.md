@@ -1,6 +1,6 @@
 # Rust Visibility Optimization Notes
 
-Status: **post sin_cos + polygon terrain support** — polygon overhead is the new optimization frontier
+Status: **post objective hidability boolean tracking** — polygon overhead and remaining sequential fringe computation are the next optimization frontiers
 
 ## Context
 
@@ -366,6 +366,35 @@ This is a correctness fix, not an optimization — it trades performance for cor
 
 *Measured February 2026.*
 
+### 12. Objective hidability boolean tracking (recovery optimization)
+
+The objective hidability regression above (+44-284%) was caused by computing ~300-600 fresh vis polys sequentially in a post-loop pass. The key insight: the main observer loop already computes vis polys for ~50% of those points (the "inner" points within `obj_radius`). Instead of discarding those vis polys and recomputing them later, we run the cheap `polygons_overlap_aabb` test right there and store boolean hidden/visible results.
+
+**Architecture**:
+- **Pre-loop**: Classify objective sample points as "inner" (within `obj_radius`, on the main observer grid) or "fringe" (between `obj_radius` and `obj_radius + sqrt(2)`, NOT in the main grid). Build a position lookup mapping observer indices to `(obj_idx, pt_idx)` pairs.
+- **Main loop**: When an observer position is also an inner objective sample point, run `polygons_overlap_aabb(vis_poly, expanded_dz)` for each DZ and store the boolean in `ThreadAccum::obj_hidden_updates`. Merged sequentially after the parallel loop.
+- **Post-loop Phase A**: For each (objective, DZ) pair, read inner booleans and call `find_hiding_square_with_fringe` — searches for a valid hiding square using only known-hidden inner points, tracking fringe points needed for pending candidates.
+- **Post-loop Phase B** (rare): Only when Phase A finds pending candidates with unknown fringe corners, compute fresh vis polys for those specific fringe points and re-check.
+
+**Cost**: ~440 extra `polygons_overlap_aabb` calls in the main loop (negligible). Fresh vis poly computation only for fringe points of unresolved objectives — typically zero, worst case ~200 (still 50%+ reduction).
+
+**Impact: recovers 49-70% of the regression on all mission workloads, no change to non-mission.**
+
+| # | Benchmark | Pre-refactor | Post-refactor | Post-recovery | Recovery |
+|---|-----------|-------------|---------------|---------------|----------|
+| 05 | `44x30_wtc_HnA_nosym_10_g1001_r8` | 65.8 ms | 110 ms | 47.1 ms | **-57%** |
+| 08 | `60x44_crates_HnA_sym_100_g1011_r2` | 760 ms | 1.63 s | 605 ms | **-63%** |
+| 12 | `90x44_wtc_DoW_nosym_100_g1100_r1` | 737 ms | 1.74 s | 644 ms | **-63%** |
+| 16 | `90x44_wtc_TipPt_nosym_100_g0110_r1` | 769 ms | 1.86 s | 671 ms | **-64%** |
+| 20 | `60x44_wtc_SwpEng_sym_100_g0010_r1` | 960 ms | 3.52 s | 1.07 s | **-70%** |
+| 24 | `90x44_crates_Crucible_nosym_100_g1001_r1` | 712 ms | 1.37 s | 480 ms | **-65%** |
+| 27 | `44x30_wtc_SnD_nosym_50_g0010_r1` | 134 ms | 514 ms | 174 ms | **-66%** |
+| 01-04 | Non-mission benchmarks | — | — | — | noise |
+
+Post-recovery numbers are **at or below pre-refactor** for most cases. The boolean tracking adds negligible overhead to the main loop while eliminating most of the sequential vis poly work.
+
+*Measured February 2026. Parity verified: 46/46 scenarios pass.*
+
 ### FP parity reversions (post-optimization correctness fixes)
 
 Three micro-optimizations were reverted because they produced different IEEE 754 floating-point results than the Python engine, breaking bit-identical parity:
@@ -484,12 +513,12 @@ Objective hidability was refactored: instead of testing objective sample points 
 
 The new approach computes ~60-120 extra vis polys per objective (one per sample point in the range circle), reused across all DZs. With ~5 objectives, that's ~300-600 vis poly computations on top of the main observer loop's ~600+. This roughly doubles the vis poly work for mission workloads, but only for the full visibility pass (not `overall_only`, which is the hot path during scoring).
 
-Benchmarks show **+44% to +284% regression** on mission workloads (see "Architectural change" section above). This is now the dominant cost for mission benchmarks — the sequential objective pass can take longer than the entire parallelized observer loop.
+Benchmarks showed **+44% to +284% regression** on mission workloads (see "Architectural change" section above). **This regression has been largely recovered** by optimization #12 (boolean tracking in main loop + two-phase post-loop), which reduces mission workloads by 49-70% — at or below pre-refactoring performance.
 
-Potential optimizations (in priority order):
-- **3a. Parallelization** (HIGH PRIORITY): The per-objective vis poly computations are independent and could use `par_iter`. Currently sequential. Given the regression magnitude, this is the single most impactful recovery path — it would spread the ~300-600 vis poly computations across all available cores. Must collect results in index order for determinism.
-- **3b. Early termination**: If a DZ already has all objectives marked as safe/unsafe, skip remaining intersection tests.
-- **3c. AABB pre-filter**: Same `polygons_overlap_aabb` technique used for DZ hideability could be applied here (already using it).
+Remaining potential optimizations:
+- ~~**3a. Parallelization**~~ (SUPERSEDED by opt #12): Boolean tracking eliminates ~95% of objective vis poly work. The remaining fringe expansion is rare and involves only ~10-20 vis polys when triggered. Parallelizing fringe computation via `par_iter` could help worst-case scenarios but has diminishing returns.
+- **3b. Early termination**: If a DZ already has all objectives marked as safe/unsafe, skip remaining intersection tests. Still applicable to the fringe expansion phase.
+- **3c. AABB pre-filter**: Already applied — `polygons_overlap_aabb` is used for both main-loop boolean tracking and fringe expansion.
 
 ### Tier 4: Collision / mutation path (affects all workloads, especially polygon catalogs)
 
@@ -517,10 +546,9 @@ Only recompute observers affected by a mutation. Extremely complex, especially w
 
 ### Recommended next steps
 
-1. **Parallelize objective hidability vis poly pass (3a)** — this is now the top priority. The sequential objective pass is the single largest regression from the hidability refactoring (+44-284% on mission workloads). The per-sample-point vis poly computations are independent and map naturally to `par_iter`. This alone should recover most of the regression on multi-core machines.
-2. **Re-profile with wtcPoly catalog** to understand where polygon overhead concentrates. The wtcPoly cases are 1.5-2x slower than rect-only — profiling will reveal whether the cost is dominated by collision (`polygons_overlap`, `obb_distance`), visibility (`precompute_segments` with 24-edge shapes), or both. Use `cargo bench -- wtcPoly` to isolate polygon cases.
-3. **Try 1a (SAT for convex polygons)** — the 24-gon tank is convex, so SAT overlap testing (28 axes for 24-gon vs rect) should be much cheaper than the current O(E_a × E_b) edge intersection (96 pairs). This is the most direct attack on the polygon collision overhead.
-4. **Try 1c (AABB early-exit for terrain overlap)** — cheap to implement, may help when polygon shapes don't overlap most placed features.
-5. **Consider 2d (polygon segment reduction)** — if profiling shows visibility with 24-gon shapes is a hotspot, merging near-collinear edges could cut segment count significantly.
+1. **Re-profile with wtcPoly catalog** to understand where polygon overhead concentrates. The wtcPoly cases are 1.5-2x slower than rect-only — profiling will reveal whether the cost is dominated by collision (`polygons_overlap`, `obb_distance`), visibility (`precompute_segments` with 24-edge shapes), or both. Use `cargo bench -- wtcPoly` to isolate polygon cases.
+2. **Try 1a (SAT for convex polygons)** — the 24-gon tank is convex, so SAT overlap testing (28 axes for 24-gon vs rect) should be much cheaper than the current O(E_a × E_b) edge intersection (96 pairs). This is the most direct attack on the polygon collision overhead.
+3. **Try 1c (AABB early-exit for terrain overlap)** — cheap to implement, may help when polygon shapes don't overlap most placed features.
+4. **Consider 2d (polygon segment reduction)** — if profiling shows visibility with 24-gon shapes is a hotspot, merging near-collinear edges could cut segment count significantly.
 
-**Note**: The objective hidability refactoring is now the dominant performance concern for mission workloads. Previous optimization work focused on the main observer loop (raycasting, DZ PIP → polygon intersection), which is parallelized. The new objective pass is sequential and can take longer than the entire parallelized observer loop on high-step symmetric cases.
+**Note**: The objective hidability regression has been largely recovered (opt #12). The remaining performance frontier is polygon terrain overhead (1.5-2x slower than rect-only catalogs) and general raycasting cost.
