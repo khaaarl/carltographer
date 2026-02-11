@@ -31,7 +31,7 @@ You are attempting **one** optimization to the Rust engine in `v2/engine_rs/`. Y
 Before changing any code, establish the current baseline:
 
 ```bash
-cd v2/engine_rs && cargo bench
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench
 ```
 
 Record the numbers for the key benchmarks. The main ones (as of writing):
@@ -45,7 +45,12 @@ If your optimization targets a path not covered by existing benchmarks, consider
 
 If you want to profile to find bottlenecks, `cargo bench` output plus any instrumentation you add temporarily is fine. Remove temporary instrumentation before committing.
 
-For saving benchmark output or scratch data, use `.tmp/` in the repo root (gitignored): from `v2/engine_rs`, `mkdir -p ../../.tmp && cargo bench 2>&1 > ../../.tmp/bench_baseline.txt`. Do NOT use `/tmp`.
+For saving benchmark output or scratch data, use `.tmp/` in the repo root (gitignored):
+```bash
+mkdir -p "$(git rev-parse --show-toplevel)"/.tmp
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench 2>&1 > "$(git rev-parse --show-toplevel)"/.tmp/bench_baseline.txt
+```
+Do NOT use `/tmp`.
 
 ## Phase 3: Implement and Test
 
@@ -53,24 +58,24 @@ For saving benchmark output or scratch data, use `.tmp/` in the repo root (gitig
 
 2. **Run `cargo fmt`:**
    ```bash
-   cd v2/engine_rs && cargo fmt
+   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo fmt
    ```
 
 3. **Run Rust tests:**
    ```bash
-   cd v2/engine_rs && cargo test
+   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test
    ```
    All tests must pass. If they don't, fix the issue or abandon the attempt.
 
 4. **Run parity tests** to verify the optimization doesn't change engine output:
    ```bash
-   source v2/.env/bin/activate && python3 v2/scripts/build_rust_engine.py
+   cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
    ```
    This builds the Rust engine and runs all parity comparison tests. ALL scenarios must pass. If any fail, the optimization changes engine behavior and must be fixed or abandoned.
 
 5. **Run benchmarks:**
    ```bash
-   cd v2/engine_rs && cargo bench
+   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench
    ```
    Compare against the baseline from Phase 2.
 
@@ -92,7 +97,7 @@ For saving benchmark output or scratch data, use `.tmp/` in the repo root (gitig
 
 **FAILURE (still valuable).** Revert the code changes:
 ```bash
-cd v2/engine_rs && git checkout -- src/
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && git checkout -- src/
 ```
 
 Update `OPTIMIZATION_NOTES.md`:
@@ -136,7 +141,7 @@ stop: <reason>
 Stage and commit everything (notes + status file + any code changes for successful optimizations):
 
 ```bash
-cd v2
+cd "$(git rev-parse --show-toplevel)"/v2
 git add engine_rs/OPTIMIZATION_NOTES.md engine_rs/.optimization_status
 # If optimization was successful, also add the changed source files:
 git add engine_rs/src/ engine_rs/benches/
@@ -157,7 +162,7 @@ Use a commit message like:
 
 ### Parity
 - The Rust engine must produce **bit-identical** output to the Python engine for the same seed.
-- `python3 v2/scripts/build_rust_engine.py` is the authoritative parity check. Always run it.
+- The `build_rust_engine.py` script is the authoritative parity check. Always run it (see Phase 3 step 4 for the full command).
 - Internal-only changes (data structures, algorithms, caching) that produce the same output are fine.
 - If you're unsure whether a change affects output, it probably does. Test it.
 

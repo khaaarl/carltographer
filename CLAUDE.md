@@ -58,20 +58,20 @@ Coverage scripts (output to separate directories):
 
 All three accept `--html` to open the HTML report in a browser after generating.
 
-## Running Commands (Venv Activation)
+## Running Commands
 
-**Always activate the venv** before running Python tools. This puts `python`, `ruff`, `ty`, `isort`, `pytest`, etc. on PATH without needing to spell out venv binary paths:
+**CRITICAL: Working directory drift.** The Bash tool's working directory persists between calls. After `cd v2/engine_rs && cargo test`, you're in `v2/engine_rs/` — not the repo root. A subsequent `source v2/.env/bin/activate` will fail because the relative path is wrong. **Always `cd` back to the repo root before running commands.** Use `git rev-parse --show-toplevel` to find it reliably from any subdirectory:
 
 ```bash
-# Standard pattern — activate venv, then run whatever you need:
-source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
-source v2/.env/bin/activate && cd v2 && ruff format .
-source v2/.env/bin/activate && cd v2 && isort .
-source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
+# Python commands — activate venv, cd to v2/, then run:
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && ruff format .
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && isort .
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
 
-# For cargo commands (no venv needed, but cd to find Cargo.toml):
-cd v2/engine_rs && cargo test
-cd v2/engine_rs && cargo bench
+# Cargo commands — no venv needed:
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench
 ```
 
 **Sub-agents** (like the rust-optimizer) that operate in a worktree or clone should follow the same pattern with the appropriate paths.
@@ -81,8 +81,9 @@ cd v2/engine_rs && cargo bench
 Use `.tmp/` in the repo root (gitignored) for any temporary files — benchmark output, intermediate data, scratch scripts, etc. Always `mkdir -p .tmp` before writing. **Do NOT use `/tmp`** — it can trigger permission prompts and isn't project-scoped.
 
 ```bash
-mkdir -p .tmp
-# then e.g.: cargo bench 2>&1 > .tmp/bench_baseline.txt
+mkdir -p "$(git rev-parse --show-toplevel)"/.tmp
+# then e.g.:
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench 2>&1 > "$(git rev-parse --show-toplevel)"/.tmp/bench_baseline.txt
 ```
 
 ## Formatting and Linting (AUTONOMOUS, NO PERMISSION NEEDED)
@@ -90,15 +91,15 @@ mkdir -p .tmp
 **CRITICAL: After modifying ANY Python files, immediately and automatically run formatters WITHOUT asking.**
 
 ```bash
-source v2/.env/bin/activate && cd v2 && isort .
-source v2/.env/bin/activate && cd v2 && ruff format .
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && isort .
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && ruff format .
 ```
 
 **Do NOT ask for permission.** This must happen automatically after every Python file edit/write. Ensures code stays clean and pre-commit checks pass on first try.
 
-**Rust files:** After modifying Rust files in `v2/engine_rs/`, run from that directory:
+**Rust files:** After modifying Rust files in `v2/engine_rs/`:
 ```bash
-cd v2/engine_rs && cargo fmt
+cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo fmt
 ```
 
 The Rust engine is configured with `warnings = "deny"` and `clippy::all = "deny"` in `Cargo.toml [lints]`, so compiler warnings and clippy lints are compile errors. Pre-commit hooks also run `cargo fmt --check`, `cargo clippy`, and `cargo test` on Rust file changes.
@@ -136,14 +137,13 @@ Before committing, run the full validation pipeline (from repo root):
 
 ```bash
 # Step 1: Auto-format code (isort + ruff format)
-source v2/.env/bin/activate && cd v2 && isort . && ruff format .
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && isort . && ruff format .
 
 # Step 2: Run full pre-commit hooks (from repo root)
-source v2/.env/bin/activate && pre-commit run --all-files
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && pre-commit run --all-files
 
 # Step 3: If all hooks pass, commit
-git add .
-git commit -m "Your commit message"
+cd "$(git rev-parse --show-toplevel)" && git add . && git commit -m "Your commit message"
 ```
 
 If any hook fails in Step 2:
@@ -233,17 +233,15 @@ The squashed commit message should summarize the entire feature, not repeat indi
 
 ### Phase 1: Python (Red → Green)
 
-All commands run from `v2/`.
-
 1. **Write a failing Python unit test** in `v2/engine/` that captures the bug or specifies the new behavior.
    ```bash
-   python -m pytest engine/ -v
+   cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
    ```
    Confirm the new test **fails**.
 
 2. **Write Python code** to make the test pass.
    ```bash
-   python -m pytest engine/ -v
+   cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
    ```
    Confirm the new test **passes** and no existing tests regress.
 
@@ -258,7 +256,7 @@ All commands run from `v2/`.
 
 5. **Build the Rust engine and run parity tests** — confirm the new scenarios **fail** (Rust doesn't have the change yet):
    ```bash
-   python scripts/build_rust_engine.py
+   cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
    ```
    New scenarios should fail; existing scenarios should still pass.
 
@@ -268,14 +266,14 @@ All commands run from `v2/`.
    - `v2/engine_rs/src/collision.rs` tests for collision/validation logic
    - `v2/engine_rs/src/generate.rs` tests for generation logic
    ```bash
-   cd v2/engine_rs && cargo test
+   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test
    ```
    Confirm the new test **fails**.
 
 7. **Write Rust code** to make the test pass. Keep implementation close to the Python version for maintainability.
    - Key files: `types.rs` (data model), `collision.rs` (collision/validation), `generate.rs` (main loop/actions)
    ```bash
-   cd v2/engine_rs && cargo test
+   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test
    ```
    Confirm the new test **passes** and no existing tests regress.
 
@@ -283,27 +281,27 @@ All commands run from `v2/`.
 
 ### Phase 4: Verify Full Parity (Green)
 
-9. **Run the full build-and-verify pipeline** (from v2/):
+9. **Run the full build-and-verify pipeline:**
    ```bash
-   python scripts/build_rust_engine.py
+   cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
    ```
    ALL parity scenarios must pass (existing + new). If any fail, inspect the diff output to find where engines diverge. Common issues: floating-point order, randomness, quantization rounding.
 
-10. **Final regression check** (from v2/):
+10. **Final regression check:**
     ```bash
-    python -m pytest engine/ -v                # Python engine tests
-    cd engine_rs && cargo test && cd ..         # Rust engine tests
-    python -m pytest engine_cmp/ -v            # Parity comparison tests
+    cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
+    cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test
+    cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python -m pytest engine_cmp/ -v
     ```
 
 **Do NOT commit engine changes without confirming parity.** The comparison tool is your verification that the engines are in sync.
 
 ## Build and Verification Scripts
 
-**After any changes to Rust engine code or verification code, ALWAYS run (from v2/):**
+**After any changes to Rust engine code or verification code, ALWAYS run:**
 
 ```bash
-python scripts/build_rust_engine.py
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
 ```
 
 **What this script does:**
@@ -314,13 +312,12 @@ python scripts/build_rust_engine.py
 5. Exits with code 0 (success) or 1 (failure)
 
 **Usage:**
-- **Default (verbose)**: `python scripts/build_rust_engine.py`
-- **Quiet mode**: `python scripts/build_rust_engine.py --quiet`
+- **Quiet mode**: add `--quiet`
 
-**Packaging (from v2/):**
+**Packaging:**
 ```bash
-python scripts/package_executable.py                   # full build
-python scripts/package_executable.py --skip-rust-build # skip Rust rebuild
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/package_executable.py
+cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/package_executable.py --skip-rust-build  # skip Rust rebuild
 ```
 
 Auto-detects OS and architecture, names output accordingly (e.g. `carltographer-linux-x86_64`, `carltographer-windows-x86_64.exe`, `carltographer-mac-arm64`). Both scripts are cross-platform (Linux, macOS, Windows).

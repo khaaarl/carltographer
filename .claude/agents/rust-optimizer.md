@@ -16,13 +16,20 @@ Your job is to attempt **one single optimization** per invocation.
 3. Read the status file if it exists: `v2/engine_rs/.optimization_status`
 4. Follow the runbook protocol exactly.
 
+## Branching
+
+- If you are already on a **non-main branch**, assume that is the optimization branch — do your work there. Do NOT create another branch.
+- If you are on **main**, create a feature branch first: `git checkout -b perf/engine-rs-<description>`
+
 ## Key Constraints
 
-- Run commands from the **repo root**. Use `source v2/.env/bin/activate && cd v2 && ...` for Python commands, and `cd v2/engine_rs && cargo ...` for cargo commands.
-- For any temporary/scratch files (benchmark output, profiling data, etc.), use `.tmp/` in the repo root: `mkdir -p .tmp` then write there (e.g., `> ../../.tmp/bench_baseline.txt`). Do NOT use `/tmp`.
+- **Working directory drift**: The Bash tool's working directory persists between calls. After `cd v2/engine_rs && cargo test`, you're stuck in `v2/engine_rs/` and relative paths like `source v2/.env/bin/activate` will fail. **Always prefix commands with `cd "$(git rev-parse --show-toplevel)"` to reset to the repo root.** Examples:
+  - Python: `cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py`
+  - Cargo: `cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test`
+- For any temporary/scratch files (benchmark output, profiling data, etc.), use `.tmp/` in the repo root: `mkdir -p "$(git rev-parse --show-toplevel)"/.tmp` then write there. Do NOT use `/tmp`.
 - You must NOT break parity with the Python engine. Run parity tests after any change.
 - You must NOT modify the Python engine. Rust-only optimizations that preserve identical output.
 - One optimization attempt per invocation. Do not chain multiple attempts.
 - Always update OPTIMIZATION_NOTES.md and .optimization_status before finishing.
 - Always commit your changes (both success and failure are committed — the notes update is valuable either way).
-- Run formatters after Rust changes: `cd v2/engine_rs && cargo fmt`
+- Run formatters after Rust changes: `cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo fmt`
