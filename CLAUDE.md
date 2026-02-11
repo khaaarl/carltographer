@@ -170,7 +170,8 @@ When the user asks to merge a feature branch to main, follow this procedure:
 #    IMPORTANT: The REAL commit message goes HERE — step 4 is a fast-forward
 #    merge which does NOT create a new commit, so any -m there is ignored.
 git checkout -b feature/my-branch-rebase feature/my-branch
-git reset --soft $(git merge-base main feature/my-branch-rebase)
+git merge-base main feature/my-branch-rebase  # Learn the common ancestor!
+git reset --soft THAT-COMMON-ANCESTOR
 git commit -m "Your descriptive commit message here"
 
 # 2. Pull latest main
@@ -190,7 +191,7 @@ git push
 git branch -d feature/my-branch-rebase
 ```
 
-**Why squash first, then rebase?** Rebasing a multi-commit branch onto main can require resolving the same conflict repeatedly (once per commit). By squashing into one commit first, you only resolve conflicts once. The `git reset --soft $(git merge-base ...)` in step 1 is safe — it collapses our own feature commits back to the branch point, without touching main's state. The rebase in step 3 then does proper 3-way conflict detection against latest main.
+**Why squash first, then rebase?** Rebasing a multi-commit branch onto main can require resolving the same conflict repeatedly (once per commit). By squashing into one commit first, you only resolve conflicts once. The `git reset --soft ...` in step 1 is safe — it collapses our own feature commits back to the branch point, without touching main's state. The rebase in step 3 then does proper 3-way conflict detection against latest main.
 
 **Handling rebase conflicts:** When `git rebase main` reports conflicts:
 1. Run `git status` to see which files conflict
