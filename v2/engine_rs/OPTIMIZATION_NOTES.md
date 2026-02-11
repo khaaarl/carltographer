@@ -1,6 +1,6 @@
 # Rust Visibility Optimization Notes
 
-Status: **post AABB early-exit for polygons_overlap** — re-profile recommended
+Status: **post pseudoangle bucketing** — parity test needed
 
 ## Context
 
@@ -216,6 +216,38 @@ Broad improvement across all workloads (5-15% typical, up to 21% on some cases):
 
 (Selected representative cases; 25/28 benchmarks improved by 5%+ with no regressions.)
 
+### 10. Pseudoangle for bucket assignment (replacing atan2 in bucketing)
+
+Replace `atan2` calls in the segment bucketing loop and ray bucket lookup with a cheap pseudoangle function `pseudoangle(dx, dz) = if dz >= 0 { 3 - dx/(|dx|+|dz|) } else { 1 + dx/(|dx|+|dz|) }`. The pseudoangle maps monotonically from [0, 4) as angle goes from -pi to pi, so it preserves sort order and bucket consistency.
+
+This eliminates 2 atan2 calls per segment per observer in the bucketing loop (lines 438-439 in the old code), replacing them with arithmetic (2 abs + 1 div + 1 comparison per endpoint). The ray sort key also switches from real angle to pseudoangle (same ordering). Ray directions (dx, dz) are completely unchanged -- the atan2 + cos/sin for epsilon rays remain for FP parity.
+
+The pseudoangle-based buckets are non-uniform in real angle space: buckets near cardinal directions (0, pi/2, pi, -pi/2) cover wider angular ranges than buckets near diagonals. The existing +-1 bucket expansion (safety margin) absorbs this without correctness impact. The load imbalance adds a small overhead to the intersection loop, partially offsetting the atan2 savings. Overall, the net effect is positive for most workloads.
+
+**Note**: The earlier abandoned "pseudoangle" attempt (see below) replaced atan2 everywhere including ray generation, which caused different bucket distribution AND was a more invasive change. This attempt only replaces the bucketing atan2 while keeping all ray generation trig intact.
+
+Impact varies by workload -- largest on medium-step cases where bucketing atan2 is a proportionally larger cost:
+
+| # | Benchmark | Before | After | Change |
+|---|-----------|--------|-------|--------|
+| 03 | `60x44_crates_none_nosym_50_g1101_r4` | 162 ms | 128 ms | **-21%** |
+| 06 | `90x44_crates_HnA_sym_20_g0100_r1` | 148 ms | 128 ms | **-14%** |
+| 07 | `60x44_wtc_HnA_nosym_50_g0110_r4` | 407 ms | 355 ms | **-13%** |
+| 08 | `60x44_crates_HnA_sym_100_g1011_r2` | 877 ms | 760 ms | **-13%** |
+| 11 | `90x44_crates_DoW_sym_50_g0011_r2` | 646 ms | 548 ms | **-15%** |
+| 18 | `44x30_wtc_SwpEng_sym_20_g1010_r8` | 271 ms | 238 ms | **-12%** |
+| 19 | `90x44_crates_SwpEng_nosym_50_g1101_r2` | 361 ms | 305 ms | **-16%** |
+| 20 | `60x44_wtc_SwpEng_sym_100_g0010_r1` | 1.11 s | 976 ms | **-12%** |
+| 21 | `44x30_crates_Crucible_sym_10_g1000_r8` | 82 ms | 69 ms | **-16%** |
+| 23 | `60x44_wtc_Crucible_sym_50_g0110_r4` | 515 ms | 442 ms | **-14%** |
+| 26 | `44x30_crates_SnD_sym_20_g1000_r8` | 185 ms | 158 ms | **-15%** |
+| 27 | `44x30_wtc_SnD_nosym_50_g0010_r1` | 156 ms | 134 ms | **-14%** |
+| 28 | `90x44_crates_SnD_sym_100_g1101_r2` | 1.23 s | 1.06 s | **-14%** |
+
+(Remaining benchmarks within noise +-3%; no regressions observed.)
+
+**IMPORTANT: Parity tests could not be run due to permission restrictions in this session. The user must run `python scripts/build_rust_engine.py` to verify parity before considering this optimization confirmed. The optimization is internal-only (bucket assignment strategy), preserves all ray directions, intersection logic, and visibility polygon output, but this has not been verified via the automated parity comparison.**
+
 ### Cumulative improvement (all optimizations)
 | Benchmark | Original | Current | Total improvement |
 |---|---|---|---|
@@ -298,14 +330,14 @@ Late-game steps (~760 observers, ~20 segments):
 
 </details>
 
-### Current state: needs re-profiling
+### Current state: needs re-profiling (post pseudoangle + FxHash)
 
-The polygon-polygon intersection refactor significantly changed the observer loop structure. The old DZ PIP phases (`dz_vis`, `cross_dz`) are replaced by `polygons_overlap` calls. Fresh profiling is needed to identify the new bottleneck distribution. Expected phases:
+The polygon-polygon intersection refactor and subsequent optimizations (FxHash, pseudoangle bucketing) have significantly changed the bottleneck distribution. The old DZ PIP phases (`dz_vis`, `cross_dz`) are replaced by `polygons_overlap` calls. Bucketing atan2 has been eliminated. Fresh profiling is needed. Expected phases:
 
-- `compute_visibility_polygon` — angular sweep raycasting (likely dominant now)
+- `compute_visibility_polygon` — ray generation (atan2 + cos/sin per endpoint) + intersection loop (dominant for high-segment workloads)
 - `dz_hideability` — polygon-polygon intersection per observer per opponent DZ
 - `obj_hidability` — Z-sorted PIP for objective sample points (still uses old approach)
-- `overall_pip` — grid point PIP for overall visibility percentage
+- `overall_pip` — polygon area (shoelace, likely cheap)
 
 ## Future Optimization Ideas (Not Yet Tried)
 
@@ -322,10 +354,8 @@ If expanded DZ polygons have many edges (shapely buffer can produce ~20-50 point
 
 With DZ PIP eliminated as a bottleneck, raycasting (`compute_visibility_polygon`) is likely the dominant cost again for mission workloads as well as non-mission. These ideas target the angular sweep hot loop.
 
-#### 2a. Pseudoangle hybrid
-Use pseudoangle `p = dx / (|dx| + |dz|)` for ray sorting (avoids atan2 in ray generation) but keep atan2 for bucket assignment (uniform bucket distribution).
-
-**Note**: Since the trig reduction (opt #2) was reverted, ray generation now does `atan2 + 4×cos/sin + 1×sqrt + 2×division` per endpoint. Pseudoangle could replace the atan2 for sort-key computation (but the 4 cos/sin calls for ±eps rays must stay for FP parity).
+#### ~~2a. Pseudoangle hybrid~~ (DONE — see opt #10)
+Pseudoangle for bucket assignment and sort keys. 12-21% improvement on medium workloads.
 
 #### ~~2b. Faster endpoint deduplication~~ (DONE — see opt #9)
 Replaced SipHash with inline FxHash for all integer-keyed hash sets/maps. 5-21% improvement across all workloads.

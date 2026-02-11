@@ -331,13 +331,37 @@ fn get_footprint_corners(
 
 /// Number of angular buckets for segment partitioning.
 const NUM_ANGLE_BUCKETS: usize = 64;
-const BUCKET_WIDTH: f64 = 2.0 * std::f64::consts::PI / NUM_ANGLE_BUCKETS as f64;
 
-/// Map an angle in [-π, π] to a bucket index in [0, NUM_ANGLE_BUCKETS).
+/// Cheap pseudoangle: monotonically maps direction (dx, dz) to [0, 4),
+/// wrapping at angle ±π (pointing left, same as atan2). Replaces atan2
+/// for bucket assignment — no trig, just one division and a few branches.
+///
+/// Mapping: angle -π → PA 0, angle 0 → PA 2, angle +π → PA 4 (clamped to ~4).
+/// Monotonically increasing with real angle throughout [-π, π].
 #[inline]
-fn angle_to_bucket(angle: f64) -> usize {
-    let normalized = angle + std::f64::consts::PI; // [0, 2π)
-    let b = (normalized / BUCKET_WIDTH) as usize;
+fn pseudoangle(dx: f64, dz: f64) -> f64 {
+    let adx = dx.abs();
+    let adz = dz.abs();
+    let sum = adx + adz;
+    if sum == 0.0 {
+        return 0.0;
+    }
+    // p = dx / (|dx| + |dz|) in [-1, 1]
+    let p = dx / sum;
+    if dz >= 0.0 {
+        3.0 - p // angle [0, π] → PA [2, 4)
+    } else {
+        1.0 + p // angle [-π, 0) → PA [0, 2)
+    }
+}
+
+/// Map a pseudoangle in [0, 4) to a bucket index in [0, NUM_ANGLE_BUCKETS).
+/// PA_SCALE = NUM_ANGLE_BUCKETS / 4.0 = 16.0 for 64 buckets.
+const PA_SCALE: f64 = NUM_ANGLE_BUCKETS as f64 / 4.0;
+
+#[inline]
+fn pa_to_bucket(pa: f64) -> usize {
+    let b = (pa * PA_SCALE) as usize;
     if b >= NUM_ANGLE_BUCKETS {
         NUM_ANGLE_BUCKETS - 1
     } else {
@@ -407,14 +431,20 @@ fn compute_visibility_polygon(
         let len = (dx * dx + dz * dz).sqrt();
         let ndx = dx / len;
         let ndz = dz / len;
-        // -eps ray via trig
+        // -eps ray via trig (angle needed for cos/sin FP parity)
         let a_neg = angle - eps;
-        bufs.rays.push((a_neg, a_neg.cos(), a_neg.sin()));
+        let neg_dx = a_neg.cos();
+        let neg_dz = a_neg.sin();
+        bufs.rays
+            .push((pseudoangle(neg_dx, neg_dz), neg_dx, neg_dz));
         // Center ray
-        bufs.rays.push((angle, ndx, ndz));
+        bufs.rays.push((pseudoangle(ndx, ndz), ndx, ndz));
         // +eps ray via trig
         let a_pos = angle + eps;
-        bufs.rays.push((a_pos, a_pos.cos(), a_pos.sin()));
+        let pos_dx = a_pos.cos();
+        let pos_dz = a_pos.sin();
+        bufs.rays
+            .push((pseudoangle(pos_dx, pos_dz), pos_dx, pos_dz));
     }
 
     // Sort rays by angle (unstable sort is fine — duplicate angles have no meaningful order)
@@ -435,10 +465,8 @@ fn compute_visibility_polygon(
 
     let half_buckets = NUM_ANGLE_BUCKETS / 2;
     for (si, &(x1, z1, x2, z2)) in bufs.all_segments.iter().enumerate() {
-        let a1 = (z1 - oz).atan2(x1 - ox);
-        let a2 = (z2 - oz).atan2(x2 - ox);
-        let b1 = angle_to_bucket(a1);
-        let b2 = angle_to_bucket(a2);
+        let b1 = pa_to_bucket(pseudoangle(x1 - ox, z1 - oz));
+        let b2 = pa_to_bucket(pseudoangle(x2 - ox, z2 - oz));
 
         // Find the shorter arc, expanded by 1 bucket for boundary safety.
         let (lo, hi) = if b1 <= b2 { (b1, b2) } else { (b2, b1) };
@@ -469,8 +497,8 @@ fn compute_visibility_polygon(
     let buckets = &bufs.buckets;
     let all_segs = &bufs.all_segments;
 
-    for &(_angle, dx, dz) in rays {
-        let bucket_idx = angle_to_bucket(_angle);
+    for &(pa, dx, dz) in rays {
+        let bucket_idx = pa_to_bucket(pa);
         let mut min_t = f64::INFINITY;
         for &si in &buckets[bucket_idx] {
             let (x1, z1, x2, z2) = all_segs[si as usize];
