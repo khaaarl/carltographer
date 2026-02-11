@@ -845,7 +845,7 @@ class ControlPanel(ttk.Frame):
         btn_frame.columnconfigure(0, weight=1)
         btn_frame.columnconfigure(1, weight=1)
 
-        btn = ttk.Button(btn_frame, text="Generate", command=self.on_generate)
+        btn = ttk.Button(btn_frame, text="Optimize", command=self.on_generate)
         btn.grid(row=0, column=0, sticky="ew", padx=(0, 2), pady=(0, 2))
         Tooltip(btn, "Run the engine to produce or improve a layout")
 
