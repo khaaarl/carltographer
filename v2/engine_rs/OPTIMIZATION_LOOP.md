@@ -45,6 +45,8 @@ If your optimization targets a path not covered by existing benchmarks, consider
 
 If you want to profile to find bottlenecks, `cargo bench` output plus any instrumentation you add temporarily is fine. Remove temporary instrumentation before committing.
 
+For saving benchmark output or scratch data, use `.tmp/` in the repo root (gitignored): from `v2/engine_rs`, `mkdir -p ../../.tmp && cargo bench 2>&1 > ../../.tmp/bench_baseline.txt`. Do NOT use `/tmp`.
+
 ## Phase 3: Implement and Test
 
 1. **Make the code change.** Keep it focused — one optimization, not a grab bag of tweaks.
@@ -62,7 +64,7 @@ If you want to profile to find bottlenecks, `cargo bench` output plus any instru
 
 4. **Run parity tests** to verify the optimization doesn't change engine output:
    ```bash
-   cd v2 && python scripts/build_rust_engine.py
+   source v2/.env/bin/activate && python3 v2/scripts/build_rust_engine.py
    ```
    This builds the Rust engine and runs all parity comparison tests. ALL scenarios must pass. If any fail, the optimization changes engine behavior and must be fixed or abandoned.
 
@@ -155,7 +157,7 @@ Use a commit message like:
 
 ### Parity
 - The Rust engine must produce **bit-identical** output to the Python engine for the same seed.
-- `python scripts/build_rust_engine.py` is the authoritative parity check. Always run it.
+- `python3 v2/scripts/build_rust_engine.py` is the authoritative parity check. Always run it.
 - Internal-only changes (data structures, algorithms, caching) that produce the same output are fine.
 - If you're unsure whether a change affects output, it probably does. Test it.
 

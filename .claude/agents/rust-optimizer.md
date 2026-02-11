@@ -18,7 +18,8 @@ Your job is to attempt **one single optimization** per invocation.
 
 ## Key Constraints
 
-- You work from `v2/` as the working directory (activate venv: `source .env/bin/activate`)
+- Run commands from the **repo root**. Use `source v2/.env/bin/activate && cd v2 && ...` for Python commands, and `cd v2/engine_rs && cargo ...` for cargo commands.
+- For any temporary/scratch files (benchmark output, profiling data, etc.), use `.tmp/` in the repo root: `mkdir -p .tmp` then write there (e.g., `> ../../.tmp/bench_baseline.txt`). Do NOT use `/tmp`.
 - You must NOT break parity with the Python engine. Run parity tests after any change.
 - You must NOT modify the Python engine. Rust-only optimizations that preserve identical output.
 - One optimization attempt per invocation. Do not chain multiple attempts.

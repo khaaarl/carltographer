@@ -41,39 +41,57 @@ JSON specifications are the interchange format: a **terrain catalog** describes 
 
 ## Development Environment
 
-**IMPORTANT: All Python commands should run from `v2/` as the root directory, not from the repo root.**
+Python virtual environment: `v2/.env/` (Python 3.12). See "Running Commands" below for how to invoke tools.
 
-Python virtual environment: `v2/.env/` (Python 3.12).
-
-Setup:
-```bash
-cd v2
-source .env/bin/activate
-```
-
-Toolchain (always run from v2/):
+Toolchain:
 - **Run UI**: `./scripts/ui.py` (works from any directory)
-- **Build Rust engine**: `python scripts/build_rust_engine.py` (cross-platform, works from v2/)
-- **Package executable**: `python scripts/package_executable.py` (cross-platform, works from v2/)
+- **Build Rust engine**: `python scripts/build_rust_engine.py`
+- **Package executable**: `python scripts/package_executable.py`
 - **pytest** for tests: `python -m pytest engine/`
 - **ruff format**: `ruff format .` (auto-fixes)
 - **isort** for import sorting: `isort .` (auto-fixes)
 
-Coverage scripts (all run from v2/, output to separate directories):
+Coverage scripts (output to separate directories):
 - **Python coverage**: `python scripts/coverage_py.py` — runs engine + frontend unit tests → `coverage_py/`
 - **Rust coverage**: `python scripts/coverage_rs.py` — runs Rust unit tests via cargo-tarpaulin → `coverage_rs/`
 - **Parity coverage**: `python scripts/coverage_cmp.py` — runs engine_cmp parity tests, measures Python engine coverage → `coverage_cmp/`
 
 All three accept `--html` to open the HTML report in a browser after generating.
 
+## Running Commands (Venv Activation)
+
+**Always activate the venv** before running Python tools. This puts `python`, `ruff`, `ty`, `isort`, `pytest`, etc. on PATH without needing to spell out venv binary paths:
+
+```bash
+# Standard pattern — activate venv, then run whatever you need:
+source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
+source v2/.env/bin/activate && cd v2 && ruff format .
+source v2/.env/bin/activate && cd v2 && isort .
+source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
+
+# For cargo commands (no venv needed, but cd to find Cargo.toml):
+cd v2/engine_rs && cargo test
+cd v2/engine_rs && cargo bench
+```
+
+**Sub-agents** (like the rust-optimizer) that operate in a worktree or clone should follow the same pattern with the appropriate paths.
+
+## Scratch Files
+
+Use `.tmp/` in the repo root (gitignored) for any temporary files — benchmark output, intermediate data, scratch scripts, etc. Always `mkdir -p .tmp` before writing. **Do NOT use `/tmp`** — it can trigger permission prompts and isn't project-scoped.
+
+```bash
+mkdir -p .tmp
+# then e.g.: cargo bench 2>&1 > .tmp/bench_baseline.txt
+```
+
 ## Formatting and Linting (AUTONOMOUS, NO PERMISSION NEEDED)
 
 **CRITICAL: After modifying ANY Python files, immediately and automatically run formatters WITHOUT asking.**
 
-From v2/ directory:
 ```bash
-v2/.env/bin/isort .
-v2/.env/bin/ruff format .
+source v2/.env/bin/activate && cd v2 && isort .
+source v2/.env/bin/activate && cd v2 && ruff format .
 ```
 
 **Do NOT ask for permission.** This must happen automatically after every Python file edit/write. Ensures code stays clean and pre-commit checks pass on first try.
@@ -117,14 +135,11 @@ ALWAYS ASK FOR PERMISSION BEFORE COMMITTING TO MAIN/MASTER, BUT COMMITTING TO FE
 Before committing, run the full validation pipeline (from repo root):
 
 ```bash
-# Step 1: Auto-format code (isort + ruff format) - from v2/
-cd v2
-isort .
-ruff format .
+# Step 1: Auto-format code (isort + ruff format)
+source v2/.env/bin/activate && cd v2 && isort . && ruff format .
 
 # Step 2: Run full pre-commit hooks (from repo root)
-cd ..
-pre-commit run --all-files
+source v2/.env/bin/activate && pre-commit run --all-files
 
 # Step 3: If all hooks pass, commit
 git add .
