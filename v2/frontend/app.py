@@ -1450,18 +1450,18 @@ class App:
         """Print which engine is being used on startup."""
         if _should_use_rust_engine():
             print(
-                "✓ Using Rust engine (Python source matches certified hashes)"
+                "[OK] Using Rust engine (Python source matches certified hashes)"
             )
         else:
             if not _HAS_RUST_ENGINE:
                 print(
-                    "⚠ Using Python engine "
+                    "[WARN] Using Python engine "
                     "(Rust engine not available - run: cd v2/engine_rs && "
                     "maturin develop)"
                 )
             else:
                 print(
-                    "⚠ Using Python engine "
+                    "[WARN] Using Python engine "
                     "(Python source has changed since last certification - "
                     "run: python -m engine_cmp.compare)"
                 )
