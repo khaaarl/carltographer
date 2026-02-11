@@ -197,7 +197,7 @@ def run_comparison_tests(
 ) -> bool:
     log.step("Running engine comparison tests")
 
-    cmd = [str(VENV_PYTHON), "-m", "engine_cmp.compare"]
+    cmd = [str(VENV_PYTHON), "-m", "engine_cmp.compare", "-j", "-1"]
     if not log.quiet:
         cmd.append("--verbose")
     if newest_first:

@@ -1937,9 +1937,56 @@ def run_comparison(
     return len(diffs) == 0, diffs, timing
 
 
+def _run_one_scenario(
+    scenario: "TestScenario",
+    verbose: bool,
+) -> tuple[str, bool, list[str], Optional[ComparisonTiming]]:
+    """Run a single scenario comparison. Returns (name, success, diffs, timing).
+
+    Designed to be called from both serial and parallel runners.
+    """
+    params = scenario.make_params()
+    success, diffs, timing = run_comparison(
+        params,
+        verbose=verbose,
+        validate_fn=scenario.validate_fn,
+        visibility_tolerance=scenario.visibility_tolerance,
+    )
+    return scenario.name, success, diffs, timing
+
+
+def _format_result(
+    name: str,
+    success: bool,
+    diffs: list[str],
+    timing: Optional[ComparisonTiming],
+    verbose: bool,
+) -> str:
+    """Format a single scenario result as a printable string."""
+    if timing:
+        time_str = (
+            f"  ({timing.total_secs:.2f}s"
+            f" — py {timing.python_secs:.2f}s"
+            f", rs {timing.rust_secs:.2f}s)"
+        )
+    else:
+        time_str = ""
+
+    if success:
+        return f"✓ {name}{time_str}"
+    else:
+        lines = [f"✗ {name}{time_str}"]
+        if verbose:
+            for diff in diffs:
+                lines.append(f"    {diff}")
+        return "\n".join(lines)
+
+
 def main():
     """CLI entry point with pytest-compatible exit codes."""
     import argparse
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
 
     parser = argparse.ArgumentParser(
         description="Compare Python and Rust engine outputs"
@@ -1972,6 +2019,18 @@ def main():
         metavar="N",
         help="Multiply num_steps for each scenario by N (e.g. 5 for thorough testing)",
     )
+    parser.add_argument(
+        "-j",
+        "--parallel",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Run scenarios in parallel with N workers. "
+            "0 = serial (default), 1+ = that many workers, "
+            "-1 = auto (number of CPUs)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1988,41 +2047,59 @@ def main():
     if args.newest_first:
         scenarios = list(reversed(scenarios))
 
+    num_workers = args.parallel
+    if num_workers == -1:
+        num_workers = os.cpu_count() or 1
+    # Fall back to serial for single scenario, fail-fast, or explicit 0
+    use_parallel = (
+        num_workers > 0 and len(scenarios) > 1 and not args.fail_fast
+    )
+
     passed = 0
     failed = 0
     total_time = 0.0
 
-    for scenario in scenarios:
-        params = scenario.make_params()
-        success, diffs, timing = run_comparison(
-            params,
-            verbose=args.verbose,
-            validate_fn=scenario.validate_fn,
-            visibility_tolerance=scenario.visibility_tolerance,
-        )
+    if use_parallel:
+        # Parallel execution: submit all scenarios, print results in
+        # submission order as they complete.
+        results: dict[int, tuple] = {}
+        with ProcessPoolExecutor(max_workers=num_workers) as pool:
+            future_to_idx = {
+                pool.submit(_run_one_scenario, scenario, args.verbose): i
+                for i, scenario in enumerate(scenarios)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
 
-        if timing:
-            time_str = (
-                f"  ({timing.total_secs:.2f}s"
-                f" — py {timing.python_secs:.2f}s"
-                f", rs {timing.rust_secs:.2f}s)"
+        # Print in original scenario order
+        for i in range(len(scenarios)):
+            name, success, diffs, timing = results[i]
+            print(_format_result(name, success, diffs, timing, args.verbose))
+            if timing:
+                total_time += timing.total_secs
+            if success:
+                passed += 1
+            else:
+                failed += 1
+    else:
+        # Serial execution (original behavior)
+        for scenario in scenarios:
+            name, success, diffs, timing = _run_one_scenario(
+                scenario, args.verbose
             )
-            total_time += timing.total_secs
-        else:
-            time_str = ""
-
-        if success:
-            print(f"✓ {scenario.name}{time_str}")
-            passed += 1
-        else:
-            print(f"✗ {scenario.name}{time_str}")
-            if args.verbose:
-                for diff in diffs:
-                    print(f"    {diff}")
-            failed += 1
-            if args.fail_fast:
-                print(f"\n{passed} passed, {failed} failed (stopped early)")
-                return 1
+            print(_format_result(name, success, diffs, timing, args.verbose))
+            if timing:
+                total_time += timing.total_secs
+            if success:
+                passed += 1
+            else:
+                failed += 1
+                if args.fail_fast:
+                    print(
+                        f"\n{passed} passed, {failed} failed (stopped early)"
+                    )
+                    return 1
 
     print(f"\n{passed} passed, {failed} failed ({total_time:.2f}s total)")
 
