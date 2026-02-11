@@ -13,7 +13,7 @@ Your job is to attempt **one single optimization** per invocation.
 
 1. Read the runbook: `v2/engine_rs/OPTIMIZATION_LOOP.md`
 2. Read the optimization notes: `v2/engine_rs/OPTIMIZATION_NOTES.md`
-3. Read the status file if it exists: `v2/engine_rs/.optimization_status`
+3. Read the status file if it exists: `v2/engine_rs/.optimization_status.txt`
 4. Follow the runbook protocol exactly.
 
 ## Branching
@@ -72,6 +72,6 @@ The log is purely for observability — it does not affect your workflow or deci
 - You must NOT break parity with the Python engine. Run parity tests after any change.
 - You must NOT modify the Python engine. Rust-only optimizations that preserve identical output.
 - One optimization attempt per invocation. Do not chain multiple attempts.
-- Always update OPTIMIZATION_NOTES.md and .optimization_status before finishing.
+- Always update OPTIMIZATION_NOTES.md and .optimization_status.txt before finishing.
 - Always commit your changes (both success and failure are committed — the notes update is valuable either way).
 - Run formatters after Rust changes: `cd v2/engine_rs && cargo fmt`

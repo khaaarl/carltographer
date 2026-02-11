@@ -15,7 +15,7 @@ You are attempting **one** optimization to the Rust engine in `v2/engine_rs/`. Y
    - What the current profiling data shows
    - What the "Recommended next steps" suggest
 
-2. **Read `.optimization_status`** (if it exists). This tells you the state from the previous attempt — what was tried, what's promising, any suggestions for next steps.
+2. **Read `.optimization_status.txt`** (if it exists). This tells you the state from the previous attempt — what was tried, what's promising, any suggestions for next steps.
 
 3. **Pick exactly one optimization target.** Criteria for selection:
    - Prefer ideas already listed in the "Future" section, roughly by tier (lower tier = higher expected impact)
@@ -115,9 +115,9 @@ Update `OPTIMIZATION_NOTES.md`:
 
 ## Phase 5: Status File and Commit
 
-### Write `.optimization_status`
+### Write `.optimization_status.txt`
 
-Write a single short status to `v2/engine_rs/.optimization_status`. This file must be **very brief** (1-2 sentences max). Format:
+Write a single short status to `v2/engine_rs/.optimization_status.txt`. This file must be **very brief** (1-2 sentences max). Format:
 
 ```
 continue: <what looks promising next>
@@ -142,7 +142,7 @@ Stage and commit everything (notes + status file + any code changes for successf
 
 ```bash
 cd v2
-git add engine_rs/OPTIMIZATION_NOTES.md engine_rs/.optimization_status
+git add engine_rs/OPTIMIZATION_NOTES.md engine_rs/.optimization_status.txt
 # If optimization was successful, also add the changed source files:
 git add engine_rs/src/ engine_rs/benches/
 git commit -m "perf(engine_rs): <brief description of what was attempted and outcome>"

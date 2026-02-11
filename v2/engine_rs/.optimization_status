@@ -1,1 +1,0 @@
-continue: 4a (OBB caching) abandoned -- no measurable improvement. Try re-profiling or 2a (pseudoangle hybrid for sort keys) next.
