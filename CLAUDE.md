@@ -232,11 +232,11 @@ The squashed commit message should summarize the entire feature, not repeat indi
 
 ### Phase 1: Python (Red → Green)
 
-1. **Write a failing Python unit test** in `v2/engine/` that captures the bug or specifies the new behavior.
+1. **Write a failing Python unit test** in `v2/engine/` that captures the bug or specifies the new behavior. Do NOT use `xfail`, `skip`, or any other marker — write a plain test that runs and fails.
    ```bash
    source v2/.env/bin/activate && cd v2 && python -m pytest engine/ -v
    ```
-   Confirm the new test **fails**.
+   Confirm the new test **fails for the expected reason** — read the failure output and verify it fails because the behavior under test is wrong/missing, not because of a typo, import error, or unrelated issue.
 
 2. **Write Python code** to make the test pass.
    ```bash
@@ -257,17 +257,17 @@ The squashed commit message should summarize the entire feature, not repeat indi
    ```bash
    source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
    ```
-   New scenarios should fail; existing scenarios should still pass.
+   New scenarios should fail; existing scenarios should still pass. Read the failure output and verify the new scenarios fail because of a **parity mismatch** (Python and Rust produce different results), not because of a crash, missing field, or test setup error.
 
 ### Phase 3: Rust (Red → Green)
 
-6. **Write a failing Rust unit test** that mirrors the Python test:
+6. **Write a failing Rust unit test** that mirrors the Python test. Do NOT use `#[ignore]` or `#[should_panic]` as a substitute for a real failure — write a plain test that runs and fails.
    - `v2/engine_rs/src/collision.rs` tests for collision/validation logic
    - `v2/engine_rs/src/generate.rs` tests for generation logic
    ```bash
    cd v2/engine_rs && cargo test
    ```
-   Confirm the new test **fails**.
+   Confirm the new test **fails for the expected reason** — read the failure output and verify it fails because the Rust behavior is wrong/missing, not because of a compilation error, typo, or unrelated issue.
 
 7. **Write Rust code** to make the test pass. Keep implementation close to the Python version for maintainability.
    - Key files: `types.rs` (data model), `collision.rs` (collision/validation), `generate.rs` (main loop/actions)
