@@ -37,10 +37,40 @@ The module computes four metrics, all in the range 0-100%:
                   means more of the target DZ is concealed.
 
   objective_hidability
-                  Per-DZ: fraction of objectives where at least one sample
-                  point within the objective's range circle is hidden from
-                  every observer in the opposing DZ's threat zone. Higher
-                  means more objectives have safe approach angles.
+                  Per-DZ: fraction of objectives where a model could hide
+                  within the objective's range circle, completely concealed
+                  from the opposing DZ's threat zone. "Hidden" means there
+                  exists a contiguous 1x1" square of sample points, none of
+                  which have line of sight to any part of the threat zone.
+                  Higher means more objectives have safe approach angles.
+
+Objective hidability and obscuring terrain asymmetry:
+
+  Obscuring features (ruins) use back-face culling: only edges facing away
+  from the observer block LoS. This means visibility is asymmetric — an
+  observer outside a ruin is blocked by the ruin's far walls, but an
+  observer inside the ruin sees out freely (no edges face away from them).
+
+  This matters for objective hidability because the question is "can a model
+  near this objective hide from the opponent's DZ?" — i.e., we care about
+  LoS from the model's perspective at the objective, not from the DZ looking
+  toward the objective. If a model is inside a ruin near an objective, the
+  ruin doesn't block its own LoS outward, so it can see (and be seen from)
+  the DZ. Conversely, a model behind a ruin (outside it) benefits from the
+  ruin's back-facing walls blocking LoS from the DZ.
+
+  To handle this correctly, we compute visibility polygons from each
+  objective-vicinity sample point (the model's perspective) and check
+  whether that vis poly intersects the opponent's expanded DZ polygons. If
+  it doesn't intersect, the point is hidden. This naturally captures the
+  asymmetry: a sample point inside a ruin produces no blocking segments
+  (full visibility, not hidden), while a point behind a ruin gets the
+  ruin's back-facing edges as blockers.
+
+  An earlier implementation computed vis polys from DZ observers and used
+  point-in-polygon tests on the objective sample points. That approach gave
+  wrong results because back-face culling from the DZ perspective is not
+  the same as from the objective perspective.
 
 Observer positions are laid out on an integer grid across the table, using
 2" spacing (even coordinates) everywhere, with 1" spacing near objective
@@ -1123,43 +1153,6 @@ def compute_layout_visibility(
         and layout.mission is not None
         and len(layout.mission.objectives) > 0
     )
-    # Per-objective sample points
-    obj_sample_points: list[list[tuple[float, float]]] = []
-    # Original radii for each objective (used in model-fit check)
-    obj_radii: list[float] = []
-    # {dz_id: [bool mask per objective]} tracking seen sample indices
-    obj_seen_from_dz: dict[str, list[np.ndarray]] = {}
-    # Numpy arrays for vectorized PIP on objective sample points
-    obj_np_x: list[np.ndarray] = []
-    obj_np_z: list[np.ndarray] = []
-
-    if has_objectives:
-        mission = layout.mission
-        assert mission is not None
-        for obj_marker in mission.objectives:
-            obj_radius = 0.75 + obj_marker.range_inches
-            obj_radii.append(obj_radius)
-            # Expand sample radius by sqrt(2) so that all diagonal grid
-            # neighbors of in-range points are included. This is needed
-            # for the model-fit hiding square check which looks at 1x1"
-            # squares of 4 adjacent grid points.
-            expanded_radius = obj_radius + math.sqrt(2)
-            pts = _sample_points_in_circle(
-                obj_marker.position.x,
-                obj_marker.position.z,
-                expanded_radius,
-                1.0,
-                0.0,
-            )
-            obj_sample_points.append(pts)
-            obj_np_x.append(np.array([p[0] for p in pts]))
-            obj_np_z.append(np.array([p[1] for p in pts]))
-
-        for dz in mission.deployment_zones:
-            obj_seen_from_dz[dz.id] = [
-                np.zeros(len(pts), dtype=bool) for pts in obj_sample_points
-            ]
-
     # Precompute observer-independent segment data once
     precomputed = _precompute_segments(
         layout, objects_by_id, min_blocking_height
@@ -1180,12 +1173,6 @@ def compute_layout_visibility(
                         # Observer inside this DZ: check vs opponent expanded DZ
                         dz_hide_accum[dz_id][1] += 1
                         # Full visibility -> overlaps opponent -> not hidden
-                    if has_objectives:
-                        for other_id, _, other_exp in dz_data:
-                            if other_id != dz_id:
-                                if _point_in_any_polygon(sx, sz, dz_polys):
-                                    for oi in range(len(obj_sample_points)):
-                                        obj_seen_from_dz[dz_id][oi][:] = True
             continue
 
         vis_poly = _compute_visibility_polygon(
@@ -1197,12 +1184,6 @@ def compute_layout_visibility(
                 for dz_id, dz_polys, expanded_polys in dz_data:
                     if _point_in_any_polygon(sx, sz, dz_polys):
                         dz_hide_accum[dz_id][1] += 1
-                    if has_objectives:
-                        for other_id, _, other_exp in dz_data:
-                            if other_id != dz_id:
-                                if _point_in_any_polygon(sx, sz, dz_polys):
-                                    for oi in range(len(obj_sample_points)):
-                                        obj_seen_from_dz[dz_id][oi][:] = True
             continue
 
         vis_area = _polygon_area(vis_poly)
@@ -1227,18 +1208,6 @@ def compute_layout_visibility(
                     )
                     if not overlaps:
                         dz_hide_accum[dz_id][0] += 1
-
-                # Objective hidability: for each objective, test if vis poly
-                # overlaps each opposing expanded DZ
-                if has_objectives:
-                    for oi in range(len(obj_sample_points)):
-                        obj_x_arr = obj_np_x[oi]
-                        obj_z_arr = obj_np_z[oi]
-                        # Mark which objective sample points this observer can see
-                        mask = _vectorized_pip_mask(
-                            obj_x_arr, obj_z_arr, vis_poly
-                        )
-                        obj_seen_from_dz[dz_id][oi] |= mask
 
     avg_visibility = total_ratio / len(sample_points)
     value = round(avg_visibility * 100.0, 2)
@@ -1274,14 +1243,53 @@ def compute_layout_visibility(
 
         result["dz_hideability"] = dz_hideability
 
-        # Build objective hidability results
+        # Build objective hidability results.
+        # Compute vis polys from each objective-vicinity sample point, then
+        # check polygon-polygon intersection with each DZ's expanded polygons.
+        # This correctly handles obscuring terrain asymmetry: the vis poly is
+        # computed from the model's perspective, so being inside a ruin means
+        # no blocking edges (full visibility), matching the game rule that
+        # obscuring terrain doesn't block LoS to/from models within it.
         if has_objectives:
             mission = layout.mission
             assert mission is not None
-            dzs = mission.deployment_zones
             objective_hidability: dict = {}
 
-            # Collect tall OBBs for terrain-intersection check
+            # 1. Generate sample points per objective
+            obj_sample_points: list[list[tuple[float, float]]] = []
+            obj_radii: list[float] = []
+            for obj_marker in mission.objectives:
+                obj_radius = 0.75 + obj_marker.range_inches
+                obj_radii.append(obj_radius)
+                # Expand by sqrt(2) so diagonal grid neighbors of in-range
+                # points are included (needed for 1x1" hiding square check)
+                expanded_radius = obj_radius + math.sqrt(2)
+                pts = _sample_points_in_circle(
+                    obj_marker.position.x,
+                    obj_marker.position.z,
+                    expanded_radius,
+                    1.0,
+                    0.0,
+                )
+                obj_sample_points.append(pts)
+
+            # 2. Compute vis poly from each objective sample point (once,
+            #    reused across DZs). None means full visibility.
+            obj_vis_polys: list[list[list[tuple[float, float]] | None]] = []
+            for pts in obj_sample_points:
+                polys: list[list[tuple[float, float]] | None] = []
+                for px, pz in pts:
+                    segs = _get_observer_segments(precomputed, px, pz)
+                    if not segs:
+                        polys.append(None)
+                    else:
+                        vp = _compute_visibility_polygon(
+                            px, pz, segs, half_w, half_d
+                        )
+                        polys.append(vp if len(vp) >= 3 else None)
+                obj_vis_polys.append(polys)
+
+            # 3. Collect tall OBBs for terrain-intersection check
             obj_tall_obbs: list[list[tuple[float, float]]] = []
             effective_features_obj: list[PlacedFeature] = []
             for pf in layout.placed_features:
@@ -1294,23 +1302,22 @@ def compute_layout_visibility(
                 ):
                     obj_tall_obbs.append(corners)
 
-            for dz in dzs:
-                # Objectives "safe" for the OPPOSING player means
-                # objectives where a model can physically hide (1x1" square
-                # of hidden grid points) from this DZ's threat zone
-                total_objectives = len(mission.objectives)
+            # 4. For each DZ, determine hidden points per objective.
+            #    A point is "hidden" from a DZ if its vis poly does NOT
+            #    intersect that DZ's expanded polygons.
+            total_objectives = len(mission.objectives)
+            for dz_id, _, expanded_polys in dz_data:
                 safe_count = 0
-                for oi in range(total_objectives):
-                    total_pts = len(obj_sample_points[oi])
-                    if total_pts == 0:
-                        continue
-                    # Build set of hidden indices (complement of seen)
-                    seen_mask = obj_seen_from_dz[dz.id][oi]
-                    hidden = set(np.where(~seen_mask)[0].tolist())
-                    if not hidden:
-                        continue
-                    obj_marker = mission.objectives[oi]
-                    if _has_valid_hiding_square(
+                for oi, obj_marker in enumerate(mission.objectives):
+                    hidden: set[int] = set()
+                    for pi, vp in enumerate(obj_vis_polys[oi]):
+                        if vp is None:
+                            continue  # full visibility -> not hidden
+                        if not any(
+                            polygons_overlap(vp, ep) for ep in expanded_polys
+                        ):
+                            hidden.add(pi)
+                    if hidden and _has_valid_hiding_square(
                         obj_marker.position.x,
                         obj_marker.position.z,
                         obj_radii[oi],
@@ -1322,19 +1329,15 @@ def compute_layout_visibility(
                     ):
                         safe_count += 1
 
-                # This DZ's threat data: the opposing player can hide at
-                # safe_count objectives. Label by the opposing player's color.
-                # Convention: green.value = % objectives green can hide at
-                # = objectives with hiding spots from red's perspective
-                # So we store under the OTHER DZ's id.
-                for other_dz in dzs:
-                    if other_dz.id != dz.id:
+                # Store under the opposing player's DZ id
+                for other_id, _, _ in dz_data:
+                    if other_id != dz_id:
                         pct = (
                             round(safe_count / total_objectives * 100.0, 2)
                             if total_objectives > 0
                             else 0.0
                         )
-                        objective_hidability[other_dz.id] = {
+                        objective_hidability[other_id] = {
                             "value": pct,
                             "safe_count": safe_count,
                             "total_objectives": total_objectives,

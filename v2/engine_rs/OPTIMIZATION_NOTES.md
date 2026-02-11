@@ -8,7 +8,7 @@ The visibility system computes per-observer visibility polygons via angular-swee
 
 - **Overall visibility**: Grid sample points inside the visibility polygon vs total grid points.
 - **DZ hideability**: Whether the visibility polygon overlaps the opponent's expanded deployment zone (polygon-polygon intersection test).
-- **Objective hidability**: Whether objective sample points fall inside the visibility polygon (PIP via Z-sorted binary search).
+- **Objective hidability**: Whether objective-vicinity sample points have line of sight to the opponent's DZ (vis poly computed from each sample point, then polygon-polygon intersection with expanded DZ).
 
 The angular-sweep raycasting (`compute_visibility_polygon`) casts rays toward segment endpoints (±epsilon), finds the nearest intersection per ray, and forms the visibility polygon. The hot loop is O(R × S) where R = rays, S = segments, reduced to O(R × k) by angular bucketing.
 
@@ -177,7 +177,7 @@ Optimizations #5 and #6 introduced Z-sorted binary search (`DzSortedSamples`, `f
 
 **These optimizations are now largely superseded.** The DZ visibility system was refactored (commit `703487f`) to replace PIP-based grid sampling with polygon-polygon intersection (`polygons_overlap`). The old `dz_visibility` and `dz_to_dz_visibility` metrics (which tested hundreds of DZ sample points against each observer's visibility polygon) were replaced by a single `dz_hideability` metric that tests whether the visibility polygon overlaps the opponent's expanded DZ polygon — a direct geometric check with no sampling.
 
-Z-sorted PIP code still exists in the codebase and is used for **objective hidability** (`pip_zsorted_update_seen` for objective sample points), but the dominant DZ paths no longer use it.
+Z-sorted PIP code has been fully removed from production paths. Objective hidability was refactored to compute vis polys from objective-vicinity sample points and check polygon-polygon intersection with expanded DZ polygons (same approach as DZ hideability). The `DzSortedSamples` struct and `pip_zsorted_update_seen` function remain only in `#[cfg(test)]` code.
 
 ### 7. DZ visibility: polygon-polygon intersection (commit `703487f`)
 Replace expensive per-observer PIP sampling for DZ metrics with direct polygon-polygon intersection testing. DZ polygons are expanded by a fixed radius (using shapely in Python, passed to Rust as precomputed `expanded_polygons`). Each observer tests whether its visibility polygon overlaps the opponent's expanded DZ — a single `polygons_overlap()` call per DZ pair, using edge-edge intersection + vertex containment.
@@ -310,6 +310,62 @@ Consistent 5-11% improvement across most benchmarks, no regressions:
 
 *Measured February 2026.*
 
+### Architectural change: objective hidability refactoring (correctness fix)
+
+The objective hidability algorithm was refactored to fix an obscuring terrain asymmetry bug (see `visibility.py` docstring for the full explanation). The old approach computed vis polys from DZ observers and PIP-tested objective sample points; the new approach computes vis polys from each objective-vicinity sample point and checks polygon-polygon intersection with the opponent's expanded DZ.
+
+This is a correctness fix, not an optimization — it trades performance for correct handling of obscuring terrain. The new approach adds ~300-600 extra vis poly computations per full visibility pass (one per objective sample point, ~60-120 points per objective, ~5 objectives). These run sequentially in a post-loop pass, separate from the Rayon-parallelized main observer loop.
+
+**Impact: significant regression on all mission workloads, non-mission unaffected.**
+
+| # | Benchmark | Before | After | Change |
+|---|-----------|--------|-------|--------|
+| 01 | `90x44_crates_none_nosym_10_g0000_r1` | 13.7 ms | 14.3 ms | noise |
+| 02 | `44x30_wtc_none_nosym_20_g1010_r8` | 36.1 ms | 36.1 ms | noise |
+| 03 | `60x44_crates_none_nosym_50_g1101_r4` | 130 ms | 139 ms | noise |
+| 04 | `44x30_wtc_none_nosym_100_g0111_r2` | 98.8 ms | 98.3 ms | noise |
+| 05 | `44x30_wtc_HnA_nosym_10_g1001_r8` | 65.8 ms | 110 ms | **+67%** |
+| 06 | `90x44_crates_HnA_sym_20_g0100_r1` | 128 ms | 277 ms | **+116%** |
+| 07 | `60x44_wtc_HnA_nosym_50_g0110_r4` | 355 ms | 560 ms | **+58%** |
+| 08 | `60x44_crates_HnA_sym_100_g1011_r2` | 760 ms | 1.63 s | **+114%** |
+| 09 | `44x30_wtc_DoW_sym_10_g0110_r8` | 76.2 ms | 157 ms | **+106%** |
+| 10 | `60x44_crates_DoW_nosym_20_g1001_r4` | 108 ms | 199 ms | **+84%** |
+| 11 | `90x44_crates_DoW_sym_50_g0011_r2` | 548 ms | 1.16 s | **+112%** |
+| 12 | `90x44_wtc_DoW_nosym_100_g1100_r1` | 737 ms | 1.74 s | **+136%** |
+| 13 | `60x44_wtc_TipPt_sym_10_g1010_r2` | 62.3 ms | 114 ms | **+83%** |
+| 14 | `44x30_crates_TipPt_nosym_20_g0101_r8` | 141 ms | 267 ms | **+89%** |
+| 15 | `44x30_crates_TipPt_sym_50_g1001_r4` | 258 ms | 568 ms | **+120%** |
+| 16 | `90x44_wtc_TipPt_nosym_100_g0110_r1` | 769 ms | 1.86 s | **+142%** |
+| 17 | `60x44_crates_SwpEng_nosym_10_g0101_r4` | 49.2 ms | 111 ms | **+126%** |
+| 18 | `44x30_wtc_SwpEng_sym_20_g1010_r8` | 238 ms | 423 ms | **+78%** |
+| 19 | `90x44_crates_SwpEng_nosym_50_g1101_r2` | 305 ms | 652 ms | **+114%** |
+| 20 | `60x44_wtc_SwpEng_sym_100_g0010_r1` | 960 ms | 3.52 s | **+267%** |
+| 21 | `44x30_crates_Crucible_sym_10_g1000_r8` | 68.4 ms | 166 ms | **+143%** |
+| 22 | `60x44_wtc_Crucible_nosym_20_g0111_r2` | 91.4 ms | 164 ms | **+79%** |
+| 23 | `60x44_wtc_Crucible_sym_50_g0110_r4` | 442 ms | 755 ms | **+71%** |
+| 24 | `90x44_crates_Crucible_nosym_100_g1001_r1` | 712 ms | 1.37 s | **+92%** |
+| 25 | `60x44_wtc_SnD_nosym_10_g0111_r4` | 66.0 ms | 119 ms | **+80%** |
+| 26 | `44x30_crates_SnD_sym_20_g1000_r8` | 170 ms | 415 ms | **+144%** |
+| 27 | `44x30_wtc_SnD_nosym_50_g0010_r1` | 134 ms | 514 ms | **+284%** |
+| 28 | `90x44_crates_SnD_sym_100_g1101_r2` | 1.04 s | 1.98 s | **+90%** |
+| 29 | `60x44_wtcPoly_none_nosym_20_g0101_r4` | 54.8 ms | 42.8 ms | noise |
+| 30 | `44x30_wtcPoly_HnA_sym_10_g1010_r8` | 133 ms | 289 ms | **+117%** |
+| 31 | `90x44_wtcPoly_DoW_nosym_50_g0011_r2` | 508 ms | 882 ms | **+74%** |
+| 32 | `60x44_wtcPoly_TipPt_sym_100_g1100_r1` | 1.60 s | 2.30 s | **+44%** |
+| 33 | `44x30_wtcPoly_SwpEng_nosym_10_g0110_r8` | 58.2 ms | 114 ms | **+96%** |
+| 34 | `90x44_wtcPoly_Crucible_sym_20_g1001_r1` | 222 ms | 480 ms | **+116%** |
+| 35 | `44x30_wtcPoly_SnD_sym_50_g0000_r2` | 356 ms | 1.25 s | **+251%** |
+
+**Observations:**
+
+- Non-mission workloads (01-04, 29) are unaffected — the objective hidability code path is not reached when there are no objectives.
+- Mission workloads regress by **+44% to +284%**, with most in the +80-140% range. The plan estimated "roughly doubles vis poly work"; actual impact varies by mission type and step count.
+- Worst regressions are on cases where the ratio of objective vis poly work to total work is highest: low step counts (less generation work to amortize against), symmetric layouts (more terrain → more segments per vis poly), and missions with objectives far from terrain (more sample points with non-trivial vis polys).
+- Case 20 (SwpEng sym 100 r1) is the new heaviest at 3.52s (was 960ms). Case 35 (SnD sym 50 r2) jumped from 356ms to 1.25s.
+- The objective vis poly pass is **sequential** (not parallelized with Rayon), so on multi-core machines it becomes the new bottleneck. Parallelizing this pass (see Tier 3 optimization ideas) is the most obvious recovery path.
+
+*Measured February 2026.*
+
 ### FP parity reversions (post-optimization correctness fixes)
 
 Three micro-optimizations were reverted because they produced different IEEE 754 floating-point results than the Python engine, breaking bit-identical parity:
@@ -386,7 +442,7 @@ The polygon-polygon intersection refactor and subsequent optimizations (FxHash, 
 
 - `compute_visibility_polygon` — ray generation (atan2 + cos/sin per endpoint) + intersection loop (dominant for high-segment workloads)
 - `dz_hideability` — polygon-polygon intersection per observer per opponent DZ
-- `obj_hidability` — Z-sorted PIP for objective sample points (still uses old approach)
+- `obj_hidability` — vis poly from each objective sample point + polygon-polygon intersection with expanded DZ
 - `overall_pip` — polygon area (shoelace, likely cheap)
 
 ## Future Optimization Ideas (Not Yet Tried)
@@ -422,14 +478,18 @@ Manually vectorize the ray-segment intersection using `std::arch` SIMD intrinsic
 #### 2d. Polygon segment reduction for visibility
 The 24-gon tank generates 24 visibility segments, but many adjacent edges are nearly collinear (15° apart). Merging near-collinear consecutive edges into fewer segments before the angular sweep would reduce both the bucketing and intersection work. Must preserve FP parity — would need to be applied identically in Python. Alternatively, approximate circles with fewer sides (e.g., 12-gon instead of 24-gon) at the catalog level, though this changes the terrain geometry.
 
-### Tier 3: Objective hidability PIP (still uses Z-sorted binary search)
+### Tier 3: Objective hidability (now uses vis-poly-from-objective + polygon intersection)
 
-Objective hidability still uses `pip_zsorted_update_seen` to test objective sample points against visibility polygons. With the DZ PIP paths removed, this is the only remaining PIP-heavy path.
+Objective hidability was refactored: instead of testing objective sample points against DZ-observer vis polys (PIP), it now computes a vis poly from each objective-vicinity sample point and checks polygon-polygon intersection with expanded DZ polygons. This is algorithmically correct for obscuring terrain (see `visibility.py` docstring) and eliminates Z-sorted PIP from production code.
 
-#### 3a. Slab decomposition for objective PIP
-Preprocess the visibility polygon into horizontal slabs (O(E log E) setup). Per point, binary-search to find its slab in O(log E), test against 1-2 edges. Turns PIP from O(E) per point to O(log E) per point.
+The new approach computes ~60-120 extra vis polys per objective (one per sample point in the range circle), reused across all DZs. With ~5 objectives, that's ~300-600 vis poly computations on top of the main observer loop's ~600+. This roughly doubles the vis poly work for mission workloads, but only for the full visibility pass (not `overall_only`, which is the hot path during scoring).
 
-With typical objective circles (~40-80 sample points per objective, 5 objectives), this is a smaller workload than the old DZ PIP. May not be worth the complexity unless profiling shows obj_hide is a significant fraction.
+Benchmarks show **+44% to +284% regression** on mission workloads (see "Architectural change" section above). This is now the dominant cost for mission benchmarks — the sequential objective pass can take longer than the entire parallelized observer loop.
+
+Potential optimizations (in priority order):
+- **3a. Parallelization** (HIGH PRIORITY): The per-objective vis poly computations are independent and could use `par_iter`. Currently sequential. Given the regression magnitude, this is the single most impactful recovery path — it would spread the ~300-600 vis poly computations across all available cores. Must collect results in index order for determinism.
+- **3b. Early termination**: If a DZ already has all objectives marked as safe/unsafe, skip remaining intersection tests.
+- **3c. AABB pre-filter**: Same `polygons_overlap_aabb` technique used for DZ hideability could be applied here (already using it).
 
 ### Tier 4: Collision / mutation path (affects all workloads, especially polygon catalogs)
 
@@ -457,9 +517,10 @@ Only recompute observers affected by a mutation. Extremely complex, especially w
 
 ### Recommended next steps
 
-1. **Re-profile with wtcPoly catalog** to understand where polygon overhead concentrates. The wtcPoly cases are 1.5-2x slower than rect-only — profiling will reveal whether the cost is dominated by collision (`polygons_overlap`, `obb_distance`), visibility (`precompute_segments` with 24-edge shapes), or both. Use `cargo bench -- wtcPoly` to isolate polygon cases.
-2. **Try 1a (SAT for convex polygons)** — the 24-gon tank is convex, so SAT overlap testing (28 axes for 24-gon vs rect) should be much cheaper than the current O(E_a × E_b) edge intersection (96 pairs). This is the most direct attack on the polygon collision overhead.
-3. **Try 1c (AABB early-exit for terrain overlap)** — cheap to implement, may help when polygon shapes don't overlap most placed features.
-4. **Consider 2d (polygon segment reduction)** — if profiling shows visibility with 24-gon shapes is a hotspot, merging near-collinear edges could cut segment count significantly.
+1. **Parallelize objective hidability vis poly pass (3a)** — this is now the top priority. The sequential objective pass is the single largest regression from the hidability refactoring (+44-284% on mission workloads). The per-sample-point vis poly computations are independent and map naturally to `par_iter`. This alone should recover most of the regression on multi-core machines.
+2. **Re-profile with wtcPoly catalog** to understand where polygon overhead concentrates. The wtcPoly cases are 1.5-2x slower than rect-only — profiling will reveal whether the cost is dominated by collision (`polygons_overlap`, `obb_distance`), visibility (`precompute_segments` with 24-edge shapes), or both. Use `cargo bench -- wtcPoly` to isolate polygon cases.
+3. **Try 1a (SAT for convex polygons)** — the 24-gon tank is convex, so SAT overlap testing (28 axes for 24-gon vs rect) should be much cheaper than the current O(E_a × E_b) edge intersection (96 pairs). This is the most direct attack on the polygon collision overhead.
+4. **Try 1c (AABB early-exit for terrain overlap)** — cheap to implement, may help when polygon shapes don't overlap most placed features.
+5. **Consider 2d (polygon segment reduction)** — if profiling shows visibility with 24-gon shapes is a hotspot, merging near-collinear edges could cut segment count significantly.
 
-**Note**: Previous optimization work focused on visibility (raycasting, DZ PIP). With polygon terrain shapes, the collision path (`is_valid_placement` with `polygons_overlap` and `obb_distance`) may now be a meaningful fraction of total runtime for polygon catalogs. Profiling is needed to confirm.
+**Note**: The objective hidability refactoring is now the dominant performance concern for mission workloads. Previous optimization work focused on the main observer loop (raycasting, DZ PIP → polygon intersection), which is parallelized. The new objective pass is sequential and can take longer than the entire parallelized observer loop on high-step symmetric cases.

@@ -1,8 +1,41 @@
 //! Visibility score computation for terrain layouts.
 //!
-//! Measures what percentage of the battlefield has clear line of sight
-//! by sampling observer positions on a grid and computing visibility
-//! polygons via angular sweep.
+//! Rust port of `visibility.py` — see that module's docstring for the full
+//! algorithmic description (angular-sweep visibility polygons, back-face
+//! culling for obscuring terrain, the four scoring metrics, and the
+//! obscuring-asymmetry rationale behind objective hidability).
+//!
+//! This file must produce bit-identical results to the Python implementation
+//! for the same inputs. Any arithmetic changes (reordering, strength
+//! reduction, fast-math substitutions) must be validated against the full
+//! parity test suite. See `OPTIMIZATION_NOTES.md` for a history of
+//! optimizations attempted and reverted for FP parity reasons.
+//!
+//! Key implementation differences from Python:
+//!
+//! - **Parallelism**: The observer loop is parallelized with Rayon
+//!   (`par_chunks` + `fold` + `reduce`). Each thread gets a `ThreadAccum`
+//!   with private working buffers; results are merged via summation (for
+//!   ratios/counts) and OR (for boolean seen arrays). Observer processing
+//!   order varies across runs, but the final result is identical because
+//!   addition is commutative and the boolean merge is order-independent.
+//!
+//! - **Buffer reuse**: `VisBuffers` (ray list, endpoint set, sorted events)
+//!   are allocated once per thread and reused across observers via `clear()`,
+//!   avoiding per-observer allocation. Python allocates fresh lists each time.
+//!
+//! - **FxHash**: All integer-keyed hash sets/maps (endpoint dedup, objective
+//!   hidability lookups) use an inline FxHash implementation instead of the
+//!   standard SipHash. ~5-15% faster across all workloads.
+//!
+//! - **Pseudoangle bucketing**: Segment-to-bucket assignment uses a cheap
+//!   pseudoangle function instead of `atan2`. Ray sort keys also use
+//!   pseudoangle. The actual ray directions (cos/sin) are unchanged for FP
+//!   parity. ~12-21% faster on medium workloads.
+//!
+//! - **sin_cos()**: Epsilon ray generation uses `f64::sin_cos()` to compute
+//!   both values in one call. Bit-identical to separate calls on glibc but
+//!   platform-dependent — must be re-verified on musl/non-x86.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -674,6 +707,7 @@ fn fraction_of_dz_visible_batch(
 /// DZ sample points pre-sorted by Z coordinate for efficient binary
 /// search in the PIP inner loop. Built once during DZ setup and reused
 /// for every observer.
+#[cfg(test)]
 struct DzSortedSamples {
     /// (z, x, original_index) sorted by z.
     sorted: Vec<(f64, f64, u32)>,
@@ -681,6 +715,7 @@ struct DzSortedSamples {
     count: usize,
 }
 
+#[cfg(test)]
 impl DzSortedSamples {
     fn from_points(points: &[(f64, f64)]) -> Self {
         let mut sorted: Vec<(f64, f64, u32)> = points
@@ -750,62 +785,6 @@ fn fraction_of_dz_visible_zsorted(
 
     let count = inside.iter().filter(|&&b| b).count();
     count as f64 / sorted.count as f64
-}
-
-/// Z-sorted PIP that directly updates a `seen` boolean array.
-/// Only processes unseen points (skips already-seen entries in the
-/// edge loop). After all edges, marks newly-inside points as seen.
-fn pip_zsorted_update_seen(
-    vis_poly: &[(f64, f64)],
-    sorted: &DzSortedSamples,
-    seen: &mut [bool],
-    inside: &mut Vec<bool>,
-) {
-    if sorted.count == 0 || vis_poly.len() < 3 {
-        return;
-    }
-
-    inside.clear();
-    inside.resize(sorted.count, false);
-
-    let n = vis_poly.len();
-    let mut j = n - 1;
-    for i in 0..n {
-        let (xi, zi) = vis_poly[i];
-        let (xj, zj) = vis_poly[j];
-
-        if zi == zj {
-            j = i;
-            continue;
-        }
-
-        let (z_lo, z_hi) = if zi < zj { (zi, zj) } else { (zj, zi) };
-        let start = sorted.sorted.partition_point(|s| s.0 < z_lo);
-        let end = sorted.sorted.partition_point(|s| s.0 < z_hi);
-
-        let dz = zj - zi;
-        let dx = xj - xi;
-        for k in start..end {
-            let (pz, px, orig_idx) = sorted.sorted[k];
-            let oidx = orig_idx as usize;
-            if seen[oidx] {
-                continue;
-            }
-            let intersect_x = dx * (pz - zi) / dz + xi;
-            if px < intersect_x {
-                inside[oidx] = !inside[oidx];
-            }
-        }
-
-        j = i;
-    }
-
-    // Mark newly visible unseen points as seen
-    for (i, &is_inside) in inside.iter().enumerate() {
-        if is_inside && !seen[i] {
-            seen[i] = true;
-        }
-    }
 }
 
 /// Build the full sample grid for a table + mission (same logic as
@@ -1271,32 +1250,6 @@ pub fn compute_layout_visibility(
             .as_ref()
             .is_some_and(|m| !m.objectives.is_empty());
 
-    let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
-    let mut obj_sorted_samples: Vec<DzSortedSamples> = Vec::new();
-    let mut obj_radii: Vec<f64> = Vec::new();
-
-    if has_objectives {
-        let mission = layout.mission.as_ref().unwrap();
-        for obj_marker in &mission.objectives {
-            let obj_radius = 0.75 + obj_marker.range_inches;
-            obj_radii.push(obj_radius);
-            // Expand sample radius by sqrt(2) so that all diagonal grid
-            // neighbors of in-range points are included. This is needed
-            // for the model-fit hiding square check which looks at 1x1"
-            // squares of 4 adjacent grid points.
-            let expanded_radius = obj_radius + std::f64::consts::SQRT_2;
-            let pts = sample_points_in_circle(
-                obj_marker.position.x_inches,
-                obj_marker.position.z_inches,
-                expanded_radius,
-                1.0,
-                0.0,
-            );
-            obj_sorted_samples.push(DzSortedSamples::from_points(&pts));
-            obj_sample_points.push(pts);
-        }
-    }
-
     // Precompute static segments and obscuring shape data once
     let precomputed = precompute_segments(layout, objects_by_id, min_blocking_height);
 
@@ -1313,12 +1266,10 @@ pub fn compute_layout_visibility(
         total_ratio: f64,
         // DZ hideability: (hidden_count, total_count) per DZ
         dz_hide_accum: Vec<(u32, u32)>,
-        obj_seen_from_dz: Vec<Vec<Vec<bool>>>,
         // Working buffers (not merged — just avoids per-call allocation)
         segments: Vec<Segment>,
         vis_bufs: VisBuffers,
         vis_poly: Vec<(f64, f64)>,
-        pip_buf: Vec<bool>,
     }
 
     // Closure to create a fresh per-thread accumulator.
@@ -1326,22 +1277,9 @@ pub fn compute_layout_visibility(
         Box::new(ThreadAccum {
             total_ratio: 0.0,
             dz_hide_accum: vec![(0, 0); num_dzs],
-            obj_seen_from_dz: if has_objectives {
-                (0..num_dzs)
-                    .map(|_| {
-                        obj_sample_points
-                            .iter()
-                            .map(|pts| vec![false; pts.len()])
-                            .collect()
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            },
             segments: Vec::new(),
             vis_bufs: VisBuffers::new(),
             vis_poly: Vec::new(),
-            pip_buf: Vec::new(),
         })
     };
 
@@ -1370,12 +1308,6 @@ pub fn compute_layout_visibility(
                         // Just increment total_count (not hidden_count).
                         if let Some(my_dz) = obs_dz {
                             acc.dz_hide_accum[my_dz].1 += 1;
-                            // Objective hidability: mark all objective points as seen
-                            if has_objectives {
-                                for seen in acc.obj_seen_from_dz[my_dz].iter_mut() {
-                                    seen.fill(true);
-                                }
-                            }
                         }
                     }
                 };
@@ -1427,19 +1359,6 @@ pub fn compute_layout_visibility(
                                 acc.dz_hide_accum[my_dz].0 += 1;
                             }
                         }
-
-                        // Objective hidability: PIP for objective sample points
-                        if has_objectives {
-                            for (oi, obj_sorted) in obj_sorted_samples.iter().enumerate() {
-                                let seen = &mut acc.obj_seen_from_dz[my_dz][oi];
-                                pip_zsorted_update_seen(
-                                    &acc.vis_poly,
-                                    obj_sorted,
-                                    seen,
-                                    &mut acc.pip_buf,
-                                );
-                            }
-                        }
                     }
                 }
             }
@@ -1456,24 +1375,12 @@ pub fn compute_layout_visibility(
                 a.dz_hide_accum[di].0 += b.dz_hide_accum[di].0;
                 a.dz_hide_accum[di].1 += b.dz_hide_accum[di].1;
             }
-            if has_objectives {
-                for di in 0..num_dzs {
-                    for oi in 0..a.obj_seen_from_dz[di].len() {
-                        for (i, &seen) in b.obj_seen_from_dz[di][oi].iter().enumerate() {
-                            if seen {
-                                a.obj_seen_from_dz[di][oi][i] = true;
-                            }
-                        }
-                    }
-                }
-            }
             a
         })
         .unwrap_or_else(make_accum);
 
     let total_ratio = merged.total_ratio;
     let dz_hide_accum = merged.dz_hide_accum;
-    let obj_seen_from_dz = merged.obj_seen_from_dz;
 
     let avg_visibility = total_ratio / sample_points.len() as f64;
     let value = (avg_visibility * 100.0 * 100.0).round() / 100.0;
@@ -1509,13 +1416,65 @@ pub fn compute_layout_visibility(
 
         result["dz_hideability"] = serde_json::Value::Object(dz_hideability);
 
-        // Build objective hidability results
+        // Build objective hidability results.
+        // Compute vis polys from each objective-vicinity sample point, then
+        // check polygon-polygon intersection with each DZ's expanded polygons.
+        // This correctly handles obscuring terrain asymmetry.
         if has_objectives {
             let mission = layout.mission.as_ref().unwrap();
-            let total_objectives = obj_sample_points.len();
             let mut objective_hidability = serde_json::Map::new();
 
-            // Collect tall OBBs for terrain-intersection check
+            // 1. Generate sample points per objective
+            let mut obj_sample_points: Vec<Vec<(f64, f64)>> = Vec::new();
+            let mut obj_radii: Vec<f64> = Vec::new();
+            for obj_marker in &mission.objectives {
+                let obj_radius = 0.75 + obj_marker.range_inches;
+                obj_radii.push(obj_radius);
+                let expanded_radius = obj_radius + std::f64::consts::SQRT_2;
+                let pts = sample_points_in_circle(
+                    obj_marker.position.x_inches,
+                    obj_marker.position.z_inches,
+                    expanded_radius,
+                    1.0,
+                    0.0,
+                );
+                obj_sample_points.push(pts);
+            }
+
+            // 2. Compute vis poly from each objective sample point (once,
+            //    reused across DZs). None means full visibility.
+            type VisPoly = Option<Vec<(f64, f64)>>;
+            let obj_vis_polys: Vec<Vec<VisPoly>> = obj_sample_points
+                .iter()
+                .map(|pts| {
+                    pts.iter()
+                        .map(|&(px, pz)| {
+                            let mut segs = Vec::new();
+                            get_observer_segments(&precomputed, px, pz, &mut segs);
+                            if segs.is_empty() {
+                                return None;
+                            }
+                            let mut bufs = VisBuffers::new();
+                            let mut vis_poly = Vec::new();
+                            compute_visibility_polygon(
+                                px,
+                                pz,
+                                &segs,
+                                &table_boundary,
+                                &mut bufs,
+                                &mut vis_poly,
+                            );
+                            if vis_poly.len() < 3 {
+                                None
+                            } else {
+                                Some(vis_poly)
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+
+            // 3. Collect tall OBBs for terrain-intersection check
             let mut obj_tall_obbs: Vec<Corners> = Vec::new();
             for pf in &layout.placed_features {
                 for corners in get_tall_world_obbs(pf, objects_by_id, 1.0) {
@@ -1529,31 +1488,43 @@ pub fn compute_layout_visibility(
                 }
             }
 
-            for (di, _dd) in dz_data.iter().enumerate() {
+            // 4. For each DZ, determine hidden points per objective.
+            //    A point is "hidden" if its vis poly does NOT intersect
+            //    that DZ's expanded polygons.
+            let total_objectives = obj_sample_points.len();
+            for (di, dd) in dz_data.iter().enumerate() {
                 let mut safe_count = 0;
-                let per_obj = &obj_seen_from_dz[di];
-                for oi in 0..total_objectives {
-                    let total_pts = obj_sample_points[oi].len();
-                    if total_pts == 0 {
-                        continue;
-                    }
-                    // Build set of hidden indices (complement of seen)
-                    let hidden: FxHashSet<usize> =
-                        (0..total_pts).filter(|&i| !per_obj[oi][i]).collect();
-                    if hidden.is_empty() {
-                        continue;
-                    }
-                    let obj_marker = &mission.objectives[oi];
-                    if has_valid_hiding_square(
-                        obj_marker.position.x_inches,
-                        obj_marker.position.z_inches,
-                        obj_radii[oi],
-                        &obj_sample_points[oi],
-                        &hidden,
-                        &obj_tall_obbs,
-                        half_w,
-                        half_d,
-                    ) {
+                for (oi, obj_marker) in mission.objectives.iter().enumerate() {
+                    let hidden: FxHashSet<usize> = obj_vis_polys[oi]
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(pi, vp_opt)| {
+                            let vp = vp_opt.as_ref()?; // None = full vis = not hidden
+                            let overlaps =
+                                dd.expanded_polys.iter().zip(dd.expanded_aabbs.iter()).any(
+                                    |(ep, ep_aabb)| {
+                                        crate::collision::polygons_overlap_aabb(vp, ep, ep_aabb)
+                                    },
+                                );
+                            if overlaps {
+                                None
+                            } else {
+                                Some(pi)
+                            }
+                        })
+                        .collect();
+                    if !hidden.is_empty()
+                        && has_valid_hiding_square(
+                            obj_marker.position.x_inches,
+                            obj_marker.position.z_inches,
+                            obj_radii[oi],
+                            &obj_sample_points[oi],
+                            &hidden,
+                            &obj_tall_obbs,
+                            half_w,
+                            half_d,
+                        )
+                    {
                         safe_count += 1;
                     }
                 }
@@ -1986,6 +1957,41 @@ mod tests {
         let objects: HashMap<String, &TerrainObject> = HashMap::new();
         let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
         assert!(result.get("objective_hidability").is_none());
+    }
+
+    #[test]
+    fn obscuring_ruin_at_objective_no_hiding() {
+        // A large obscuring ruin covering all objective sample points:
+        // points inside the ruin have full visibility (no blocking from
+        // inside), so the objective cannot be hidden from any DZ.
+        let green_dz = make_rect_dz("green", -30.0, -22.0, -20.0, 22.0);
+        let red_dz = make_rect_dz("red", 20.0, -22.0, 30.0, 22.0);
+        let mission = Mission {
+            name: "test".into(),
+            objectives: vec![ObjectiveMarker {
+                id: "obj1".into(),
+                position: Point2D {
+                    x_inches: 0.0,
+                    z_inches: 0.0,
+                },
+                range_inches: 3.0,
+            }],
+            deployment_zones: vec![green_dz, red_dz],
+            rotationally_symmetric: false,
+        };
+
+        let ruins_obj = make_object("ruins", 14.0, 14.0, 0.0);
+        let ruins_feat = make_feature("f1", "ruins", "obscuring");
+        let pf = make_placed(ruins_feat, 0.0, 0.0);
+
+        let layout = make_layout_with_mission(60.0, 44.0, vec![pf], Some(mission));
+        let mut objects: HashMap<String, &TerrainObject> = HashMap::new();
+        objects.insert("ruins".into(), &ruins_obj);
+
+        let result = compute_layout_visibility(&layout, &objects, 4.0, None, None);
+        let oh = &result["objective_hidability"];
+        assert_eq!(oh["green"]["safe_count"].as_i64().unwrap(), 0);
+        assert_eq!(oh["red"]["safe_count"].as_i64().unwrap(), 0);
     }
 
     // -- Expanded DZ tests --

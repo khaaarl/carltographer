@@ -664,6 +664,78 @@ class TestObjectiveHidability:
         result = compute_layout_visibility(layout, {})
         assert "objective_hidability" not in result
 
+    def test_obscuring_ruin_at_objective_no_hiding(self):
+        """Obscuring ruin covering objective: all sample points inside ruin.
+
+        With the from-objective vis poly approach, sample points inside the
+        ruin have no blocking segments (obscuring features don't block from
+        inside), so they have full visibility and cannot be hidden from any DZ.
+        """
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        objectives = [
+            ObjectiveMarker(id="obj1", position=Point2D(x=0.0, z=0.0))
+        ]
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        # Large obscuring ruin covering all objective sample points
+        # Objective range 3.0 + sqrt(2) ≈ 4.41, so 14x14 ruin at origin
+        # covers all sample points (footprint from -7 to 7 in both axes)
+        obj = _make_object("ruins", 14, 14, 0)
+        feat = _make_feature("f1", "ruins", "obscuring")
+        pf = _place(feat, 0, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"ruins": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        oh = result["objective_hidability"]
+        # All sample points inside the ruin -> full visibility -> no hiding
+        assert oh["green"]["safe_count"] == 0
+        assert oh["red"]["safe_count"] == 0
+
+    def test_obscuring_between_objective_and_dz(self):
+        """Obscuring ruin between objectives and DZ creates hiding.
+
+        A wide ruin placed between objectives and red DZ blocks LoS from
+        objective-vicinity sample points toward red's expanded DZ, giving
+        the green player hiding spots at those objectives.
+        """
+        green_dz = _make_rect_dz("green", -30, -22, -20, 22)
+        red_dz = _make_rect_dz("red", 20, -22, 30, 22)
+        objectives = _make_standard_objectives()
+        mission = _make_simple_mission(
+            [green_dz, red_dz], objectives=objectives
+        )
+
+        # Wide obscuring ruin between objectives and red DZ
+        obj = _make_object("ruins", 2, 40, 0)
+        feat = _make_feature("f1", "ruins", "obscuring")
+        pf = _place(feat, 15, 0)
+
+        layout = TerrainLayout(
+            table_width=60,
+            table_depth=44,
+            placed_features=[pf],
+            mission=mission,
+        )
+        objects_by_id = {"ruins": obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        oh = result["objective_hidability"]
+        # Ruin blocking LoS toward red DZ should help green player
+        assert oh["green"]["value"] >= 0.0
+        assert oh["green"]["total_objectives"] == 5
+        # Green benefits more from a ruin near red DZ
+        assert oh["green"]["safe_count"] >= oh["red"]["safe_count"]
+
 
 class TestHasValidHidingSquare:
     """Tests for the model-fit hiding square check."""
