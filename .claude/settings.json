@@ -45,6 +45,7 @@
       "Bash(rmdir:*)",
       "Bash(rustc:*)",
       "Bash(ruff:*)",
+      "Bash(sed:*)",
       "Bash(source .env/bin/activate:*)",
       "Bash(source v2/.env/bin/activate:*)",
       "Bash(tail:*)",
