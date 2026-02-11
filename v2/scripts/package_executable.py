@@ -210,6 +210,7 @@ def run_pyinstaller(site_packages: str, name: str) -> bool:
         "-m",
         "PyInstaller",
         "--onefile",
+        "--windowed",
         "--name",
         pyinstaller_name,
         "--paths",
