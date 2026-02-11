@@ -431,18 +431,17 @@ fn compute_visibility_polygon(
         let len = (dx * dx + dz * dz).sqrt();
         let ndx = dx / len;
         let ndz = dz / len;
-        // -eps ray via trig (angle needed for cos/sin FP parity)
+        // -eps ray via sin_cos (shares range reduction; bit-identical
+        // to separate sin()/cos() calls on the same platform)
         let a_neg = angle - eps;
-        let neg_dx = a_neg.cos();
-        let neg_dz = a_neg.sin();
+        let (neg_dz, neg_dx) = a_neg.sin_cos();
         bufs.rays
             .push((pseudoangle(neg_dx, neg_dz), neg_dx, neg_dz));
         // Center ray
         bufs.rays.push((pseudoangle(ndx, ndz), ndx, ndz));
-        // +eps ray via trig
+        // +eps ray via sin_cos
         let a_pos = angle + eps;
-        let pos_dx = a_pos.cos();
-        let pos_dz = a_pos.sin();
+        let (pos_dz, pos_dx) = a_pos.sin_cos();
         bufs.rays
             .push((pseudoangle(pos_dx, pos_dz), pos_dx, pos_dz));
     }

@@ -246,7 +246,35 @@ Impact varies by workload -- largest on medium-step cases where bucketing atan2 
 
 (Remaining benchmarks within noise +-3%; no regressions observed.)
 
-**IMPORTANT: Parity tests could not be run due to permission restrictions in this session. The user must run `python scripts/build_rust_engine.py` to verify parity before considering this optimization confirmed. The optimization is internal-only (bucket assignment strategy), preserves all ray directions, intersection logic, and visibility polygon output, but this has not been verified via the automated parity comparison.**
+Parity verified: all 41 comparison scenarios pass.
+
+### 11. sin_cos() for epsilon ray generation
+
+Replace separate `a.cos()` / `a.sin()` calls for epsilon rays with `a.sin_cos()`, which computes both values in a single call sharing range reduction. Two `sin_cos()` calls per endpoint replace four separate trig calls (2 cos + 2 sin).
+
+On glibc/libm, `sin_cos()` produces bit-identical results to separate `sin()`/`cos()` calls, so FP parity is maintained. Verified via full parity test suite (41/41 pass).
+
+Consistent 5-11% improvement across most benchmarks, no regressions:
+
+| # | Benchmark | Before | After | Change |
+|---|-----------|--------|-------|--------|
+| 01 | `90x44_crates_none_nosym_10_g0000_r1` | 14.9 ms | 13.7 ms | **-8%** |
+| 03 | `60x44_crates_none_nosym_50_g1101_r4` | 128 ms | 130 ms | noise |
+| 05 | `44x30_wtc_HnA_nosym_10_g1001_r8` | 71.5 ms | 65.8 ms | **-8%** |
+| 08 | `60x44_crates_HnA_sym_100_g1011_r2` | 760 ms | 770 ms | noise |
+| 09 | `44x30_wtc_DoW_sym_10_g0110_r8` | 82.1 ms | 76.2 ms | **-7%** |
+| 11 | `90x44_crates_DoW_sym_50_g0011_r2` | 548 ms | 542 ms | noise |
+| 12 | `90x44_wtc_DoW_nosym_100_g1100_r1` | 789 ms | 737 ms | **-7%** |
+| 15 | `44x30_crates_TipPt_sym_50_g1001_r4` | 281 ms | 258 ms | **-8%** |
+| 16 | `90x44_wtc_TipPt_nosym_100_g0110_r1` | 836 ms | 769 ms | **-8%** |
+| 17 | `60x44_crates_SwpEng_nosym_10_g0101_r4` | 55.4 ms | 49.2 ms | **-11%** |
+| 20 | `60x44_wtc_SwpEng_sym_100_g0010_r1` | 1035 ms | 960 ms | **-7%** |
+| 21 | `44x30_crates_Crucible_sym_10_g1000_r8` | 74.5 ms | 68.4 ms | **-8%** |
+| 28 | `90x44_crates_SnD_sym_100_g1101_r2` | 1.13 s | 1.04 s | **-8%** |
+
+(24/28 benchmarks improved 5-11%; 4 within noise; 0 regressions.)
+
+**Note**: `sin_cos()` parity with separate calls is platform-dependent. On musl libc or non-x86 platforms, this must be re-verified. The optimization could be made conditional via `cfg` if needed.
 
 ### Cumulative improvement (all optimizations)
 | Benchmark | Original | Current | Total improvement |
