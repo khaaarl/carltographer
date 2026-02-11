@@ -1353,3 +1353,173 @@ class TestCatalogQuantityLimits:
         params = EngineParams.from_dict(pd)
         result = generate(params)
         assert len(result.layout.placed_features) <= 2
+
+
+class TestPolygonGeneration:
+    """Smoke tests for generation with polygon-shaped terrain."""
+
+    def _polygon_catalog_dict(self):
+        """Catalog with a hexagonal polygon obstacle."""
+        import math
+
+        radius = 2.5
+        verts = [
+            [
+                round(radius * math.cos(2 * math.pi * i / 6), 4),
+                round(radius * math.sin(2 * math.pi * i / 6), 4),
+            ]
+            for i in range(6)
+        ]
+        return {
+            "objects": [
+                {
+                    "item": {
+                        "id": "hex",
+                        "shapes": [
+                            {
+                                "shape_type": "polygon",
+                                "vertices": verts,
+                                "height_inches": 5.0,
+                            }
+                        ],
+                    },
+                }
+            ],
+            "features": [
+                {
+                    "item": {
+                        "id": "hex_feat",
+                        "feature_type": "obstacle",
+                        "components": [{"object_id": "hex"}],
+                    },
+                }
+            ],
+        }
+
+    def test_polygon_generation_places_features(self):
+        """Generation with a polygon catalog places at least one feature."""
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._polygon_catalog_dict(),
+            "num_steps": 50,
+            "skip_visibility": True,
+        }
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        assert len(result.layout.placed_features) > 0
+
+    def test_polygon_generation_no_overlaps(self):
+        """Generated polygon features do not overlap each other."""
+        from engine.collision import polygons_overlap
+
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._polygon_catalog_dict(),
+            "num_steps": 100,
+            "skip_visibility": True,
+        }
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        objects_by_id = {co.item.id: co.item for co in params.catalog.objects}
+        features = result.layout.placed_features
+        for i in range(len(features)):
+            obbs_i = get_world_obbs(features[i], objects_by_id)
+            for j in range(i + 1, len(features)):
+                obbs_j = get_world_obbs(features[j], objects_by_id)
+                for ca in obbs_i:
+                    for cb in obbs_j:
+                        assert not polygons_overlap(ca, cb), (
+                            f"Features {i} and {j} overlap"
+                        )
+
+    def test_polygon_json_roundtrip(self):
+        """Polygon features survive JSON round-trip."""
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": self._polygon_catalog_dict(),
+            "num_steps": 50,
+            "skip_visibility": True,
+        }
+        result = generate_json(pd)
+        assert len(result["layout"]["placed_features"]) > 0
+        # Verify polygon shapes are preserved in terrain_objects
+        obj_dicts = result["layout"].get("terrain_objects", [])
+        hex_obj = next((o for o in obj_dicts if o["id"] == "hex"), None)
+        assert hex_obj is not None
+        assert hex_obj["shapes"][0]["shape_type"] == "polygon"
+        assert len(hex_obj["shapes"][0]["vertices"]) == 6
+
+    def test_mixed_polygon_and_rect_catalog(self):
+        """Generation with both polygon and rectangular shapes."""
+        import math
+
+        radius = 2.0
+        verts = [
+            [
+                round(radius * math.cos(2 * math.pi * i / 8), 4),
+                round(radius * math.sin(2 * math.pi * i / 8), 4),
+            ]
+            for i in range(8)
+        ]
+        catalog = {
+            "objects": [
+                {
+                    "item": {
+                        "id": "crate_5x2.5",
+                        "shapes": [
+                            {
+                                "shape_type": "rectangular_prism",
+                                "width_inches": 5.0,
+                                "depth_inches": 2.5,
+                                "height_inches": 2.0,
+                            }
+                        ],
+                    },
+                },
+                {
+                    "item": {
+                        "id": "octagon",
+                        "shapes": [
+                            {
+                                "shape_type": "polygon",
+                                "vertices": verts,
+                                "height_inches": 3.0,
+                            }
+                        ],
+                    },
+                },
+            ],
+            "features": [
+                {
+                    "item": {
+                        "id": "crate",
+                        "feature_type": "obstacle",
+                        "components": [{"object_id": "crate_5x2.5"}],
+                    },
+                },
+                {
+                    "item": {
+                        "id": "octagon_feat",
+                        "feature_type": "obstacle",
+                        "components": [{"object_id": "octagon"}],
+                    },
+                },
+            ],
+        }
+        pd = {
+            "seed": 42,
+            "table_width_inches": 60.0,
+            "table_depth_inches": 44.0,
+            "catalog": catalog,
+            "num_steps": 100,
+            "skip_visibility": True,
+        }
+        params = EngineParams.from_dict(pd)
+        result = generate(params)
+        assert len(result.layout.placed_features) > 0

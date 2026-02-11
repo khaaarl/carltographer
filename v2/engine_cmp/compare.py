@@ -1307,6 +1307,389 @@ TEST_SCENARIOS = [
 ]
 
 
+# -- Polygon terrain scenarios ---
+
+
+def _make_polygon_catalog() -> TerrainCatalog:
+    """Catalog with polygon shapes: kidney-bean woods + industrial tank + ruin with wall."""
+    import math
+
+    # 24-gon tank (5" dia, 5" tall)
+    tank_radius = 2.5
+    tank_verts = [
+        (
+            round(tank_radius * math.cos(2 * math.pi * i / 24), 4),
+            round(tank_radius * math.sin(2 * math.pi * i / 24), 4),
+        )
+        for i in range(24)
+    ]
+    tank_xs = [v[0] for v in tank_verts]
+    tank_zs = [v[1] for v in tank_verts]
+
+    # Kidney-bean woods (flat) — must match catalogs.py _KIDNEY_BEAN_VERTICES
+    woods_verts = [
+        # Right end
+        (4.0, 0.0),
+        (3.5, -1.2),
+        # Bottom (smooth convex curve)
+        (2.5, -2.0),
+        (1.0, -2.4),
+        (-1.0, -2.4),
+        (-2.5, -2.0),
+        (-3.5, -1.2),
+        # Left end
+        (-4.0, 0.0),
+        (-3.5, 1.2),
+        # Top-left curve (gradual rise to broad peak)
+        (-2.8, 1.8),
+        (-2.2, 2.2),
+        (-1.6, 2.4),
+        # Wide notch descent
+        (-0.8, 1.8),
+        (-0.3, 1.2),
+        # Flat notch floor
+        (0.3, 1.2),
+        # Wide notch ascent
+        (0.8, 1.8),
+        # Top-right curve (broad peak, gradual descent)
+        (1.6, 2.4),
+        (2.2, 2.2),
+        (2.8, 1.8),
+        (3.5, 1.2),
+    ]
+    woods_xs = [v[0] for v in woods_verts]
+    woods_zs = [v[1] for v in woods_verts]
+
+    return TerrainCatalog(
+        objects=[
+            CatalogObject(
+                item=TerrainObject(
+                    id="industrial_tank",
+                    shapes=[
+                        Shape(
+                            width=max(tank_xs) - min(tank_xs),
+                            depth=max(tank_zs) - min(tank_zs),
+                            height=5.0,
+                            vertices=tank_verts,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="kidney_bean_woods",
+                    shapes=[
+                        Shape(
+                            width=max(woods_xs) - min(woods_xs),
+                            depth=max(woods_zs) - min(woods_zs),
+                            height=0.0,
+                            vertices=woods_verts,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="ruins_10x6",
+                    shapes=[Shape(width=10.0, depth=6.0, height=0.0)],
+                ),
+                quantity=None,
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="opaque_wall_6x0.5",
+                    shapes=[Shape(width=6.0, depth=0.5, height=5.0)],
+                ),
+                quantity=None,
+            ),
+        ],
+        features=[
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="tank",
+                    feature_type="obstacle",
+                    components=[FeatureComponent(object_id="industrial_tank")],
+                ),
+                quantity=None,
+            ),
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="woods",
+                    feature_type="woods",
+                    components=[
+                        FeatureComponent(object_id="kidney_bean_woods")
+                    ],
+                ),
+                quantity=None,
+            ),
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="ruin_with_wall",
+                    feature_type="obscuring",
+                    components=[
+                        FeatureComponent(object_id="ruins_10x6"),
+                        FeatureComponent(
+                            object_id="opaque_wall_6x0.5",
+                            transform=Transform(
+                                x=2.0, z=0.0, rotation_deg=0.0
+                            ),
+                        ),
+                    ],
+                ),
+                quantity=None,
+            ),
+        ],
+        name="Polygon Test Catalog",
+    )
+
+
+def _make_tank_only_catalog() -> TerrainCatalog:
+    """Catalog with just the industrial tank."""
+    import math
+
+    tank_radius = 2.5
+    tank_verts = [
+        (
+            round(tank_radius * math.cos(2 * math.pi * i / 24), 4),
+            round(tank_radius * math.sin(2 * math.pi * i / 24), 4),
+        )
+        for i in range(24)
+    ]
+    tank_xs = [v[0] for v in tank_verts]
+    tank_zs = [v[1] for v in tank_verts]
+
+    return TerrainCatalog(
+        objects=[
+            CatalogObject(
+                item=TerrainObject(
+                    id="industrial_tank",
+                    shapes=[
+                        Shape(
+                            width=max(tank_xs) - min(tank_xs),
+                            depth=max(tank_zs) - min(tank_zs),
+                            height=5.0,
+                            vertices=tank_verts,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+        ],
+        features=[
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="tank",
+                    feature_type="obstacle",
+                    components=[FeatureComponent(object_id="industrial_tank")],
+                ),
+                quantity=None,
+            ),
+        ],
+        name="Tank Only Catalog",
+    )
+
+
+def _make_polygon_only_catalog() -> TerrainCatalog:
+    """Catalog with only polygon shapes: kidney-bean woods + industrial tank."""
+    import math
+
+    # 24-gon tank (5" dia, 5" tall)
+    tank_radius = 2.5
+    tank_verts = [
+        (
+            round(tank_radius * math.cos(2 * math.pi * i / 24), 4),
+            round(tank_radius * math.sin(2 * math.pi * i / 24), 4),
+        )
+        for i in range(24)
+    ]
+    tank_xs = [v[0] for v in tank_verts]
+    tank_zs = [v[1] for v in tank_verts]
+
+    # Kidney-bean woods (flat) — must match catalogs.py _KIDNEY_BEAN_VERTICES
+    woods_verts = [
+        # Right end
+        (4.0, 0.0),
+        (3.5, -1.2),
+        # Bottom (smooth convex curve)
+        (2.5, -2.0),
+        (1.0, -2.4),
+        (-1.0, -2.4),
+        (-2.5, -2.0),
+        (-3.5, -1.2),
+        # Left end
+        (-4.0, 0.0),
+        (-3.5, 1.2),
+        # Top-left curve (gradual rise to broad peak)
+        (-2.8, 1.8),
+        (-2.2, 2.2),
+        (-1.6, 2.4),
+        # Wide notch descent
+        (-0.8, 1.8),
+        (-0.3, 1.2),
+        # Flat notch floor
+        (0.3, 1.2),
+        # Wide notch ascent
+        (0.8, 1.8),
+        # Top-right curve (broad peak, gradual descent)
+        (1.6, 2.4),
+        (2.2, 2.2),
+        (2.8, 1.8),
+        (3.5, 1.2),
+    ]
+    woods_xs = [v[0] for v in woods_verts]
+    woods_zs = [v[1] for v in woods_verts]
+
+    return TerrainCatalog(
+        objects=[
+            CatalogObject(
+                item=TerrainObject(
+                    id="industrial_tank",
+                    shapes=[
+                        Shape(
+                            width=max(tank_xs) - min(tank_xs),
+                            depth=max(tank_zs) - min(tank_zs),
+                            height=5.0,
+                            vertices=tank_verts,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+            CatalogObject(
+                item=TerrainObject(
+                    id="kidney_bean_woods",
+                    shapes=[
+                        Shape(
+                            width=max(woods_xs) - min(woods_xs),
+                            depth=max(woods_zs) - min(woods_zs),
+                            height=0.0,
+                            vertices=woods_verts,
+                        )
+                    ],
+                ),
+                quantity=None,
+            ),
+        ],
+        features=[
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="tank",
+                    feature_type="obstacle",
+                    components=[FeatureComponent(object_id="industrial_tank")],
+                ),
+                quantity=None,
+            ),
+            CatalogFeature(
+                item=TerrainFeature(
+                    id="woods",
+                    feature_type="woods",
+                    components=[
+                        FeatureComponent(object_id="kidney_bean_woods")
+                    ],
+                ),
+                quantity=None,
+            ),
+        ],
+        name="Polygon Only Catalog",
+    )
+
+
+TEST_SCENARIOS += [
+    # Ultra-simple: 0 steps, just visibility scoring on a pre-placed tank
+    TestScenario(
+        "polygon_tank_visibility",
+        seed=42,
+        num_steps=0,
+        num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
+        catalog=_make_tank_only_catalog(),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+        initial_layout=TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="tank",
+                        feature_type="obstacle",
+                        components=[
+                            FeatureComponent(object_id="industrial_tank")
+                        ],
+                    ),
+                    transform=Transform(x=0.0, z=0.0, rotation_deg=0.0),
+                ),
+            ],
+            terrain_objects=[
+                TerrainObject(
+                    id="industrial_tank",
+                    shapes=[
+                        Shape(
+                            width=5.0,
+                            depth=5.0,
+                            height=5.0,
+                            vertices=_make_tank_only_catalog()
+                            .objects[0]
+                            .item.shapes[0]
+                            .vertices,
+                        )
+                    ],
+                ),
+            ],
+        ),
+    ),
+    # Generic: 5 steps with mixed polygon + rect catalog
+    TestScenario(
+        "polygon_mixed_generation",
+        seed=42,
+        num_steps=5,
+        num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
+        catalog=_make_polygon_catalog(),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+    ),
+    # Polygon-only: 5 steps with only polygon shapes (no rectangles)
+    TestScenario(
+        "polygon_only_generation",
+        seed=77,
+        num_steps=5,
+        num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
+        catalog=_make_polygon_only_catalog(),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+    ),
+    # Symmetric layout with polygon shapes (tests mirrored polygon transforms)
+    TestScenario(
+        "polygon_symmetric",
+        seed=42,
+        num_steps=5,
+        num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
+        catalog=_make_polygon_only_catalog(),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+        rotationally_symmetric=True,
+    ),
+    # Gap enforcement with polygon shapes (tests generalized obb_distance)
+    TestScenario(
+        "polygon_with_gaps",
+        seed=42,
+        num_steps=5,
+        num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
+        catalog=_make_polygon_only_catalog(),
+        mission=Mission.from_dict(_require_mission("Hammer and Anvil")),
+        min_feature_gap_inches=3.0,
+        min_edge_gap_inches=2.0,
+    ),
+]
+
+
 def _mission_to_json_with_expanded(mission: Mission) -> dict:
     """Serialize a Mission to JSON, adding precomputed expanded DZ polygons.
 
@@ -1336,25 +1719,7 @@ def params_to_json_dict(params: EngineParams) -> dict:
                     "item": {
                         "id": obj.item.id,
                         "shapes": [
-                            {
-                                "shape_type": "rectangular_prism",
-                                "width_inches": shape.width,
-                                "depth_inches": shape.depth,
-                                "height_inches": shape.height,
-                                **(
-                                    {"offset": shape.offset.to_dict()}
-                                    if shape.offset
-                                    else {}
-                                ),
-                                **(
-                                    {
-                                        "opacity_height_inches": shape.opacity_height_inches
-                                    }
-                                    if shape.opacity_height_inches is not None
-                                    else {}
-                                ),
-                            }
-                            for shape in obj.item.shapes
+                            shape.to_dict() for shape in obj.item.shapes
                         ],
                         **({"name": obj.item.name} if obj.item.name else {}),
                         **({"tags": obj.item.tags} if obj.item.tags else {}),

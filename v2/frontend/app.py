@@ -601,7 +601,12 @@ class BattlefieldRenderer:
             for shape in obj["shapes"]:
                 offset_tf = _get_tf(shape.get("offset"))
                 combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
-                self._draw_rect(draw, shape, combined, fill, outline)
+                if shape.get("shape_type") == "polygon":
+                    self._draw_polygon_shape(
+                        draw, shape, combined, fill, outline
+                    )
+                else:
+                    self._draw_rect(draw, shape, combined, fill, outline)
 
     def _draw_placed_feature_highlight(self, draw, placed_feature):
         """Draw gold outline highlight for a placed feature (no fill)."""
@@ -617,7 +622,12 @@ class BattlefieldRenderer:
             for shape in obj["shapes"]:
                 offset_tf = _get_tf(shape.get("offset"))
                 combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
-                self._draw_highlight_rect(draw, shape, combined)
+                if shape.get("shape_type") == "polygon":
+                    self._draw_polygon_shape(
+                        draw, shape, combined, None, HIGHLIGHT_COLOR, width=3
+                    )
+                else:
+                    self._draw_highlight_rect(draw, shape, combined)
 
     def _draw_highlight_rect(self, draw, shape, tf):
         """Draw a gold outline rectangle (no fill) for highlight."""
@@ -664,6 +674,27 @@ class BattlefieldRenderer:
             fill=fill,
             outline=outline,
             width=self._lw(2) if outline else 0,
+        )
+
+    def _draw_polygon_shape(self, draw, shape, tf, fill, outline, width=2):
+        cx, cz, rot_deg = tf
+        vertices = shape["vertices"]
+
+        rad = math.radians(rot_deg)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+
+        px_corners = []
+        for vx, vz in vertices:
+            rx = cx + vx * cos_r - vz * sin_r
+            rz = cz + vx * sin_r + vz * cos_r
+            px_corners.append(self._to_px(rx, rz))
+
+        draw.polygon(
+            px_corners,
+            fill=fill,
+            outline=outline,
+            width=self._lw(width) if outline else 0,
         )
 
 
@@ -1593,9 +1624,13 @@ class App:
                 offset_tf = _get_tf(shape.get("offset"))
                 combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
                 cx, cz, rot_deg = combined
-                hw = shape["width_inches"] / 2
-                hd = shape["depth_inches"] / 2
-                corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+                if shape.get("shape_type") == "polygon":
+                    corners = shape["vertices"]
+                else:
+                    hw = shape["width_inches"] / 2
+                    hd = shape["depth_inches"] / 2
+                    corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
 
                 rad = math.radians(rot_deg)
                 cos_r = math.cos(rad)
@@ -1680,16 +1715,25 @@ class App:
                 offset_tf = _get_tf(shape.get("offset"))
                 combined = _compose(feat_tf, _compose(comp_tf, offset_tf))
                 cx, cz, rot_deg = combined
-                hw = shape["width_inches"] / 2
-                hd = shape["depth_inches"] / 2
-                corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+                if shape.get("shape_type") == "polygon":
+                    local_corners = shape["vertices"]
+                else:
+                    hw = shape["width_inches"] / 2
+                    hd = shape["depth_inches"] / 2
+                    local_corners = [
+                        (-hw, -hd),
+                        (hw, -hd),
+                        (hw, hd),
+                        (-hw, hd),
+                    ]
 
                 rad = math.radians(rot_deg)
                 cos_r = math.cos(rad)
                 sin_r = math.sin(rad)
 
                 canvas_coords = []
-                for lx, lz in corners:
+                for lx, lz in local_corners:
                     rx = cx + lx * cos_r - lz * sin_r
                     rz = cz + lx * sin_r + lz * cos_r
                     cp = self._table_to_canvas(rx, rz)
@@ -2671,9 +2715,18 @@ class App:
                 offset_tf = _get_tf(shape.get("offset"))
                 combined = _compose(comp_tf, offset_tf)
                 cx, cz, rot_deg = combined
-                hw = shape["width_inches"] / 2
-                hd = shape["depth_inches"] / 2
-                local_corners = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+
+                if shape.get("shape_type") == "polygon":
+                    local_corners = shape["vertices"]
+                else:
+                    hw = shape["width_inches"] / 2
+                    hd = shape["depth_inches"] / 2
+                    local_corners = [
+                        (-hw, -hd),
+                        (hw, -hd),
+                        (hw, hd),
+                        (-hw, hd),
+                    ]
 
                 rad = math.radians(rot_deg)
                 cos_r = math.cos(rad)

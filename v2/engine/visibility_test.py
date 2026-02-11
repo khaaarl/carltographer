@@ -1082,3 +1082,75 @@ class TestInfantryVisibility:
             assert "standard" in dz_entry
             assert "infantry" in dz_entry
             assert "value" in dz_entry
+
+
+# -- Polygon terrain shape visibility tests --
+
+
+def _make_polygon_object(obj_id, vertices, height):
+    """Create a TerrainObject with a polygon shape."""
+    return TerrainObject(
+        id=obj_id,
+        shapes=[
+            Shape(
+                width=max(v[0] for v in vertices)
+                - min(v[0] for v in vertices),
+                depth=max(v[1] for v in vertices)
+                - min(v[1] for v in vertices),
+                height=height,
+                vertices=list(vertices),
+            )
+        ],
+    )
+
+
+class TestPolygonVisibility:
+    def test_tall_polygon_blocks_los(self):
+        """A tall polygon shape (e.g., tank) should block line of sight."""
+        import math
+
+        # 24-gon approximating a circle of radius 2.5
+        radius = 2.5
+        verts = [
+            (
+                radius * math.cos(2 * math.pi * i / 24),
+                radius * math.sin(2 * math.pi * i / 24),
+            )
+            for i in range(24)
+        ]
+        tank_obj = _make_polygon_object("tank", verts, 5.0)
+        tank_feat = _make_feature("tank_feat", "tank", "obstacle")
+        pf = _place(tank_feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"tank": tank_obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        # A tall polygon should reduce visibility below 100%
+        assert result["overall"]["value"] < 100.0
+
+    def test_flat_polygon_does_not_block_los(self):
+        """A flat polygon shape (height=0, e.g., woods) does NOT block LoS."""
+        verts = [(-4, -2.5), (4, -2.5), (4, 2.5), (-4, 2.5)]
+        woods_obj = _make_polygon_object("woods", verts, 0.0)
+        woods_feat = _make_feature("woods_feat", "woods", "obstacle")
+        pf = _place(woods_feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"woods": woods_obj}
+
+        result = compute_layout_visibility(layout, objects_by_id)
+        # height=0 -> does not block at standard height (4.0") -> 100%
+        assert result["overall"]["value"] == 100.0
+
+    def test_polygon_segments_count(self):
+        """Polygon obstacle generates correct number of blocking segments."""
+        # Triangle: 3 edges -> 3 segments
+        verts = [(-2, -1), (2, -1), (0, 1)]
+        obj = _make_polygon_object("tri", verts, 5.0)
+        feat = _make_feature("tri_feat", "tri", "obstacle")
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"tri": obj}
+
+        segments = _extract_blocking_segments(layout, objects_by_id, 0, 0)
+        # Should have exactly 3 segments from the triangle
+        assert len(segments) == 3

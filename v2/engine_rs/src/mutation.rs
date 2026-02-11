@@ -654,6 +654,7 @@ mod tests {
                         height_inches: 2.0,
                         offset: None,
                         opacity_height_inches: None,
+                        vertices: None,
                     }],
                     name: None,
                     tags: vec![],

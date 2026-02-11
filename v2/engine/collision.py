@@ -1,42 +1,52 @@
-"""Oriented bounding box (OBB) collision, gap enforcement, and bounds checking.
+"""Collision detection, gap enforcement, and bounds checking for terrain shapes.
 
 The central question this module answers: "is this feature placement legal?"
 Every mutation in ``mutation.py`` calls ``is_valid_placement`` after
 tentatively placing or moving a feature. The check enforces:
 
-  * **No overlap** — OBBs of the placed feature (and its rotational mirror,
-    if symmetric) must not intersect any other feature's OBBs. Overlap
-    detection uses the Separating Axis Theorem (SAT) on pairs of rotated
-    rectangles.
-  * **Table bounds** — all OBB corners must lie within the table.
+  * **No overlap** — shapes of the placed feature (and its rotational mirror,
+    if symmetric) must not intersect any other feature's shapes. For
+    rectangular shapes (4 corners), overlap uses SAT via ``obbs_overlap``.
+    For polygon shapes (N corners), overlap uses ``polygons_overlap`` with
+    edge-intersection + vertex-containment tests.
+  * **Table bounds** — all shape corners must lie within the table.
   * **Tall-terrain gaps** — features with any shape height >= 1" must keep a
     minimum distance from other tall features (``min_feature_gap``) and from
-    table edges (``min_edge_gap``). Distance is measured between OBB edges,
+    table edges (``min_edge_gap``). Distance is measured between edges,
     not centers.
   * **All-terrain gaps** — optional stricter gaps (``min_all_feature_gap``,
     ``min_all_edge_gap``) that apply to every feature regardless of height.
 
+Shapes can be either rectangular prisms (4-corner OBBs) or arbitrary polygons
+(N-corner footprints). The ``Shape.vertices`` field distinguishes them: when
+present, vertices are transformed to world space instead of computing OBB
+corners. Most functions (``obb_in_bounds``, ``obb_to_table_edge_distance``,
+``obb_distance``) already work generically with any vertex count.
+
 Also provides geometric utilities used elsewhere in the engine:
 
   * ``compose_transform`` / ``obb_corners`` / ``get_world_obbs`` — transform
-    composition and OBB computation, used by ``mutation.py`` for tile-weight
-    occupancy and by ``app.py``'s renderer for drawing.
+    composition and shape vertex computation, used by ``mutation.py`` for
+    tile-weight occupancy and by ``app.py``'s renderer for drawing.
+  * ``_shape_world_corners`` / ``_transform_polygon`` — polygon-aware helpers
+    for computing world-space vertices.
   * ``_mirror_placed_feature`` / ``_is_at_origin`` — rotational symmetry
     helpers (180° mirroring), used by mutations and visibility.
   * ``obb_distance`` / ``obb_to_table_edge_distance`` — edge-to-edge distance
     for gap enforcement.
   * ``point_in_polygon`` / ``polygons_overlap`` — used by ``visibility.py``
-    for deployment zone analysis.
+    for deployment zone analysis and polygon terrain overlap checks.
 
-Subject to the Rust-parity constraint — ``engine_rs/src/collision.rs``
-mirrors this module.
+Subject to the Rust-parity constraint for rectangular shapes —
+``engine_rs/src/collision.rs`` mirrors this module. Polygon support is
+Python-only for now (Rust parity deferred).
 """
 
 from __future__ import annotations
 
 import math
 
-from .types import PlacedFeature, TerrainObject, Transform
+from .types import PlacedFeature, Shape, TerrainObject, Transform
 
 Corners = list[tuple[float, float]]
 
@@ -135,13 +145,50 @@ def obb_in_bounds(
     )
 
 
+def _transform_polygon(
+    vertices: list[tuple[float, float]],
+    cx: float,
+    cz: float,
+    rot_rad: float,
+) -> Corners:
+    """Rotate and translate local-space polygon vertices to world space."""
+    cos_r = math.cos(rot_rad)
+    sin_r = math.sin(rot_rad)
+    return [
+        (cx + vx * cos_r - vz * sin_r, cz + vx * sin_r + vz * cos_r)
+        for vx, vz in vertices
+    ]
+
+
+def _shape_world_corners(
+    shape: Shape,
+    world: Transform,
+) -> Corners:
+    """Compute world-space corners for a shape (rectangle or polygon)."""
+    if shape.vertices is not None:
+        return _transform_polygon(
+            shape.vertices,
+            world.x,
+            world.z,
+            math.radians(world.rotation_deg),
+        )
+    return obb_corners(
+        world.x,
+        world.z,
+        shape.width / 2,
+        shape.depth / 2,
+        math.radians(world.rotation_deg),
+    )
+
+
 def get_world_obbs(
     placed: PlacedFeature,
     objects_by_id: dict[str, TerrainObject],
 ) -> list[Corners]:
-    """Compute world-space OBB corners for every shape in a
-    placed feature, composing shape offset, component
-    transform, and feature table transform.
+    """Compute world-space corners for every shape in a placed feature.
+
+    For rectangular shapes, returns 4-corner OBBs. For polygon shapes,
+    returns the transformed polygon vertices (N corners).
     """
     result: list[Corners] = []
     for comp in placed.feature.components:
@@ -153,14 +200,7 @@ def get_world_obbs(
                 compose_transform(shape_t, comp_t),
                 placed.transform,
             )
-            corners = obb_corners(
-                world.x,
-                world.z,
-                shape.width / 2,
-                shape.depth / 2,
-                math.radians(world.rotation_deg),
-            )
-            result.append(corners)
+            result.append(_shape_world_corners(shape, world))
     return result
 
 
@@ -259,8 +299,10 @@ def obb_distance(corners_a: Corners, corners_b: Corners) -> float:
     2. Compute corner-to-edge distances for all pairs
     3. Return minimum
     """
-    edges_a = [(corners_a[i], corners_a[(i + 1) % 4]) for i in range(4)]
-    edges_b = [(corners_b[i], corners_b[(i + 1) % 4]) for i in range(4)]
+    n_a = len(corners_a)
+    n_b = len(corners_b)
+    edges_a = [(corners_a[i], corners_a[(i + 1) % n_a]) for i in range(n_a)]
+    edges_b = [(corners_b[i], corners_b[(i + 1) % n_b]) for i in range(n_b)]
 
     # Check for edge intersections
     for (ax1, az1), (ax2, az2) in edges_a:
@@ -329,9 +371,10 @@ def get_tall_world_obbs(
     objects_by_id: dict[str, TerrainObject],
     min_height: float = 1.0,
 ) -> list[Corners]:
-    """Extract world-space OBB corners for shapes with height >= min_height.
+    """Extract world-space corners for shapes with height >= min_height.
 
     Similar to get_world_obbs() but filters by shape height.
+    Returns polygon vertices for polygon shapes, 4-corner OBBs for rectangles.
     """
     result: list[Corners] = []
     for comp in placed.feature.components:
@@ -346,14 +389,7 @@ def get_tall_world_obbs(
                 compose_transform(shape_t, comp_t),
                 placed.transform,
             )
-            corners = obb_corners(
-                world.x,
-                world.z,
-                shape.width / 2,
-                shape.depth / 2,
-                math.radians(world.rotation_deg),
-            )
-            result.append(corners)
+            result.append(_shape_world_corners(shape, world))
     return result
 
 
@@ -403,11 +439,16 @@ def is_valid_placement(
         other_features.append(_mirror_placed_feature(check_pf))
 
     # 2. Check overlap with other features
+    # Use obbs_overlap for rect-vs-rect (touching = OK, Rust-parity),
+    # polygons_overlap for any polygon involvement.
     for pf in other_features:
         other_obbs = get_world_obbs(pf, objects_by_id)
         for ca in check_obbs:
             for cb in other_obbs:
-                if obbs_overlap(ca, cb):
+                if len(ca) == 4 and len(cb) == 4:
+                    if obbs_overlap(ca, cb):
+                        return False
+                elif polygons_overlap(ca, cb):
                     return False
 
     # 2b. All-feature edge gap (applies to all shapes, not just tall)

@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use crate::collision::{
     compose_transform, get_tall_world_obbs, is_at_origin, mirror_placed_feature, obb_corners,
-    obbs_overlap, Corners,
+    obbs_overlap, polygons_overlap, shape_world_corners, Corners,
 };
 use crate::types::{PlacedFeature, TerrainLayout, TerrainObject, Transform};
 
@@ -246,7 +246,7 @@ fn precompute_segments(
                 });
             }
         } else {
-            // Regular obstacle: all 4 edges block regardless of observer
+            // Regular obstacle: all edges block regardless of observer
             for comp in &pf.feature.components {
                 let obj = match objects_by_id.get(&comp.object_id) {
                     Some(o) => o,
@@ -260,15 +260,10 @@ fn precompute_segments(
                     let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
                     let world =
                         compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
-                    let corners = obb_corners(
-                        world.x_inches,
-                        world.z_inches,
-                        shape.width_inches / 2.0,
-                        shape.depth_inches / 2.0,
-                        world.rotation_deg.to_radians(),
-                    );
-                    for i in 0..4 {
-                        let j = (i + 1) % 4;
+                    let corners = shape_world_corners(shape, &world);
+                    let n = corners.len();
+                    for i in 0..n {
+                        let j = (i + 1) % n;
                         static_segments.push((
                             corners[i].0,
                             corners[i].1,
@@ -949,11 +944,9 @@ impl<'a> VisibilityCache<'a> {
 ///   3. All 4 corners are hidden from the opposing threat zone
 ///   4. No tall terrain shape (height >= 1.0") intersects the square
 ///
-/// WARNING: The terrain-intersection check (step 4) uses OBB (oriented
-/// bounding box) geometry via obbs_overlap(). This assumes all terrain
-/// shapes are rectangular. If polygonal or cylindrical terrain shapes are
-/// added in the future, this check will need to be updated to use the
-/// appropriate intersection test.
+/// The terrain-intersection check (step 4) dispatches between obbs_overlap
+/// for rectangular shapes (4 vertices) and polygons_overlap for polygon
+/// shapes (N vertices).
 fn has_valid_hiding_square(
     obj_cx: f64,
     obj_cz: f64,
@@ -1039,11 +1032,15 @@ fn has_valid_hiding_square(
             continue;
         }
 
-        // Check 4: no tall terrain OBB overlaps the square
+        // Check 4: no tall terrain shape overlaps the square
         let square_obb = obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0);
-        let terrain_blocks = tall_obbs
-            .iter()
-            .any(|tall_obb| obbs_overlap(&square_obb, tall_obb));
+        let terrain_blocks = tall_obbs.iter().any(|tall_obb| {
+            if tall_obb.len() == 4 {
+                obbs_overlap(&square_obb, tall_obb)
+            } else {
+                polygons_overlap(&square_obb, tall_obb)
+            }
+        });
         if terrain_blocks {
             continue;
         }
@@ -1614,6 +1611,7 @@ mod tests {
                 height_inches: height,
                 offset: None,
                 opacity_height_inches: None,
+                vertices: None,
             }],
             name: None,
             tags: vec![],

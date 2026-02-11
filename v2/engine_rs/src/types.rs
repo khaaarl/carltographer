@@ -29,6 +29,11 @@ pub struct GeometricShape {
     pub offset: Option<Transform>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity_height_inches: Option<f64>,
+    /// Local-space polygon vertices for non-rectangular shapes.
+    /// When present, shape_type should be "polygon".
+    /// Each vertex is [x, z] in local coordinates relative to shape center.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertices: Option<Vec<[f64; 2]>>,
 }
 
 impl GeometricShape {

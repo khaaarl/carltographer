@@ -71,11 +71,11 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from .collision import (
     _is_at_origin,
     _mirror_placed_feature,
+    _shape_world_corners,
     compose_transform,
     get_tall_world_obbs,
     get_world_obbs,
     obb_corners,
-    obbs_overlap,
     point_to_segment_distance_squared,
     polygons_overlap,
 )
@@ -275,15 +275,10 @@ def _precompute_segments(
                         compose_transform(shape_t, comp_t),
                         pf.transform,
                     )
-                    corners = obb_corners(
-                        world.x,
-                        world.z,
-                        shape.width / 2,
-                        shape.depth / 2,
-                        math.radians(world.rotation_deg),
-                    )
-                    for i in range(4):
-                        j = (i + 1) % 4
+                    corners = _shape_world_corners(shape, world)
+                    n = len(corners)
+                    for i in range(n):
+                        j = (i + 1) % n
                         static_segments.append(
                             (
                                 corners[i][0],
@@ -811,11 +806,8 @@ def _has_valid_hiding_square(
       3. All 4 corners are hidden from the opposing threat zone
       4. No tall terrain shape (height >= 1.0") intersects the square
 
-    WARNING: The terrain-intersection check (step 4) uses OBB (oriented
-    bounding box) geometry via obbs_overlap(). This assumes all terrain
-    shapes are rectangular. If polygonal or cylindrical terrain shapes are
-    added in the future, this check will need to be updated to use the
-    appropriate intersection test.
+    The terrain-intersection check (step 4) uses polygons_overlap(), which
+    handles both rectangular OBBs and arbitrary polygon terrain shapes.
     """
     # Build lookup from (x, z) -> sample index for O(1) access
     pt_index: dict[tuple[float, float], int] = {}
@@ -883,11 +875,11 @@ def _has_valid_hiding_square(
         if not all_hidden:
             continue
 
-        # Check 4: no tall terrain OBB overlaps the square
+        # Check 4: no tall terrain shape overlaps the square
         square_obb = obb_corners(ox + 0.5, oz + 0.5, 0.5, 0.5, 0.0)
         terrain_blocks = False
         for tall_obb in tall_obbs:
-            if obbs_overlap(square_obb, tall_obb):
+            if polygons_overlap(square_obb, tall_obb):
                 terrain_blocks = True
                 break
         if terrain_blocks:

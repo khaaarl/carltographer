@@ -1,13 +1,14 @@
-//! Oriented bounding box (OBB) collision and bounds checking.
+//! Collision detection and bounds checking for terrain shapes.
 //!
-//! Uses the Separating Axis Theorem for overlap detection between
-//! rotated rectangles on the 2D table surface.
+//! Supports both rectangular shapes (OBBs via Separating Axis Theorem)
+//! and arbitrary polygon shapes. The `Corners` type is `Vec<(f64, f64)>`
+//! — 4 vertices for rectangles, N vertices for polygons.
 
 use std::collections::HashMap;
 
-use crate::types::{PlacedFeature, TerrainObject, Transform};
+use crate::types::{GeometricShape, PlacedFeature, TerrainObject, Transform};
 
-pub type Corners = [(f64, f64); 4];
+pub type Corners = Vec<(f64, f64)>;
 
 /// Create the 180-degree rotational mirror of a placed feature: (-x, -z, rot+180).
 pub fn mirror_placed_feature(pf: &PlacedFeature) -> PlacedFeature {
@@ -43,16 +44,47 @@ pub fn obb_corners(cx: f64, cz: f64, half_w: f64, half_d: f64, rot_rad: f64) -> 
     let cos_r = rot_rad.cos();
     let sin_r = rot_rad.sin();
     const SIGNS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-    let mut corners = [(0.0, 0.0); 4];
-    for (i, &(sx, sz)) in SIGNS.iter().enumerate() {
-        let lx = sx * half_w;
-        let lz = sz * half_d;
-        corners[i] = (cx + lx * cos_r - lz * sin_r, cz + lx * sin_r + lz * cos_r);
-    }
-    corners
+    SIGNS
+        .iter()
+        .map(|&(sx, sz)| {
+            let lx = sx * half_w;
+            let lz = sz * half_d;
+            (cx + lx * cos_r - lz * sin_r, cz + lx * sin_r + lz * cos_r)
+        })
+        .collect()
 }
 
-fn project(corners: &Corners, ax: f64, az: f64) -> (f64, f64) {
+/// Transform local-space polygon vertices to world-space.
+pub fn transform_polygon(vertices: &[[f64; 2]], cx: f64, cz: f64, rot_rad: f64) -> Corners {
+    let cos_r = rot_rad.cos();
+    let sin_r = rot_rad.sin();
+    vertices
+        .iter()
+        .map(|&[vx, vz]| (cx + vx * cos_r - vz * sin_r, cz + vx * sin_r + vz * cos_r))
+        .collect()
+}
+
+/// Compute world-space corners for a shape, handling both rectangular and polygon shapes.
+pub fn shape_world_corners(shape: &GeometricShape, world: &Transform) -> Corners {
+    if let Some(ref vertices) = shape.vertices {
+        transform_polygon(
+            vertices,
+            world.x_inches,
+            world.z_inches,
+            world.rotation_deg.to_radians(),
+        )
+    } else {
+        obb_corners(
+            world.x_inches,
+            world.z_inches,
+            shape.width_inches / 2.0,
+            shape.depth_inches / 2.0,
+            world.rotation_deg.to_radians(),
+        )
+    }
+}
+
+fn project(corners: &[(f64, f64)], ax: f64, az: f64) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for &(cx, cz) in corners {
@@ -69,7 +101,7 @@ fn project(corners: &Corners, ax: f64, az: f64) -> (f64, f64) {
 
 /// True if the interiors of two OBBs overlap.
 /// Touching (shared edge or corner) is NOT counted as overlap.
-pub fn obbs_overlap(a: &Corners, b: &Corners) -> bool {
+pub fn obbs_overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
     for corners in [a, b] {
         // Only need 2 edge normals per rectangle (opposite
         // edges are parallel and give the same axis).
@@ -89,7 +121,7 @@ pub fn obbs_overlap(a: &Corners, b: &Corners) -> bool {
 }
 
 /// True if all corners are within (or on) the table edges.
-pub fn obb_in_bounds(corners: &Corners, table_width: f64, table_depth: f64) -> bool {
+pub fn obb_in_bounds(corners: &[(f64, f64)], table_width: f64, table_depth: f64) -> bool {
     let half_w = table_width / 2.0;
     let half_d = table_depth / 2.0;
     corners
@@ -334,14 +366,17 @@ pub fn polygons_overlap_aabb(poly_a: &[(f64, f64)], poly_b: &[(f64, f64)], aabb_
 ///
 /// Returns 0 if rectangles intersect or touch. Otherwise returns
 /// minimum distance between any corner and edge.
-pub fn obb_distance(corners_a: &Corners, corners_b: &Corners) -> f64 {
+pub fn obb_distance(corners_a: &[(f64, f64)], corners_b: &[(f64, f64)]) -> f64 {
+    let n_a = corners_a.len();
+    let n_b = corners_b.len();
+
     // Check edge intersections
-    for i in 0..4 {
+    for i in 0..n_a {
         let (ax1, az1) = corners_a[i];
-        let (ax2, az2) = corners_a[(i + 1) % 4];
-        for j in 0..4 {
+        let (ax2, az2) = corners_a[(i + 1) % n_a];
+        for j in 0..n_b {
             let (bx1, bz1) = corners_b[j];
-            let (bx2, bz2) = corners_b[(j + 1) % 4];
+            let (bx2, bz2) = corners_b[(j + 1) % n_b];
             if segments_intersect(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2) {
                 return 0.0;
             }
@@ -351,23 +386,21 @@ pub fn obb_distance(corners_a: &Corners, corners_b: &Corners) -> f64 {
     let mut min_dist_sq = f64::INFINITY;
 
     // Check corners of A against edges of B
-    for (corner_x, corner_z) in corners_a {
-        for i in 0..4 {
+    for &(corner_x, corner_z) in corners_a {
+        for i in 0..n_b {
             let (bx1, bz1) = corners_b[i];
-            let (bx2, bz2) = corners_b[(i + 1) % 4];
-            let dist_sq =
-                point_to_segment_distance_squared(*corner_x, *corner_z, bx1, bz1, bx2, bz2);
+            let (bx2, bz2) = corners_b[(i + 1) % n_b];
+            let dist_sq = point_to_segment_distance_squared(corner_x, corner_z, bx1, bz1, bx2, bz2);
             min_dist_sq = min_dist_sq.min(dist_sq);
         }
     }
 
     // Check corners of B against edges of A
-    for (corner_x, corner_z) in corners_b {
-        for i in 0..4 {
+    for &(corner_x, corner_z) in corners_b {
+        for i in 0..n_a {
             let (ax1, az1) = corners_a[i];
-            let (ax2, az2) = corners_a[(i + 1) % 4];
-            let dist_sq =
-                point_to_segment_distance_squared(*corner_x, *corner_z, ax1, az1, ax2, az2);
+            let (ax2, az2) = corners_a[(i + 1) % n_a];
+            let dist_sq = point_to_segment_distance_squared(corner_x, corner_z, ax1, az1, ax2, az2);
             min_dist_sq = min_dist_sq.min(dist_sq);
         }
     }
@@ -378,7 +411,11 @@ pub fn obb_distance(corners_a: &Corners, corners_b: &Corners) -> f64 {
 /// Compute minimum distance from OBB to nearest table edge.
 ///
 /// Returns 0 if any corner is outside or on table boundary.
-pub fn obb_to_table_edge_distance(corners: &Corners, table_width: f64, table_depth: f64) -> f64 {
+pub fn obb_to_table_edge_distance(
+    corners: &[(f64, f64)],
+    table_width: f64,
+    table_depth: f64,
+) -> f64 {
     let half_w = table_width / 2.0;
     let half_d = table_depth / 2.0;
 
@@ -425,20 +462,13 @@ pub fn get_world_obbs(
         for shape in &obj.shapes {
             let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
             let world = compose_transform(&compose_transform(shape_t, comp_t), &placed.transform);
-            let corners = obb_corners(
-                world.x_inches,
-                world.z_inches,
-                shape.width_inches / 2.0,
-                shape.depth_inches / 2.0,
-                world.rotation_deg.to_radians(),
-            );
-            result.push(corners);
+            result.push(shape_world_corners(shape, &world));
         }
     }
     result
 }
 
-/// Extract world-space OBB corners for shapes with height >= min_height.
+/// Extract world-space corners for shapes with height >= min_height.
 ///
 /// Similar to get_world_obbs() but filters by shape height.
 pub fn get_tall_world_obbs(
@@ -461,14 +491,7 @@ pub fn get_tall_world_obbs(
 
             let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
             let world = compose_transform(&compose_transform(shape_t, comp_t), &placed.transform);
-            let corners = obb_corners(
-                world.x_inches,
-                world.z_inches,
-                shape.width_inches / 2.0,
-                shape.depth_inches / 2.0,
-                world.rotation_deg.to_radians(),
-            );
-            result.push(corners);
+            result.push(shape_world_corners(shape, &world));
         }
     }
     result
@@ -522,11 +545,17 @@ pub fn is_valid_placement(
     }
 
     // 2. Check overlap with other features
+    // Use obbs_overlap for rect-vs-rect (touching = OK, backward compatible),
+    // polygons_overlap for any polygon involvement.
     for pf in &other_features {
         let other_obbs = get_world_obbs(pf, objects_by_id);
         for ca in &check_obbs {
             for cb in &other_obbs {
-                if obbs_overlap(ca, cb) {
+                if ca.len() == 4 && cb.len() == 4 {
+                    if obbs_overlap(ca, cb) {
+                        return false;
+                    }
+                } else if polygons_overlap(ca, cb) {
                     return false;
                 }
             }
@@ -828,6 +857,7 @@ mod tests {
                         height_inches: 0.5,
                         offset: None,
                         opacity_height_inches: None,
+                        vertices: None,
                     }],
                     name: None,
                     tags: vec![],
@@ -1027,6 +1057,7 @@ mod tests {
                         height_inches: 2.0,
                         offset: None,
                         opacity_height_inches: None,
+                        vertices: None,
                     }],
                     name: None,
                     tags: vec![],

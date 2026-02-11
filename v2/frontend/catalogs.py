@@ -17,8 +17,10 @@ Catalog contents:
     ruins). Fixed quantities matching the physical set.
   - "GW Misc": Games Workshop miscellaneous ruins (flat bases, L/U/J-shaped
     wall configurations on larger bases). Unlimited quantities.
-  - "Omnium Gatherum": Union of WTC + GW Misc, all unlimited.
+  - "Omnium Gatherum": Union of WTC + GW Misc + polygon terrain, all unlimited.
 """
+
+import math
 
 # ---------------------------------------------------------------------------
 # WTC terrain objects & features
@@ -398,6 +400,99 @@ GW_RUIN_L_6X5_FEATURE = {
 
 
 # ---------------------------------------------------------------------------
+# Polygon terrain objects & features
+# ---------------------------------------------------------------------------
+
+# Kidney-bean woods: ~8"x5" organic shape, flat (height=0)
+# Wide oval with a concave notch on the north (top) long side.
+# Traced clockwise from the right end.
+_KIDNEY_BEAN_VERTICES = [
+    # Right end
+    (4.0, 0.0),
+    (3.5, -1.2),
+    # Bottom (smooth convex curve)
+    (2.5, -2.0),
+    (1.0, -2.4),
+    (-1.0, -2.4),
+    (-2.5, -2.0),
+    (-3.5, -1.2),
+    # Left end
+    (-4.0, 0.0),
+    (-3.5, 1.2),
+    # Smooth top-left curve (gradual rise to broad peak)
+    (-2.8, 1.8),
+    (-2.2, 2.2),
+    (-1.6, 2.4),
+    # Wide notch descent
+    (-0.8, 1.8),
+    (-0.3, 1.2),
+    # Flat notch floor
+    (0.3, 1.2),
+    # Wide notch ascent
+    (0.8, 1.8),
+    # Smooth top-right curve (broad peak, gradual descent)
+    (1.6, 2.4),
+    (2.2, 2.2),
+    (2.8, 1.8),
+    (3.5, 1.2),
+]
+
+KIDNEY_BEAN_WOODS_OBJECT = {
+    "id": "kidney_bean_woods",
+    "name": "Kidney-Bean Woods",
+    "shapes": [
+        {
+            "shape_type": "polygon",
+            "vertices": _KIDNEY_BEAN_VERTICES,
+            "height_inches": 0.0,
+        }
+    ],
+    "tags": ["woods"],
+    "fill_color": "#4a8c3f",
+    "outline_color": "#000000",
+}
+
+KIDNEY_BEAN_WOODS_FEATURE = {
+    "id": "kidney_bean_woods",
+    "feature_type": "woods",
+    "components": [{"object_id": "kidney_bean_woods"}],
+    "tags": ["woods"],
+}
+
+# Circular industrial tank: 5" diameter, 5" tall, approximated as 24-gon
+_TANK_RADIUS = 2.5
+_TANK_VERTICES = [
+    (
+        round(_TANK_RADIUS * math.cos(2 * math.pi * i / 24), 4),
+        round(_TANK_RADIUS * math.sin(2 * math.pi * i / 24), 4),
+    )
+    for i in range(24)
+]
+
+INDUSTRIAL_TANK_OBJECT = {
+    "id": "industrial_tank",
+    "name": 'Industrial Tank (5" dia)',
+    "shapes": [
+        {
+            "shape_type": "polygon",
+            "vertices": _TANK_VERTICES,
+            "height_inches": 5.0,
+        }
+    ],
+    "tags": ["container"],
+    "fill_color": "#505050",
+    "outline_color": "#000000",
+}
+
+INDUSTRIAL_TANK_FEATURE = {
+    "id": "industrial_tank",
+    "feature_type": "obstacle",
+    "components": [{"object_id": "industrial_tank"}],
+    "tags": ["obstacle"],
+}
+
+
+# ---------------------------------------------------------------------------
 # Catalog assembly
 # ---------------------------------------------------------------------------
 
@@ -458,8 +553,22 @@ _GW_MISC = {
     ],
 }
 
+_POLYGON_TERRAIN = {
+    "name": "Polygon Terrain",
+    "objects": [
+        {"item": KIDNEY_BEAN_WOODS_OBJECT, "quantity": None},
+        {"item": INDUSTRIAL_TANK_OBJECT, "quantity": None},
+    ],
+    "features": [
+        {"item": KIDNEY_BEAN_WOODS_FEATURE, "quantity": None},
+        {"item": INDUSTRIAL_TANK_FEATURE, "quantity": None},
+    ],
+}
+
 TERRAIN_CATALOGS = {
-    "Omnium Gatherum": _merge_catalogs("Omnium Gatherum", _WTC_SET, _GW_MISC),
+    "Omnium Gatherum": _merge_catalogs(
+        "Omnium Gatherum", _WTC_SET, _GW_MISC, _POLYGON_TERRAIN
+    ),
     "WTC Set": _WTC_SET,
     "GW Misc": _GW_MISC,
 }

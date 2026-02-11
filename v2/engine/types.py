@@ -89,6 +89,7 @@ class Shape:
     height: float
     offset: Transform | None = None
     opacity_height_inches: float | None = None
+    vertices: list[tuple[float, float]] | None = None
 
     def effective_opacity_height(self) -> float:
         """Return the height used for LOS blocking.
@@ -104,21 +105,39 @@ class Shape:
     @staticmethod
     def from_dict(d: dict) -> Shape:
         offset_d = d.get("offset")
+        vertices: list[tuple[float, float]] | None = None
+        if d.get("shape_type") == "polygon":
+            raw = d["vertices"]
+            vertices = [(v[0], v[1]) for v in raw]
+            xs = [v[0] for v in vertices]
+            zs = [v[1] for v in vertices]
+            width = max(xs) - min(xs)
+            depth = max(zs) - min(zs)
+            height = d["height_inches"]
+        else:
+            width = d["width_inches"]
+            depth = d["depth_inches"]
+            height = d["height_inches"]
         return Shape(
-            width=d["width_inches"],
-            depth=d["depth_inches"],
-            height=d["height_inches"],
+            width=width,
+            depth=depth,
+            height=height,
             offset=(Transform.from_dict(offset_d) if offset_d else None),
             opacity_height_inches=d.get("opacity_height_inches"),
+            vertices=vertices,
         )
 
     def to_dict(self) -> dict:
         d: dict = {
-            "shape_type": "rectangular_prism",
             "width_inches": self.width,
             "depth_inches": self.depth,
             "height_inches": self.height,
         }
+        if self.vertices is not None:
+            d["shape_type"] = "polygon"
+            d["vertices"] = [[v[0], v[1]] for v in self.vertices]
+        else:
+            d["shape_type"] = "rectangular_prism"
         if self.offset:
             d["offset"] = self.offset.to_dict()
         if self.opacity_height_inches is not None:
