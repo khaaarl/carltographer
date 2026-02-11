@@ -210,7 +210,6 @@ def run_pyinstaller(site_packages: str, name: str) -> bool:
         "-m",
         "PyInstaller",
         "--onefile",
-        "--windowed",
         "--name",
         pyinstaller_name,
         "--paths",
@@ -231,8 +230,11 @@ def run_pyinstaller(site_packages: str, name: str) -> bool:
         str(V2_DIR / "build" / "pyinstaller"),
     ]
 
-    # --strip is only available on Unix
-    if not IS_WINDOWS:
+    if IS_WINDOWS:
+        # Suppress console window for GUI app
+        cmd.append("--windowed")
+    else:
+        # --strip is only available on Unix
         cmd.append("--strip")
 
     cmd.append(str(REPO_ROOT / "v2" / "packaging" / "entry_point.py"))
