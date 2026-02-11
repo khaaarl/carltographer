@@ -94,6 +94,7 @@
     "name": "WTC-style Catalog"
   },
   "num_steps": 50,
+  "num_replicas": 4,
   "scoring_targets": {
     "overall_visibility_target": 30.0,
     "overall_visibility_weight": 1.0,

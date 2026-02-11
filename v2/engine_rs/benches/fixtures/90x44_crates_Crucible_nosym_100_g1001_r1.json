@@ -35,6 +35,7 @@
     "name": "Crates Only"
   },
   "num_steps": 100,
+  "num_replicas": 1,
   "scoring_targets": {
     "overall_visibility_target": 30.0,
     "overall_visibility_weight": 1.0,

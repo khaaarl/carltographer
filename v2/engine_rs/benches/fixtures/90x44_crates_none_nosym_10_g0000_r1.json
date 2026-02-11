@@ -34,7 +34,8 @@
     ],
     "name": "Crates Only"
   },
-  "num_steps": 50,
+  "num_steps": 10,
+  "num_replicas": 1,
   "scoring_targets": {
     "overall_visibility_target": 30.0,
     "overall_visibility_weight": 1.0,
@@ -42,8 +43,5 @@
     "dz_hideability_weight": 5.0,
     "objective_hidability_target": 50.0,
     "objective_hidability_weight": 5.0
-  },
-  "min_feature_gap_inches": 5.2,
-  "min_edge_gap_inches": 5.2,
-  "min_all_edge_gap_inches": 3
+  }
 }

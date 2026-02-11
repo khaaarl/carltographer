@@ -2,7 +2,7 @@
 """Generate benchmark fixture JSON files for the Rust engine.
 
 Uses pairwise (all-pairs) testing to cover all 2-way parameter interactions
-with 28 test cases across 9 parameters:
+with 28 test cases across 10 parameters:
 
   - Table size: 44x30 (incursion), 60x44 (strike), 90x44 (onslaught)
   - Symmetry: off, on
@@ -13,12 +13,16 @@ with 28 test cases across 9 parameters:
   - min_edge_gap_inches: 0, 5.2
   - min_all_feature_gap_inches: 0, 3
   - min_all_edge_gap_inches: 0, 3
+  - Replicas: 1, 2, 4, 8
 
 All cases include scoring_targets matching the UI defaults:
   overall_visibility_target=30 (weight 1), dz_hideability_target=70 (weight 5),
   objective_hidability_target=50 (weight 5).
 
-Constraint: mission=none -> symmetry forced to off.
+Constraints:
+  - mission=none -> symmetry forced to off
+  - steps >= 50 OR table >= 60x44 -> replicas != 8
+  - steps >= 100 OR table >= 90x44 -> replicas != 4
 
 Run from v2/:
     python engine_rs/benches/generate_fixtures.py
@@ -212,52 +216,59 @@ def _build_mission_json(
 
 
 # ---------------------------------------------------------------------------
-# 28-case covering array (9 parameters, pairwise coverage)
+# 28-case covering array (10 parameters, pairwise coverage)
 # ---------------------------------------------------------------------------
 
 # Each tuple:
 #   (table_w, table_d, symmetric, mission_key, catalog_key, steps,
-#    min_feature_gap, min_edge_gap, min_all_feature_gap, min_all_edge_gap)
+#    min_feature_gap, min_edge_gap, min_all_feature_gap, min_all_edge_gap,
+#    num_replicas)
 #
 # Gap columns encode as binary flags in the benchmark name suffix "_gFEAA":
 #   F = min_feature_gap (0=off, 1=5.2")
 #   E = min_edge_gap (0=off, 1=5.2")
 #   A = min_all_feature_gap (0=off, 1=3")
 #   A = min_all_edge_gap (0=off, 1=3")
+#
+# Replica constraints:
+#   steps >= 50 OR table >= 60x44 -> no rep=8
+#   steps >= 100 OR table >= 90x44 -> no rep=4
 
-CaseRow = tuple[float, float, bool, str, str, int, float, float, float, float]
+CaseRow = tuple[
+    float, float, bool, str, str, int, float, float, float, float, int
+]
 
 COVERING_ARRAY: list[CaseRow] = [
     # fmt: off
-    #    tw  td   sym    mission     catalog  steps  fg   eg   afg  aeg
-    (44, 30, False, "none", "crates", 10, 0, 0, 0, 0),  # 01
-    (60, 44, False, "none", "wtc", 20, 5.2, 0, 3, 0),  # 02
-    (90, 44, False, "none", "crates", 50, 5.2, 5.2, 0, 3),  # 03
-    (44, 30, False, "none", "wtc", 100, 0, 5.2, 3, 3),  # 04
-    (60, 44, False, "HnA", "crates", 10, 5.2, 0, 0, 3),  # 05
-    (90, 44, True, "HnA", "wtc", 20, 0, 5.2, 0, 0),  # 06
-    (44, 30, False, "HnA", "wtc", 50, 0, 5.2, 3, 0),  # 07
-    (60, 44, True, "HnA", "crates", 100, 5.2, 0, 3, 3),  # 08
-    (90, 44, False, "DoW", "wtc", 10, 0, 5.2, 3, 0),  # 09
-    (44, 30, True, "DoW", "crates", 20, 5.2, 0, 0, 3),  # 10
-    (60, 44, False, "DoW", "crates", 50, 0, 0, 3, 3),  # 11
-    (90, 44, True, "DoW", "wtc", 100, 5.2, 5.2, 0, 0),  # 12
-    (44, 30, True, "TipPt", "wtc", 10, 5.2, 0, 3, 0),  # 13
-    (60, 44, False, "TipPt", "crates", 20, 0, 5.2, 0, 3),  # 14
-    (90, 44, True, "TipPt", "crates", 50, 5.2, 0, 0, 3),  # 15
-    (44, 30, False, "TipPt", "wtc", 100, 0, 5.2, 3, 0),  # 16
-    (60, 44, True, "SwpEng", "wtc", 10, 0, 5.2, 0, 3),  # 17
-    (90, 44, False, "SwpEng", "crates", 20, 5.2, 0, 3, 0),  # 18
-    (44, 30, True, "SwpEng", "crates", 50, 5.2, 5.2, 0, 3),  # 19
-    (60, 44, False, "SwpEng", "wtc", 100, 0, 0, 3, 0),  # 20
-    (90, 44, True, "Crucible", "crates", 10, 5.2, 0, 0, 0),  # 21
-    (44, 30, False, "Crucible", "wtc", 20, 0, 5.2, 3, 3),  # 22
-    (60, 44, True, "Crucible", "wtc", 50, 0, 5.2, 3, 0),  # 23
-    (90, 44, False, "Crucible", "crates", 100, 5.2, 0, 0, 3),  # 24
-    (44, 30, False, "SnD", "crates", 10, 0, 5.2, 3, 3),  # 25
-    (60, 44, True, "SnD", "wtc", 20, 5.2, 0, 0, 0),  # 26
-    (90, 44, False, "SnD", "wtc", 50, 0, 0, 3, 0),  # 27
-    (44, 30, True, "SnD", "crates", 100, 5.2, 5.2, 0, 3),  # 28
+    #    tw  td   sym    mission     catalog  steps  fg   eg   afg  aeg  rep
+    (90, 44, False, "none", "crates", 10, 0, 0, 0, 0, 1),  # 01
+    (44, 30, False, "none", "wtc", 20, 5.2, 0, 3, 0, 8),  # 02
+    (60, 44, False, "none", "crates", 50, 5.2, 5.2, 0, 3, 4),  # 03
+    (44, 30, False, "none", "wtc", 100, 0, 5.2, 3, 3, 2),  # 04
+    (44, 30, False, "HnA", "wtc", 10, 5.2, 0, 0, 3, 8),  # 05
+    (90, 44, True, "HnA", "crates", 20, 0, 5.2, 0, 0, 1),  # 06
+    (60, 44, False, "HnA", "wtc", 50, 0, 5.2, 3, 0, 4),  # 07
+    (60, 44, True, "HnA", "crates", 100, 5.2, 0, 3, 3, 2),  # 08
+    (44, 30, True, "DoW", "wtc", 10, 0, 5.2, 3, 0, 8),  # 09
+    (60, 44, False, "DoW", "crates", 20, 5.2, 0, 0, 3, 4),  # 10
+    (90, 44, True, "DoW", "crates", 50, 0, 0, 3, 3, 2),  # 11
+    (90, 44, False, "DoW", "wtc", 100, 5.2, 5.2, 0, 0, 1),  # 12
+    (60, 44, True, "TipPt", "wtc", 10, 5.2, 0, 3, 0, 2),  # 13
+    (44, 30, False, "TipPt", "crates", 20, 0, 5.2, 0, 3, 8),  # 14
+    (44, 30, True, "TipPt", "crates", 50, 5.2, 0, 0, 3, 4),  # 15
+    (90, 44, False, "TipPt", "wtc", 100, 0, 5.2, 3, 0, 1),  # 16
+    (60, 44, False, "SwpEng", "crates", 10, 0, 5.2, 0, 3, 4),  # 17
+    (44, 30, True, "SwpEng", "wtc", 20, 5.2, 0, 3, 0, 8),  # 18
+    (90, 44, False, "SwpEng", "crates", 50, 5.2, 5.2, 0, 3, 2),  # 19
+    (60, 44, True, "SwpEng", "wtc", 100, 0, 0, 3, 0, 1),  # 20
+    (44, 30, True, "Crucible", "crates", 10, 5.2, 0, 0, 0, 8),  # 21
+    (60, 44, False, "Crucible", "wtc", 20, 0, 5.2, 3, 3, 2),  # 22
+    (60, 44, True, "Crucible", "wtc", 50, 0, 5.2, 3, 0, 4),  # 23
+    (90, 44, False, "Crucible", "crates", 100, 5.2, 0, 0, 3, 1),  # 24
+    (60, 44, False, "SnD", "wtc", 10, 0, 5.2, 3, 3, 4),  # 25
+    (44, 30, True, "SnD", "crates", 20, 5.2, 0, 0, 0, 8),  # 26
+    (44, 30, False, "SnD", "wtc", 50, 0, 0, 3, 0, 1),  # 27
+    (90, 44, True, "SnD", "crates", 100, 5.2, 5.2, 0, 3, 2),  # 28
     # fmt: on
 ]
 
@@ -274,16 +285,28 @@ def _gap_code(fg: float, eg: float, afg: float, aeg: float) -> str:
 
 def _bench_name(row: CaseRow) -> str:
     """Generate a short, descriptive benchmark name."""
-    tw, td, sym, mission, catalog, steps, fg, eg, afg, aeg = row
+    tw, td, sym, mission, catalog, steps, fg, eg, afg, aeg, rep = row
     table = f"{int(tw)}x{int(td)}"
     sym_str = "sym" if sym else "nosym"
     gc = _gap_code(fg, eg, afg, aeg)
-    return f"{table}_{catalog}_{mission}_{sym_str}_{steps}_g{gc}"
+    return f"{table}_{catalog}_{mission}_{sym_str}_{steps}_g{gc}_r{rep}"
 
 
 def generate_fixture(row: CaseRow) -> dict[str, Any]:
     """Generate a single benchmark fixture as a JSON-compatible dict."""
-    tw, td, symmetric, mission_key, catalog_key, steps, fg, eg, afg, aeg = row
+    (
+        tw,
+        td,
+        symmetric,
+        mission_key,
+        catalog_key,
+        steps,
+        fg,
+        eg,
+        afg,
+        aeg,
+        rep,
+    ) = row
     catalog = CRATES_CATALOG if catalog_key == "crates" else WTC_CATALOG
 
     params: dict[str, Any] = {
@@ -292,6 +315,7 @@ def generate_fixture(row: CaseRow) -> dict[str, Any]:
         "table_depth_inches": td,
         "catalog": catalog,
         "num_steps": steps,
+        "num_replicas": rep,
         "scoring_targets": SCORING_TARGETS,
     }
 
@@ -326,6 +350,7 @@ def verify_pairwise_coverage() -> list[str]:
         "edge_gap",
         "all_feat_gap",
         "all_edge_gap",
+        "replicas",
     ]
 
     rows: list[list[Any]] = []
@@ -340,6 +365,7 @@ def verify_pairwise_coverage() -> list[str]:
         eg,
         afg,
         aeg,
+        rep,
     ) in COVERING_ARRAY:
         rows.append(
             [
@@ -352,12 +378,20 @@ def verify_pairwise_coverage() -> list[str]:
                 eg,
                 afg,
                 aeg,
+                rep,
             ]
         )
 
-    # Known intentional constraint: mission=none forces symmetry=off
+    # Known intentional constraints
     allowed_gaps = {
+        # mission=none forces symmetry=off
         ("sym", "mission"): {(True, "none")},
+        # steps >= 50 OR table >= 60x44 -> no rep=8
+        # steps >= 100 OR table >= 90x44 -> no rep=4
+        ("replicas", "table"): {(8, "60x44"), (8, "90x44"), (4, "90x44")},
+        ("table", "replicas"): {("60x44", 8), ("90x44", 8), ("90x44", 4)},
+        ("replicas", "steps"): {(8, 50), (8, 100), (4, 100)},
+        ("steps", "replicas"): {(50, 8), (100, 8), (100, 4)},
     }
 
     gaps: list[str] = []
@@ -391,7 +425,7 @@ def generate_readme() -> str:
         "",
         "Generated by `generate_fixtures.py`. Do not edit manually.",
         "",
-        "## Pairwise covering array (28 cases, 9 parameters)",
+        "## Pairwise covering array (28 cases, 10 parameters)",
         "",
         "Parameters:",
         "- **Table**: 44x30 (incursion), 60x44 (strike), 90x44 (onslaught)",
@@ -403,6 +437,12 @@ def generate_readme() -> str:
         '- **Edge gap**: 0 or 5.2" (min_edge_gap_inches)',
         '- **All-feature gap**: 0 or 3" (min_all_feature_gap_inches)',
         '- **All-edge gap**: 0 or 3" (min_all_edge_gap_inches)',
+        "- **Replicas**: 1, 2, 4, 8 (num_replicas for parallel tempering)",
+        "",
+        "Constraints:",
+        "- mission=none -> symmetry forced to off",
+        "- steps >= 50 OR table >= 60x44 -> replicas != 8",
+        "- steps >= 100 OR table >= 90x44 -> replicas != 4",
         "",
         "All cases use seed=42, visibility enabled, scoring_targets matching",
         "UI defaults (overall=30%/w1, dz_hide=70%/w5, obj_hide=50%/w5).",
@@ -412,20 +452,22 @@ def generate_readme() -> str:
         "  F=feature_gap, E=edge_gap, A=all_feature_gap, A=all_edge_gap",
         '  (0=off, 1=on: 5.2" for F/E, 3" for A/A)',
         "",
-        "| # | File | Table | Sym | Mission | Terrain | Steps | Gaps |",
-        "|---|------|-------|-----|---------|---------|-------|------|",
+        "Replica suffix `_rN` encodes num_replicas.",
+        "",
+        "| # | File | Table | Sym | Mission | Terrain | Steps | Gaps | Rep |",
+        "|---|------|-------|-----|---------|---------|-------|------|-----|",
     ]
 
     for i, row in enumerate(COVERING_ARRAY):
         num = i + 1
-        tw, td, sym, mission, catalog, steps, fg, eg, afg, aeg = row
+        tw, td, sym, mission, catalog, steps, fg, eg, afg, aeg, rep = row
         name = _bench_name(row)
         table = f"{int(tw)}x{int(td)}"
         sym_str = "on" if sym else "off"
         gc = _gap_code(fg, eg, afg, aeg)
         lines.append(
             f"| {num:02d} | `{name}.json` | {table} | {sym_str} "
-            f"| {mission} | {catalog} | {steps} | {gc} |"
+            f"| {mission} | {catalog} | {steps} | {gc} | {rep} |"
         )
 
     lines.append("")

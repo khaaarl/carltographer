@@ -1,8 +1,14 @@
 //! Criterion benchmarks for the Carltographer terrain generation engine.
 //!
-//! 28 cases from a pairwise (all-pairs) covering array over 9 parameters:
+//! 28 cases from a pairwise (all-pairs) covering array over 10 parameters:
 //!   Table size (3) × Symmetry (2) × Mission (7) × Terrain (2) × Steps (4)
 //!   × Feature gap (2) × Edge gap (2) × All-feature gap (2) × All-edge gap (2)
+//!   × Replicas (4: 1, 2, 4, 8)
+//!
+//! Constraints:
+//!   - mission=none → symmetry forced off
+//!   - steps >= 50 OR table >= 60×44 → replicas != 8
+//!   - steps >= 100 OR table >= 90×44 → replicas != 4
 //!
 //! JSON fixtures generated via:
 //!   `python engine_rs/benches/generate_fixtures.py` (from v2/)
@@ -27,155 +33,155 @@ macro_rules! bench_case {
 // -- 01-04: no mission (symmetry forced off) --
 bench_case!(
     bench_01,
-    "44x30_crates_none_nosym_10_g0000",
-    "fixtures/44x30_crates_none_nosym_10_g0000.json"
+    "90x44_crates_none_nosym_10_g0000_r1",
+    "fixtures/90x44_crates_none_nosym_10_g0000_r1.json"
 );
 bench_case!(
     bench_02,
-    "60x44_wtc_none_nosym_20_g1010",
-    "fixtures/60x44_wtc_none_nosym_20_g1010.json"
+    "44x30_wtc_none_nosym_20_g1010_r8",
+    "fixtures/44x30_wtc_none_nosym_20_g1010_r8.json"
 );
 bench_case!(
     bench_03,
-    "90x44_crates_none_nosym_50_g1101",
-    "fixtures/90x44_crates_none_nosym_50_g1101.json"
+    "60x44_crates_none_nosym_50_g1101_r4",
+    "fixtures/60x44_crates_none_nosym_50_g1101_r4.json"
 );
 bench_case!(
     bench_04,
-    "44x30_wtc_none_nosym_100_g0111",
-    "fixtures/44x30_wtc_none_nosym_100_g0111.json"
+    "44x30_wtc_none_nosym_100_g0111_r2",
+    "fixtures/44x30_wtc_none_nosym_100_g0111_r2.json"
 );
 
 // -- 05-08: Hammer and Anvil --
 bench_case!(
     bench_05,
-    "60x44_crates_HnA_nosym_10_g1001",
-    "fixtures/60x44_crates_HnA_nosym_10_g1001.json"
+    "44x30_wtc_HnA_nosym_10_g1001_r8",
+    "fixtures/44x30_wtc_HnA_nosym_10_g1001_r8.json"
 );
 bench_case!(
     bench_06,
-    "90x44_wtc_HnA_sym_20_g0100",
-    "fixtures/90x44_wtc_HnA_sym_20_g0100.json"
+    "90x44_crates_HnA_sym_20_g0100_r1",
+    "fixtures/90x44_crates_HnA_sym_20_g0100_r1.json"
 );
 bench_case!(
     bench_07,
-    "44x30_wtc_HnA_nosym_50_g0110",
-    "fixtures/44x30_wtc_HnA_nosym_50_g0110.json"
+    "60x44_wtc_HnA_nosym_50_g0110_r4",
+    "fixtures/60x44_wtc_HnA_nosym_50_g0110_r4.json"
 );
 bench_case!(
     bench_08,
-    "60x44_crates_HnA_sym_100_g1011",
-    "fixtures/60x44_crates_HnA_sym_100_g1011.json"
+    "60x44_crates_HnA_sym_100_g1011_r2",
+    "fixtures/60x44_crates_HnA_sym_100_g1011_r2.json"
 );
 
 // -- 09-12: Dawn of War --
 bench_case!(
     bench_09,
-    "90x44_wtc_DoW_nosym_10_g0110",
-    "fixtures/90x44_wtc_DoW_nosym_10_g0110.json"
+    "44x30_wtc_DoW_sym_10_g0110_r8",
+    "fixtures/44x30_wtc_DoW_sym_10_g0110_r8.json"
 );
 bench_case!(
     bench_10,
-    "44x30_crates_DoW_sym_20_g1001",
-    "fixtures/44x30_crates_DoW_sym_20_g1001.json"
+    "60x44_crates_DoW_nosym_20_g1001_r4",
+    "fixtures/60x44_crates_DoW_nosym_20_g1001_r4.json"
 );
 bench_case!(
     bench_11,
-    "60x44_crates_DoW_nosym_50_g0011",
-    "fixtures/60x44_crates_DoW_nosym_50_g0011.json"
+    "90x44_crates_DoW_sym_50_g0011_r2",
+    "fixtures/90x44_crates_DoW_sym_50_g0011_r2.json"
 );
 bench_case!(
     bench_12,
-    "90x44_wtc_DoW_sym_100_g1100",
-    "fixtures/90x44_wtc_DoW_sym_100_g1100.json"
+    "90x44_wtc_DoW_nosym_100_g1100_r1",
+    "fixtures/90x44_wtc_DoW_nosym_100_g1100_r1.json"
 );
 
 // -- 13-16: Tipping Point --
 bench_case!(
     bench_13,
-    "44x30_wtc_TipPt_sym_10_g1010",
-    "fixtures/44x30_wtc_TipPt_sym_10_g1010.json"
+    "60x44_wtc_TipPt_sym_10_g1010_r2",
+    "fixtures/60x44_wtc_TipPt_sym_10_g1010_r2.json"
 );
 bench_case!(
     bench_14,
-    "60x44_crates_TipPt_nosym_20_g0101",
-    "fixtures/60x44_crates_TipPt_nosym_20_g0101.json"
+    "44x30_crates_TipPt_nosym_20_g0101_r8",
+    "fixtures/44x30_crates_TipPt_nosym_20_g0101_r8.json"
 );
 bench_case!(
     bench_15,
-    "90x44_crates_TipPt_sym_50_g1001",
-    "fixtures/90x44_crates_TipPt_sym_50_g1001.json"
+    "44x30_crates_TipPt_sym_50_g1001_r4",
+    "fixtures/44x30_crates_TipPt_sym_50_g1001_r4.json"
 );
 bench_case!(
     bench_16,
-    "44x30_wtc_TipPt_nosym_100_g0110",
-    "fixtures/44x30_wtc_TipPt_nosym_100_g0110.json"
+    "90x44_wtc_TipPt_nosym_100_g0110_r1",
+    "fixtures/90x44_wtc_TipPt_nosym_100_g0110_r1.json"
 );
 
 // -- 17-20: Sweeping Engagement --
 bench_case!(
     bench_17,
-    "60x44_wtc_SwpEng_sym_10_g0101",
-    "fixtures/60x44_wtc_SwpEng_sym_10_g0101.json"
+    "60x44_crates_SwpEng_nosym_10_g0101_r4",
+    "fixtures/60x44_crates_SwpEng_nosym_10_g0101_r4.json"
 );
 bench_case!(
     bench_18,
-    "90x44_crates_SwpEng_nosym_20_g1010",
-    "fixtures/90x44_crates_SwpEng_nosym_20_g1010.json"
+    "44x30_wtc_SwpEng_sym_20_g1010_r8",
+    "fixtures/44x30_wtc_SwpEng_sym_20_g1010_r8.json"
 );
 bench_case!(
     bench_19,
-    "44x30_crates_SwpEng_sym_50_g1101",
-    "fixtures/44x30_crates_SwpEng_sym_50_g1101.json"
+    "90x44_crates_SwpEng_nosym_50_g1101_r2",
+    "fixtures/90x44_crates_SwpEng_nosym_50_g1101_r2.json"
 );
 bench_case!(
     bench_20,
-    "60x44_wtc_SwpEng_nosym_100_g0010",
-    "fixtures/60x44_wtc_SwpEng_nosym_100_g0010.json"
+    "60x44_wtc_SwpEng_sym_100_g0010_r1",
+    "fixtures/60x44_wtc_SwpEng_sym_100_g0010_r1.json"
 );
 
 // -- 21-24: Crucible of Battle --
 bench_case!(
     bench_21,
-    "90x44_crates_Crucible_sym_10_g1000",
-    "fixtures/90x44_crates_Crucible_sym_10_g1000.json"
+    "44x30_crates_Crucible_sym_10_g1000_r8",
+    "fixtures/44x30_crates_Crucible_sym_10_g1000_r8.json"
 );
 bench_case!(
     bench_22,
-    "44x30_wtc_Crucible_nosym_20_g0111",
-    "fixtures/44x30_wtc_Crucible_nosym_20_g0111.json"
+    "60x44_wtc_Crucible_nosym_20_g0111_r2",
+    "fixtures/60x44_wtc_Crucible_nosym_20_g0111_r2.json"
 );
 bench_case!(
     bench_23,
-    "60x44_wtc_Crucible_sym_50_g0110",
-    "fixtures/60x44_wtc_Crucible_sym_50_g0110.json"
+    "60x44_wtc_Crucible_sym_50_g0110_r4",
+    "fixtures/60x44_wtc_Crucible_sym_50_g0110_r4.json"
 );
 bench_case!(
     bench_24,
-    "90x44_crates_Crucible_nosym_100_g1001",
-    "fixtures/90x44_crates_Crucible_nosym_100_g1001.json"
+    "90x44_crates_Crucible_nosym_100_g1001_r1",
+    "fixtures/90x44_crates_Crucible_nosym_100_g1001_r1.json"
 );
 
 // -- 25-28: Search and Destroy --
 bench_case!(
     bench_25,
-    "44x30_crates_SnD_nosym_10_g0111",
-    "fixtures/44x30_crates_SnD_nosym_10_g0111.json"
+    "60x44_wtc_SnD_nosym_10_g0111_r4",
+    "fixtures/60x44_wtc_SnD_nosym_10_g0111_r4.json"
 );
 bench_case!(
     bench_26,
-    "60x44_wtc_SnD_sym_20_g1000",
-    "fixtures/60x44_wtc_SnD_sym_20_g1000.json"
+    "44x30_crates_SnD_sym_20_g1000_r8",
+    "fixtures/44x30_crates_SnD_sym_20_g1000_r8.json"
 );
 bench_case!(
     bench_27,
-    "90x44_wtc_SnD_nosym_50_g0010",
-    "fixtures/90x44_wtc_SnD_nosym_50_g0010.json"
+    "44x30_wtc_SnD_nosym_50_g0010_r1",
+    "fixtures/44x30_wtc_SnD_nosym_50_g0010_r1.json"
 );
 bench_case!(
     bench_28,
-    "44x30_crates_SnD_sym_100_g1101",
-    "fixtures/44x30_crates_SnD_sym_100_g1101.json"
+    "90x44_crates_SnD_sym_100_g1101_r2",
+    "fixtures/90x44_crates_SnD_sym_100_g1101_r2.json"
 );
 
 fn config() -> Criterion {
