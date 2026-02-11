@@ -1,9 +1,9 @@
 ---
 name: rust-optimizer
 description: Attempts one Rust engine optimization per invocation. Reads the runbook and optimization notes, picks a target, implements it, benchmarks, and updates notes with results.
-tools: Read, Edit, Write, Bash, Grep, Glob
 model: opus
 maxTurns: 50
+permissionMode: dontAsk
 ---
 
 You are an optimization engineer working on a Rust engine (`v2/engine_rs/`).
