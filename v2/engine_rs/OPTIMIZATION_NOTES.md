@@ -260,6 +260,11 @@ Replace atan2 with a cheap pseudoangle function `p = dx / (|dx| + |dz|)` that ma
 
 **Result**: Mixed. Helped visibility_50 (-19%) and visibility_100 (-14%), but mission_hna regressed (+12%). The pseudoangle maps non-linearly to real angles, causing uneven bucket distribution. Buckets near the cardinal axes become wider (more segments), creating load imbalance. **Worth retrying with a clean machine.**
 
+### OBB caching in is_valid_placement (4a)
+Compute OBBs with height info once per feature via `get_world_obbs_with_height()` returning `Vec<(Corners, f64)>`, then reuse for overlap, all-feature-gap, tall-edge-gap, and tall-feature-gap checks. Also avoids cloning `PlacedFeature` structs into the `other_features` Vec by computing mirror OBBs directly via `get_mirror_obbs_with_height()`.
+
+**Result**: No improvement. All 28 benchmarks within noise (+-2%). The reason: with typical layouts of 5-15 features (each having 1-3 shapes), the redundant OBB computation amounts to maybe 30-90 extra transform/trig operations per `is_valid_placement` call. This is negligible compared to the visibility computation that dominates total runtime. Additionally, `is_valid_placement` frequently early-exits on the overlap check (step 2) before reaching the gap checks (steps 2c, 3, 4) where the redundancy is worst, further limiting the potential savings. Not worth retrying -- the OBB path is simply not a bottleneck.
+
 ## Profiling Results
 
 ### Historical — pre-polygon-intersection (no longer current)
@@ -339,8 +344,8 @@ With typical objective circles (~40-80 sample points per objective, 5 objectives
 
 ### Tier 4: Collision / mutation path (affects all workloads)
 
-#### 4a. Redundant OBB computation in is_valid_placement
-`get_world_obbs()` and `get_tall_world_obbs()` are called multiple times for the *same* features during a single `is_valid_placement()` call. Computing OBBs once per feature and filtering by height would eliminate redundant trig and allocation.
+#### ~~4a. Redundant OBB computation in is_valid_placement~~ (ABANDONED — see "Attempted But Abandoned")
+Tested: no measurable improvement. OBB path is not a bottleneck (5-15 features * 1-3 shapes, early exit on overlap).
 
 #### 4b. Mirror feature cloning in hot paths
 Mirror features for rotationally symmetric layouts are cloned into a fresh Vec on every call. Could precompute mirrors once per step, or use lazy iterator adapters.
@@ -361,6 +366,7 @@ Only recompute observers affected by a mutation. Extremely complex, especially w
 ### Recommended next steps
 
 1. **Re-profile** to see the new bottleneck distribution post-FxHash. The endpoint dedup is now much faster, so `compute_visibility_polygon`'s raycasting inner loop and atan2/trig calls are likely more dominant.
-2. **Try 2a (pseudoangle hybrid)** — if raycasting is now dominant, replacing atan2 for sort-key computation addresses the hottest remaining path.
-3. **4a (OBB caching)** — clean code improvement with potential benefit for mutation-heavy workloads.
-4. **Also consider**: FxHash could be applied to `objects_by_id: HashMap<String, ...>` (String keys), though this is built once per layout and unlikely to be a bottleneck.
+2. **Try 2a (pseudoangle hybrid)** — if raycasting is now dominant, replacing atan2 for sort-key computation addresses the hottest remaining path. Use pseudoangle for sort keys only, keep atan2 for bucket assignment (uniform distribution).
+3. **Also consider**: FxHash could be applied to `objects_by_id: HashMap<String, ...>` (String keys), though this is built once per layout and unlikely to be a bottleneck.
+
+**Note**: 4a (OBB caching) was tested and found to be negligible -- the collision/mutation path is not a bottleneck. Remaining optimization potential is primarily in the visibility system (raycasting, polygon tests).

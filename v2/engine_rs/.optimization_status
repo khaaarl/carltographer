@@ -1,1 +1,1 @@
-continue: FxHash for endpoint dedup succeeded (5-21% across all benchmarks). Try 2a (pseudoangle hybrid) or re-profile to find next bottleneck.
+continue: 4a (OBB caching) abandoned -- no measurable improvement. Try re-profiling or 2a (pseudoangle hybrid for sort keys) next.
