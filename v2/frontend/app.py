@@ -36,6 +36,7 @@ import os
 import random
 import time
 import tkinter as tk
+import traceback
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
@@ -1306,6 +1307,7 @@ class App:
         self.root.geometry("1400x750")
         self.root.resizable(True, True)
         self.root.configure(bg=CANVAS_BG)
+        self.root.report_callback_exception = self._on_tk_error
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -3020,6 +3022,17 @@ class App:
         self.visibility_label.config(text="Visibility: --")
         self.dz_hide_label.config(text="")
         self.obj_hide_label.config(text="")
+
+    def _on_tk_error(self, exc_type, exc_value, exc_tb):
+        """Show tkinter callback exceptions in a dialog instead of stderr.
+
+        Without this, exceptions in button callbacks are silently lost when
+        stderr is unavailable (e.g. PyInstaller --windowed on Windows).
+        """
+        tb_text = "".join(
+            traceback.format_exception(exc_type, exc_value, exc_tb)
+        )
+        messagebox.showerror("Error", tb_text)
 
     def run(self):
         self.root.mainloop()
