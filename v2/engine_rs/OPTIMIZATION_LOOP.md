@@ -31,7 +31,7 @@ You are attempting **one** optimization to the Rust engine in `v2/engine_rs/`. Y
 Before changing any code, establish the current baseline:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench
+cd v2/engine_rs && cargo bench
 ```
 
 Record the numbers for the key benchmarks. The main ones (as of writing):
@@ -47,8 +47,8 @@ If you want to profile to find bottlenecks, `cargo bench` output plus any instru
 
 For saving benchmark output or scratch data, use `.tmp/` in the repo root (gitignored):
 ```bash
-mkdir -p "$(git rev-parse --show-toplevel)"/.tmp
-cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench 2>&1 > "$(git rev-parse --show-toplevel)"/.tmp/bench_baseline.txt
+mkdir -p .tmp
+cd v2/engine_rs && cargo bench 2>&1 > ../../.tmp/bench_baseline.txt
 ```
 Do NOT use `/tmp`.
 
@@ -58,24 +58,24 @@ Do NOT use `/tmp`.
 
 2. **Run `cargo fmt`:**
    ```bash
-   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo fmt
+   cd v2/engine_rs && cargo fmt
    ```
 
 3. **Run Rust tests:**
    ```bash
-   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test
+   cd v2/engine_rs && cargo test
    ```
    All tests must pass. If they don't, fix the issue or abandon the attempt.
 
 4. **Run parity tests** to verify the optimization doesn't change engine output:
    ```bash
-   cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
+   source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py
    ```
    This builds the Rust engine and runs all parity comparison tests. ALL scenarios must pass. If any fail, the optimization changes engine behavior and must be fixed or abandoned.
 
 5. **Run benchmarks:**
    ```bash
-   cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo bench
+   cd v2/engine_rs && cargo bench
    ```
    Compare against the baseline from Phase 2.
 
@@ -97,7 +97,7 @@ Do NOT use `/tmp`.
 
 **FAILURE (still valuable).** Revert the code changes:
 ```bash
-cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && git checkout -- src/
+cd v2/engine_rs && git checkout -- src/
 ```
 
 Update `OPTIMIZATION_NOTES.md`:
@@ -141,7 +141,7 @@ stop: <reason>
 Stage and commit everything (notes + status file + any code changes for successful optimizations):
 
 ```bash
-cd "$(git rev-parse --show-toplevel)"/v2
+cd v2
 git add engine_rs/OPTIMIZATION_NOTES.md engine_rs/.optimization_status
 # If optimization was successful, also add the changed source files:
 git add engine_rs/src/ engine_rs/benches/

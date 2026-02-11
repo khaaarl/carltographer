@@ -23,13 +23,13 @@ Your job is to attempt **one single optimization** per invocation.
 
 ## Key Constraints
 
-- **Working directory drift**: The Bash tool's working directory persists between calls. After `cd v2/engine_rs && cargo test`, you're stuck in `v2/engine_rs/` and relative paths like `source v2/.env/bin/activate` will fail. **Always prefix commands with `cd "$(git rev-parse --show-toplevel)"` to reset to the repo root.** Examples:
-  - Python: `cd "$(git rev-parse --show-toplevel)" && source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py`
-  - Cargo: `cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo test`
-- For any temporary/scratch files (benchmark output, profiling data, etc.), use `.tmp/` in the repo root: `mkdir -p "$(git rev-parse --show-toplevel)"/.tmp` then write there. Do NOT use `/tmp`.
+- **Working directory**: The repo's settings set `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1`, which resets the working directory to the project root before every Bash call. Write commands relative to the repo root:
+  - Python: `source v2/.env/bin/activate && cd v2 && python scripts/build_rust_engine.py`
+  - Cargo: `cd v2/engine_rs && cargo test`
+- For any temporary/scratch files (benchmark output, profiling data, etc.), use `.tmp/` in the repo root: `mkdir -p .tmp` then write there. Do NOT use `/tmp`.
 - You must NOT break parity with the Python engine. Run parity tests after any change.
 - You must NOT modify the Python engine. Rust-only optimizations that preserve identical output.
 - One optimization attempt per invocation. Do not chain multiple attempts.
 - Always update OPTIMIZATION_NOTES.md and .optimization_status before finishing.
 - Always commit your changes (both success and failure are committed — the notes update is valuable either way).
-- Run formatters after Rust changes: `cd "$(git rev-parse --show-toplevel)"/v2/engine_rs && cargo fmt`
+- Run formatters after Rust changes: `cd v2/engine_rs && cargo fmt`
