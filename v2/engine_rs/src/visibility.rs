@@ -424,8 +424,13 @@ fn compute_visibility_polygon(
         let dz = ez - oz;
         let angle = dz.atan2(dx);
         let len = (dx * dx + dz * dz).sqrt();
-        let ndx = dx / len;
-        let ndz = dz / len;
+        // Guard against observer exactly on an endpoint (len ≈ 0).
+        // Match Python: np.where(dist > 1e-12, dx/dist, cos(angle))
+        let (ndx, ndz) = if len > 1e-12 {
+            (dx / len, dz / len)
+        } else {
+            (angle.cos(), angle.sin())
+        };
         // -eps ray via sin_cos (shares range reduction; bit-identical
         // to separate sin()/cos() calls on the same platform)
         let a_neg = angle - eps;
@@ -442,8 +447,7 @@ fn compute_visibility_polygon(
     }
 
     // Sort rays by angle (unstable sort is fine — duplicate angles have no meaningful order)
-    bufs.rays
-        .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    bufs.rays.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
 
     // Build flattened segment array and assign to angular buckets.
     // Each segment goes in all buckets overlapping its angular extent
@@ -684,7 +688,7 @@ impl DzSortedSamples {
             .enumerate()
             .map(|(i, &(x, z))| (z, x, i as u32))
             .collect();
-        sorted.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        sorted.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         Self {
             count: points.len(),
             sorted,
