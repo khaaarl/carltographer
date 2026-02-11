@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from .types import PlacedFeature, Shape, TerrainObject, Transform
 
 Corners = list[tuple[float, float]]
@@ -536,19 +538,49 @@ def polygons_overlap(
     if n_a < 3 or n_b < 3:
         return False
 
-    # 1. Edge-edge intersection
+    # AABB early-exit: skip expensive edge tests for distant polygons
+    a_xs = [p[0] for p in poly_a]
+    a_zs = [p[1] for p in poly_a]
+    b_xs = [p[0] for p in poly_b]
+    b_zs = [p[1] for p in poly_b]
+    if (
+        max(a_xs) < min(b_xs)
+        or max(b_xs) < min(a_xs)
+        or max(a_zs) < min(b_zs)
+        or max(b_zs) < min(a_zs)
+    ):
+        return False
+
+    # 1. Vectorized edge-edge intersection
+    # Build edge arrays: each edge is (x1, z1, x2, z2)
+    edges_a = np.empty((n_a, 4), dtype=np.float64)
     for i in range(n_a):
         j = (i + 1) % n_a
-        ax1, az1 = poly_a[i]
-        ax2, az2 = poly_a[j]
-        for k in range(n_b):
-            m = (k + 1) % n_b
-            bx1, bz1 = poly_b[k]
-            bx2, bz2 = poly_b[m]
-            if segments_intersect_inclusive(
-                ax1, az1, ax2, az2, bx1, bz1, bx2, bz2
-            ):
-                return True
+        edges_a[i] = (*poly_a[i], *poly_a[j])
+    edges_b = np.empty((n_b, 4), dtype=np.float64)
+    for i in range(n_b):
+        j = (i + 1) % n_b
+        edges_b[i] = (*poly_b[i], *poly_b[j])
+
+    # Broadcast: (E_a, 1, 4) vs (1, E_b, 4) → cross products over all pairs
+    ax1 = edges_a[:, 0:1]  # (E_a, 1)
+    az1 = edges_a[:, 1:2]
+    ax2 = edges_a[:, 2:3]
+    az2 = edges_a[:, 3:4]
+    bx1 = edges_b[:, 0:1].T  # (1, E_b)
+    bz1 = edges_b[:, 1:2].T
+    bx2 = edges_b[:, 2:3].T
+    bz2 = edges_b[:, 3:4].T
+
+    denom = (bz2 - bz1) * (ax2 - ax1) - (bx2 - bx1) * (az2 - az1)
+    # Avoid division by zero for parallel segments
+    non_parallel = denom != 0.0
+    safe_denom = np.where(non_parallel, denom, 1.0)
+    ua = ((bx2 - bx1) * (az1 - bz1) - (bz2 - bz1) * (ax1 - bx1)) / safe_denom
+    ub = ((ax2 - ax1) * (az1 - bz1) - (az2 - az1) * (ax1 - bx1)) / safe_denom
+    hits = non_parallel & (ua >= 0) & (ua <= 1) & (ub >= 0) & (ub <= 1)
+    if np.any(hits):
+        return True
 
     # 2. Any vertex of A inside B
     for px, pz in poly_a:

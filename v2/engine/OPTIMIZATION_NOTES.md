@@ -1,6 +1,6 @@
 # Python Engine Optimization Notes
 
-Status: **initial profiling complete** — no optimizations attempted yet
+Status: **3 optimizations committed** — ~10% serial parity suite speedup
 
 ## Context
 
@@ -8,7 +8,7 @@ The Python engine is the reference implementation for terrain layout generation.
 
 The primary motivation for Python engine optimization is **parity test throughput**. The parity test suite (46 scenarios as of February 2026) runs both Python and Rust engines and compares output. The Rust engine is ~10x faster, so the Python engine dominates total test time. As more scenarios are added, this becomes the bottleneck.
 
-Current parity suite runtime: **~30-36s** (46 scenarios, serial execution).
+Current parity suite runtime: **~27s** (46 scenarios, serial execution). Was ~30s before optimizations.
 
 ### Key constraint: determinism and Rust parity
 
@@ -80,53 +80,12 @@ The Python engine uses NumPy vectorization instead — different approach to the
 
 ### Tier 1: Reduce NumPy call overhead in visibility
 
-#### 1a. Eliminate `np.any()` guard in `_vectorized_pip_mask`
-The inner loop (per-edge) does:
-```python
-crosses = (zi > pts_z) != (zj > pts_z)
-if np.any(crosses):
-    # vectorized intersection computation
-```
-The `np.any(crosses)` guard skips edges that don't cross any sample point's Z-coordinate. But with ~600K calls, the guard's Python→C dispatch cost (~1.5μs each) may exceed the savings from skipping. Removing the guard and always computing the vectorized result trades redundant arithmetic (fast in C) for eliminated call overhead (slow in Python).
-
-**Complexity**: Very low (delete 2 lines, adjust indentation).
-**Expected gain**: Up to ~15% on visibility-heavy scenarios (eliminates ~600K `np.any` calls).
-**Parity risk**: None — same math, same results, just skips a branch.
-
 #### 1b. Reduce `numpy.array` construction in hot loops
 7,648 `numpy.array()` calls in the polygon scenario. Some may be constructing small arrays per-observer that could be pre-allocated and reused via slice assignment.
 
 **Complexity**: Low-medium (need to identify which calls are per-observer vs one-time).
 **Expected gain**: 2-5%.
 **Parity risk**: None.
-
-### Tier 2: Vectorize collision for polygon shapes
-
-#### 2a. Batch `segments_intersect_inclusive` via NumPy
-`polygons_overlap` calls `segments_intersect_inclusive` in a nested Python loop — O(E_a × E_b) calls. For a 24-gon vs 4-rect, that's 96 calls; for 24-gon vs 24-gon, 576 calls. The intersection test is 4 cross products + comparisons — straightforward to vectorize:
-
-```python
-# Instead of:
-for (ax1,az1),(ax2,az2) in edges_a:
-    for (bx1,bz1),(bx2,bz2) in edges_b:
-        if segments_intersect_inclusive(ax1,az1,ax2,az2,bx1,bz1,bx2,bz2):
-            return True
-
-# Vectorize as:
-# edges_a: (E_a, 2, 2), edges_b: (E_b, 2, 2)
-# Broadcast cross products over all E_a × E_b pairs at once
-```
-
-**Complexity**: Medium (need to restructure `polygons_overlap` to build edge arrays, implement vectorized cross products, handle early-exit semantics).
-**Expected gain**: 30-50% on polygon collision scenarios (eliminates 2.4M Python function calls).
-**Parity risk**: Low — cross products are simple arithmetic with identical operation order. But must verify that NumPy broadcasting produces the same FP results as scalar Python (it should, since the operations are identical per-element).
-
-#### 2b. AABB early-exit for terrain-vs-terrain polygon overlap
-Same idea as Rust opt #8 — compute axis-aligned bounding boxes for placed features and skip `polygons_overlap` when AABBs don't overlap. Cheap to compute (min/max of vertices), eliminates expensive O(E²) tests for distant features.
-
-**Complexity**: Low (add 4 comparisons before `polygons_overlap` call).
-**Expected gain**: Variable — depends on feature density. Most impactful on large tables with many features.
-**Parity risk**: None (early-exit on a condition that guarantees no overlap).
 
 ### Tier 3: Visibility micro-optimizations
 
@@ -142,7 +101,7 @@ Same idea as Rust opt #8 — compute axis-aligned bounding boxes for placed feat
 
 **Complexity**: Low.
 **Expected gain**: ~1% (area computation is only 1.5% of total time).
-**Parity risk**: Medium — accumulating the sum incrementally may produce different FP results than the vectorized numpy computation. Would need parity verification.
+**Parity risk**: Medium — accumulating the sum incrementally may produce different FP results than the sequential Python loop. Would need parity verification.
 
 ### Tier 4: Algorithmic changes (higher complexity)
 
@@ -153,13 +112,6 @@ The Rust engine partitions segments into angular buckets so each ray only tests 
 **Expected gain**: Uncertain — NumPy broadcasting may already be faster than Python-level bucketing with its attendant overhead.
 **Parity risk**: None (same rays, same segments, same intersections — just processed in different order internally).
 
-#### 4b. Cython compilation of `segments_intersect_inclusive`
-Compile the hot pure-Python function to C via Cython. This eliminates Python interpreter overhead for the 2.4M calls in polygon scenarios.
-
-**Complexity**: Medium (need Cython build infrastructure, `.pyx` file, `setup.py` changes).
-**Expected gain**: ~5-7% overall (function is 7% of total time; Cython typically 10-50x faster for tight numeric loops, but we'd also eliminate call overhead).
-**Parity risk**: None (same arithmetic).
-
 ## Committed Optimizations
 
 ### 0a. Parallel parity test runner
@@ -167,13 +119,53 @@ Added `-j`/`--parallel` flag to `engine_cmp/compare.py` using `ProcessPoolExecut
 
 **Result**: 46 scenarios serial ~31s → parallel ~12s wall-clock (2.5x speedup on 11-core machine).
 
+### 1a-revised. Scalar z-range guard in `_vectorized_pip_mask`
+Replaced `np.any(crosses)` with a pure-Python scalar comparison: precompute `pts_z_min/max`, then check if the edge's z-range overlaps before computing the crossing mask. Same skip semantics as `np.any(crosses)`, but avoids ~600K numpy dispatch calls per visibility computation.
+
+**Note**: The original 1a idea (simply removing the `np.any()` guard) was a **30% regression** — the guard saves far more `np.where` computation than the dispatch costs. The scalar z-range check preserves the skip benefit while eliminating the numpy overhead.
+
+**Result**: ~10-25% speedup on visibility-heavy scenarios.
+
+| Scenario | Before | After | Speedup |
+|---|---|---|---|
+| `scoring_targets_with_mission` | 2.35s | 1.79s | **24%** |
+| `infantry_vis_dual_pass` | 1.07s | 0.69s | **36%** |
+| `infantry_vis_no_intermediate` | 0.47s | 0.28s | **40%** |
+| `polygon_symmetric` | 7.43s | 5.88s | **21%** |
+| `polygon_only_generation` | 3.14s | 2.35s | **25%** |
+
+### 2a. Vectorized edge-edge intersection in `polygons_overlap`
+Replaced the nested Python loop calling `segments_intersect_inclusive` O(E_a × E_b) times with NumPy broadcasting. Edge arrays are built as (E, 4) numpy arrays, and all cross products are computed in one broadcast operation.
+
+**Result**: Marginal overall (polygon collision is dominated by AABB early-exit), but eliminates worst-case degradation for overlapping polygons.
+
+### 2b. AABB early-exit in `polygons_overlap`
+Added axis-aligned bounding box check before the expensive edge-intersection and vertex-containment tests. For distant polygons (the common case in placement validation), the 4-comparison AABB check skips all O(E²) work.
+
+**Result**: ~10-17% speedup on polygon scenarios.
+
+### Misc. Skip list copy in `_get_observer_segments`
+When there are no obscuring shapes (common for obstacle-only layouts), return the static segments list directly instead of copying it per-observer.
+
+**Result**: Minor (avoids ~500 list copies per visibility evaluation in non-ruins layouts).
+
 ## Attempted But Abandoned
 
-*(None yet)*
+### 1a-original. Remove `np.any()` guard entirely from `_vectorized_pip_mask`
+Hypothesis: eliminating ~600K `np.any()` calls (each ~1.5μs dispatch overhead) would save ~15%. Reality: the `np.any(crosses)` guard skips expensive `np.where` + division + comparison operations for edges that don't cross any sample point's z-coordinate. Without the guard, every edge triggers the full computation, costing far more than the dispatch overhead saved.
+
+**Result**: **30% regression** (39.27s vs 30.11s baseline). The guard is net positive.
+**Lesson**: NumPy dispatch overhead matters, but vectorized computation overhead matters more. A cheap Python-level pre-filter (scalar z-range comparison) is the right approach — see 1a-revised.
+
+### 3b-attempt. Vectorize `_polygon_area` with numpy
+Attempted to replace the sequential shoelace loop with `np.sum(x * np.roll(z, -1) - np.roll(x, -1) * z)`. Reverted immediately — `np.sum` uses different accumulation order than sequential addition, producing different FP results and breaking parity.
+
+**Result**: Not tested (reverted before running).
+**Lesson**: Any change to arithmetic accumulation order breaks parity. Sequential sums ≠ numpy reduction sums due to FP associativity.
 
 ## Recommended Next Steps
 
-1. **Try 1a (eliminate `np.any()` guard)** — very low effort, measurable gain, zero parity risk.
-3. **Try 2b (AABB early-exit for terrain overlap)** — low effort, helps polygon scenarios.
-4. **Profile again after 1a and 2b** to see if the bottleneck distribution has shifted enough to warrant deeper changes.
-5. **Consider 2a (vectorize `segments_intersect_inclusive`)** only if polygon collision remains a significant fraction after the easier wins.
+1. **Re-profile** after committed optimizations to see updated bottleneck distribution.
+2. **Try 1b (reduce numpy.array construction)** — identify per-observer allocations that could be pre-allocated.
+3. **Try 3a (pre-allocate per-observer arrays)** in `_compute_visibility_polygon` — the R×S matrix dominates, but array construction overhead may be more visible now that PIP overhead is reduced.
+4. Remaining bottleneck is likely `_compute_visibility_polygon` itself (the R×S matrix), which is already NumPy-vectorized and hard to improve further without algorithmic changes (Tier 4).

@@ -303,6 +303,10 @@ def _get_observer_segments(
     """
     static_segments, obscuring_shapes = precomputed
 
+    # Fast path: no obscuring shapes → return static segments directly (no copy)
+    if not obscuring_shapes:
+        return static_segments
+
     # Start with a copy of static segments
     segments = list(static_segments)
 
@@ -616,20 +620,32 @@ def _vectorized_pip_mask(
     """
     n = len(polygon)
     inside = np.zeros(len(pts_x), dtype=bool)
+    # Precompute z-range of sample points for cheap scalar skip check.
+    # This replaces np.any(crosses) with a pure-Python comparison — same
+    # semantics (skip edges that can't cross any point's z-coordinate)
+    # but avoids ~600K numpy dispatch calls per visibility computation.
+    pts_z_min = float(pts_z.min())
+    pts_z_max = float(pts_z.max())
     j = n - 1
     for i in range(n):
         xi, zi = polygon[i]
         xj, zj = polygon[j]
+        # Edge z-range doesn't overlap points z-range => no crossings
+        if zi > zj:
+            ez_min, ez_max = zj, zi
+        else:
+            ez_min, ez_max = zi, zj
+        if ez_max <= pts_z_min or ez_min > pts_z_max:
+            j = i
+            continue
         crosses = (zi > pts_z) != (zj > pts_z)
-        if np.any(crosses):
-            dz_edge = zj - zi
-            intersect_x = np.where(
-                crosses,
-                (xj - xi) * (pts_z - zi) / np.where(crosses, dz_edge, 1.0)
-                + xi,
-                0.0,
-            )
-            inside ^= crosses & (pts_x < intersect_x)
+        dz_edge = zj - zi
+        intersect_x = np.where(
+            crosses,
+            (xj - xi) * (pts_z - zi) / np.where(crosses, dz_edge, 1.0) + xi,
+            0.0,
+        )
+        inside ^= crosses & (pts_x < intersect_x)
         j = i
     return inside
 
