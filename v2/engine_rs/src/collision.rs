@@ -527,27 +527,55 @@ pub fn is_valid_placement(
         }
     }
 
-    // Build expanded "other features" list including mirrors when symmetric
-    let mut other_features: Vec<PlacedFeature> = Vec::new();
+    // Determine which gap checks are active so we only compute what's needed.
+    let need_all_feature_gap = min_all_feature_gap.is_some_and(|g| g > 0.0);
+
+    // Build expanded "other features" list including mirrors when symmetric.
+    // Use Cow-style approach: store references to originals and owned mirrors.
+    // This avoids cloning every PlacedFeature (which heap-allocates strings).
+    let mut mirrors: Vec<PlacedFeature> = Vec::new();
+    // Indices into (placed_features or mirrors): (is_mirror, idx)
+    let mut other_refs: Vec<(bool, usize)> = Vec::new();
     for (i, pf) in placed_features.iter().enumerate() {
         if i == check_idx {
             continue;
         }
-        other_features.push(pf.clone());
+        other_refs.push((false, i));
         if rotationally_symmetric && !is_at_origin(pf) {
-            other_features.push(mirror_placed_feature(pf));
+            let mi = mirrors.len();
+            mirrors.push(mirror_placed_feature(pf));
+            other_refs.push((true, mi));
         }
     }
 
     // Also check feature's own mirror (can't overlap itself)
     if rotationally_symmetric && !is_at_origin(check_pf) {
-        other_features.push(mirror_placed_feature(check_pf));
+        let mi = mirrors.len();
+        mirrors.push(mirror_placed_feature(check_pf));
+        other_refs.push((true, mi));
     }
 
-    // 2. Check overlap with other features
+    // Helper to get the PlacedFeature for an other_ref entry.
+    let get_pf = |&(is_mirror, idx): &(bool, usize)| -> &PlacedFeature {
+        if is_mirror {
+            &mirrors[idx]
+        } else {
+            &placed_features[idx]
+        }
+    };
+
+    // 2. Check overlap with other features, caching OBBs for reuse in
+    //    step 2c (all-feature gap) when both checks are active.
     // Use obbs_overlap for rect-vs-rect (touching = OK, backward compatible),
     // polygons_overlap for any polygon involvement.
-    for pf in &other_features {
+    let mut cached_obbs: Vec<Vec<Corners>> = if need_all_feature_gap {
+        Vec::with_capacity(other_refs.len())
+    } else {
+        Vec::new()
+    };
+
+    for r in &other_refs {
+        let pf = get_pf(r);
         let other_obbs = get_world_obbs(pf, objects_by_id);
         for ca in &check_obbs {
             for cb in &other_obbs {
@@ -559,6 +587,9 @@ pub fn is_valid_placement(
                     return false;
                 }
             }
+        }
+        if need_all_feature_gap {
+            cached_obbs.push(other_obbs);
         }
     }
 
@@ -574,17 +605,15 @@ pub fn is_valid_placement(
         }
     }
 
-    // 2c. All-feature gap (applies to all shapes, not just tall)
-    if let Some(gap) = min_all_feature_gap {
-        if gap > 0.0 {
-            for pf in &other_features {
-                let other_obbs = get_world_obbs(pf, objects_by_id);
-                for ca in &check_obbs {
-                    for cb in &other_obbs {
-                        let dist = obb_distance(ca, cb);
-                        if dist < gap {
-                            return false;
-                        }
+    // 2c. All-feature gap — reuse OBBs cached during overlap check
+    if need_all_feature_gap {
+        let gap = min_all_feature_gap.unwrap();
+        for other_obbs in &cached_obbs {
+            for ca in &check_obbs {
+                for cb in other_obbs {
+                    let dist = obb_distance(ca, cb);
+                    if dist < gap {
+                        return false;
                     }
                 }
             }
@@ -610,10 +639,11 @@ pub fn is_valid_placement(
         }
     }
 
-    // 4. Check feature gap
+    // 4. Check feature gap (tall OBBs computed lazily here)
     if let Some(gap) = min_feature_gap {
         if gap > 0.0 {
-            for pf in &other_features {
+            for r in &other_refs {
+                let pf = get_pf(r);
                 let other_tall = get_tall_world_obbs(pf, objects_by_id, 1.0);
                 for ca in &check_tall {
                     for cb in &other_tall {
