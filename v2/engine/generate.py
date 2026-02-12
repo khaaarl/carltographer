@@ -491,7 +491,7 @@ def _generate_tempering(
     for replica in reversed(replicas):
         if replica.score >= best_score:
             best_score = replica.score
-            best_layout = replica.layout
+            best_layout = copy.deepcopy(replica.layout)
 
     # Final visibility on best layout
     if not params.skip_visibility:

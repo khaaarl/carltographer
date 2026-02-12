@@ -1,8 +1,8 @@
 # Code Review Notes (2026-02-11)
 
 Findings from a full read-through of the engine, comparison tool, and frontend.
-Nothing here is an active correctness bug in production, but they range from
-misleading to fragile.
+Nothing here was an active correctness bug in production, but they ranged from
+misleading to fragile. All items have been addressed.
 
 ## Fixed
 
@@ -23,22 +23,22 @@ Said `VisBuffers` contains "sorted events". Updated to match actual fields.
 **engine_rs/src/generate.rs — comment numbering gap (line 151):**
 Scoring steps went from "2." to "4.". Renumbered to "3.".
 
-## Remaining (not yet addressed)
-
 **engine/generate.py — missing deepcopy (line 494):**
-`best_layout = replica.layout` is a direct reference, while lines 409, 413,
-and 474 all use `copy.deepcopy(replica.layout)`. Not a current bug (replicas
-aren't used after this point), but inconsistent — if code is added later that
-touches replicas, `best_layout` would alias one of them.
-
-**engine/visibility.py — `_point_near_any_polygon` (line 727):**
-Defined but never called from production code. Only called from tests.
+`best_layout = replica.layout` was a direct reference, while all other
+best_layout assignments used `copy.deepcopy()`. Added deepcopy for consistency.
 
 **engine/types.py — docstring overclaim (lines 46-48):**
-Says "Every dataclass has `from_dict` / `to_dict` methods" but 5 dataclasses
-(`CatalogObject`, `CatalogFeature`, `TerrainCatalog`, `FeatureCountPreference`,
-`EngineParams`) only have `from_dict()`, no `to_dict()`.
+Said "Every dataclass has `from_dict` / `to_dict` methods" but several
+internal-only dataclasses only have `from_dict()`. Updated to reflect reality.
 
 **frontend/catalogs.py — docstring omission (line 11):**
-Says feature types are "obstacle or obscuring" but the catalog also defines
-`"woods"` features (kidney bean woods, industrial tank).
+Said feature types are "obstacle or obscuring" but the catalog also defines
+`"woods"` features. Updated to include "woods".
+
+## Not changed
+
+**engine/visibility.py — `_point_near_any_polygon`:**
+Defined in visibility.py but only called from tests. Left in place since it
+depends on `point_to_segment_distance_squared` from collision.py and moving it
+to the test file would just shuffle the dependency. It's a small pure function
+that serves as a test utility.

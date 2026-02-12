@@ -43,9 +43,11 @@ from low-level to high-level:
   **Output:**
     ``EngineResult`` — the final layout, score, and step count.
 
-Every dataclass has ``from_dict`` / ``to_dict`` methods for JSON round-
-tripping. The JSON schema is the interchange format between the engine, the
-frontend, and saved layout files.
+Dataclasses that participate in engine I/O have ``from_dict`` / ``to_dict``
+methods for JSON round-tripping. Some internal-only dataclasses (e.g.
+``CatalogFeature``, ``EngineParams``) only have ``from_dict``. The JSON schema
+is the interchange format between the engine, the frontend, and saved layout
+files.
 
 Subject to the Rust-parity constraint: ``engine_rs/src/types.rs`` defines
 identical structures, and any field additions or renames must be mirrored

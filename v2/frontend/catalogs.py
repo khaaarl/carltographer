@@ -5,6 +5,8 @@ by headless scripts (e.g. hyperparameter tuning) as well as the GUI.
 
 Loads catalog data from JSON files under ``v2/catalogs/builtin/``, which
 contain the full terrain definitions including UI fields (fill_color, etc.).
+Each feature has a ``feature_type`` (obstacle, obscuring, or woods) used for
+feature-count preferences.
 
 Provides:
   - TERRAIN_CATALOGS: dict mapping catalog name -> {objects, features} with
