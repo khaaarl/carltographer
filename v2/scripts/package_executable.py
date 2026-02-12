@@ -196,6 +196,8 @@ def run_pyinstaller(name: str) -> bool:
     data_sep = ";" if IS_WINDOWS else ":"
     catalogs_src = str(V2_DIR / "catalogs")
     catalogs_data = f"{catalogs_src}{data_sep}v2/catalogs"
+    reference_info_src = str(V2_DIR / "reference_info")
+    reference_info_data = f"{reference_info_src}{data_sep}v2/reference_info"
 
     cmd = [
         str(VENV_PYTHON),
@@ -216,6 +218,8 @@ def run_pyinstaller(name: str) -> bool:
         "pyvirtualdisplay",
         "--add-data",
         catalogs_data,
+        "--add-data",
+        reference_info_data,
         "--distpath",
         str(V2_DIR / "dist"),
         "--workpath",
