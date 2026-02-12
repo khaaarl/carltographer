@@ -3053,6 +3053,44 @@ class App:
         self.root.mainloop()
 
 
+def _smoke_test_gui() -> bool:
+    """Start and stop the App under Xvfb to validate GUI construction.
+
+    Only runs on Linux.  Returns True on success, False on failure.
+    """
+    if sys.platform != "linux":
+        print("  SKIP  GUI test (not Linux)")
+        return True
+
+    try:
+        from pyvirtualdisplay import Display
+    except ImportError:
+        print("  FAIL  GUI test: pyvirtualdisplay not installed")
+        print("        pip install PyVirtualDisplay")
+        return False
+
+    try:
+        display = Display(visible=False, size=(1400, 750))
+        display.start()
+    except FileNotFoundError:
+        print("  FAIL  GUI test: Xvfb not installed")
+        print("        sudo apt-get install xvfb")
+        return False
+
+    try:
+        app = App()
+        app.root.update()
+        app.root.destroy()
+        print("  PASS  GUI start/stop")
+        return True
+    except Exception:
+        print("  FAIL  GUI start/stop")
+        traceback.print_exc()
+        return False
+    finally:
+        display.stop()
+
+
 def _smoke_test() -> int:
     """Headless validation: all imports resolved, now run a quick generation."""
     print("Smoke test")
@@ -3068,6 +3106,10 @@ def _smoke_test() -> int:
         print("  PASS  engine_rs imported")
     else:
         print("  FAIL  engine_rs not available")
+        return 1
+
+    # GUI start/stop under Xvfb (Linux only)
+    if not _smoke_test_gui():
         return 1
 
     # Pick the first catalog and build minimal params

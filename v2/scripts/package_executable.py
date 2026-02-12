@@ -212,6 +212,8 @@ def run_pyinstaller(name: str) -> bool:
         "engine_rs",
         "--collect-submodules",
         "v2",
+        "--collect-all",
+        "pyvirtualdisplay",
         "--add-data",
         catalogs_data,
         "--distpath",

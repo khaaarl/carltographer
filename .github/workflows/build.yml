@@ -51,6 +51,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Xvfb (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
