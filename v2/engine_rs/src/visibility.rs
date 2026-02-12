@@ -254,41 +254,75 @@ fn precompute_segments(
     }
 
     for pf in &effective_features {
-        let is_obscuring = pf.feature.feature_type == "obscuring";
+        let is_obscuring = pf.feature.tags.contains(&"obscuring".to_string());
 
         if is_obscuring {
-            let all_corners = get_footprint_corners(pf, objects_by_id);
-            for corners in &all_corners {
-                let n = corners.len();
-                let verts: Vec<(f64, f64)> = corners.to_vec();
+            // Obscuring features: footprint objects use back-facing-edge
+            // blocking (observer-dependent, always block regardless of
+            // height).  Non-footprint objects (walls) use normal static
+            // all-edges blocking, filtered by min_blocking_height.
+            for comp in &pf.feature.components {
+                let obj = match objects_by_id.get(&comp.object_id) {
+                    Some(o) => o,
+                    None => continue,
+                };
+                let comp_t = comp.transform.as_ref().unwrap_or(&default_t);
+                for shape in &obj.shapes {
+                    if obj.is_footprint {
+                        // Footprint → backface culling (obscuring_shapes)
+                        let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
+                        let world =
+                            compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
+                        let corners = shape_world_corners(shape, &world);
+                        let n = corners.len();
+                        let verts: Vec<(f64, f64)> = corners.to_vec();
 
-                // Precompute center
-                let cx: f64 = corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
-                let cz: f64 = corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
+                        let cx: f64 = corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
+                        let cz: f64 = corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
 
-                // Precompute edge data with outward normals
-                let mut edges = Vec::with_capacity(n);
-                for i in 0..n {
-                    let j = (i + 1) % n;
-                    let (x1, z1) = corners[i];
-                    let (x2, z2) = corners[j];
-                    let mx = (x1 + x2) / 2.0;
-                    let mz = (z1 + z2) / 2.0;
-                    let ex = x2 - x1;
-                    let ez = z2 - z1;
-                    let (mut nx, mut nz) = (ez, -ex);
-                    let dot_center = (cx - mx) * nx + (cz - mz) * nz;
-                    if dot_center > 0.0 {
-                        nx = -nx;
-                        nz = -nz;
+                        let mut edges = Vec::with_capacity(n);
+                        for i in 0..n {
+                            let j = (i + 1) % n;
+                            let (x1, z1) = corners[i];
+                            let (x2, z2) = corners[j];
+                            let mx = (x1 + x2) / 2.0;
+                            let mz = (z1 + z2) / 2.0;
+                            let ex = x2 - x1;
+                            let ez = z2 - z1;
+                            let (mut nx, mut nz) = (ez, -ex);
+                            let dot_center = (cx - mx) * nx + (cz - mz) * nz;
+                            if dot_center > 0.0 {
+                                nx = -nx;
+                                nz = -nz;
+                            }
+                            edges.push((x1, z1, x2, z2, mx, mz, nx, nz));
+                        }
+
+                        obscuring_shapes.push(ObscuringShape {
+                            corners: verts,
+                            edges,
+                        });
+                    } else {
+                        // Non-footprint → static segments (all edges block)
+                        if shape.effective_opacity_height() < min_blocking_height {
+                            continue;
+                        }
+                        let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
+                        let world =
+                            compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
+                        let corners = shape_world_corners(shape, &world);
+                        let n = corners.len();
+                        for i in 0..n {
+                            let j = (i + 1) % n;
+                            static_segments.push((
+                                corners[i].0,
+                                corners[i].1,
+                                corners[j].0,
+                                corners[j].1,
+                            ));
+                        }
                     }
-                    edges.push((x1, z1, x2, z2, mx, mz, nx, nz));
                 }
-
-                obscuring_shapes.push(ObscuringShape {
-                    corners: verts,
-                    edges,
-                });
             }
         } else {
             // Regular obstacle: all edges block regardless of observer
@@ -358,15 +392,6 @@ fn get_observer_segments(
             }
         }
     }
-}
-
-/// Get world-space OBB corners for all shapes in a feature (ignoring height).
-fn get_footprint_corners(
-    placed: &PlacedFeature,
-    objects_by_id: &HashMap<String, &TerrainObject>,
-) -> Vec<Corners> {
-    // Reuse the existing get_world_obbs logic
-    crate::collision::get_world_obbs(placed, objects_by_id)
 }
 
 /// Number of angular buckets for segment partitioning.
@@ -1177,9 +1202,9 @@ fn find_hiding_square_with_fringe(
     (false, needed_fringe)
 }
 
-/// Check if any non-obscuring placed feature shape has an effective opacity
-/// height in [infantry_height, standard_height). If so, the infantry pass
-/// would produce different results from the standard pass.
+/// Check if any placed feature shape has an effective opacity height in
+/// [infantry_height, standard_height). If so, the infantry pass would
+/// produce different results from the standard pass.
 fn has_intermediate_shapes(
     layout: &TerrainLayout,
     objects_by_id: &HashMap<String, &TerrainObject>,
@@ -1187,9 +1212,6 @@ fn has_intermediate_shapes(
     standard_height: f64,
 ) -> bool {
     for pf in &layout.placed_features {
-        if pf.feature.feature_type == "obscuring" {
-            continue;
-        }
         for comp in &pf.feature.components {
             if let Some(obj) = objects_by_id.get(&comp.object_id) {
                 for shape in &obj.shapes {
@@ -1519,9 +1541,14 @@ pub fn compute_layout_visibility(
                     if has_dzs {
                         // Full visibility means vis poly = entire table.
                         // Observer inside DZ: vis poly definitely overlaps opponent → NOT hidden.
-                        // Just increment total_count (not hidden_count).
+                        // Increment total_count once per opponent DZ (matching main path).
                         if let Some(my_dz) = obs_dz {
-                            acc.dz_hide_accum[my_dz].1 += 1;
+                            for oi in 0..num_dzs {
+                                if oi == my_dz {
+                                    continue;
+                                }
+                                acc.dz_hide_accum[my_dz].1 += 1;
+                            }
                         }
                     }
                     // Full visibility -> visible from all DZs -> not hidden
@@ -1849,10 +1876,16 @@ mod tests {
             }],
             name: None,
             tags: vec![],
+            is_footprint: false,
         }
     }
 
     fn make_feature(id: &str, obj_id: &str, feature_type: &str) -> TerrainFeature {
+        let tags = if feature_type == "obscuring" {
+            vec!["obscuring".to_string()]
+        } else {
+            vec![]
+        };
         TerrainFeature {
             id: id.into(),
             feature_type: feature_type.into(),
@@ -1860,7 +1893,7 @@ mod tests {
                 object_id: obj_id.into(),
                 transform: None,
             }],
-            tags: vec![],
+            tags,
         }
     }
 
@@ -1927,7 +1960,8 @@ mod tests {
 
     #[test]
     fn obscuring_reduces_visibility() {
-        let obj = make_object("ruins", 12.0, 6.0, 0.0);
+        let mut obj = make_object("ruins", 12.0, 6.0, 5.0);
+        obj.is_footprint = true;
         let feat = make_feature("f1", "ruins", "obscuring");
         let pf = make_placed(feat, 0.0, 0.0);
         let layout = make_layout(60.0, 44.0, vec![pf]);
@@ -2239,7 +2273,8 @@ mod tests {
             rotationally_symmetric: false,
         };
 
-        let ruins_obj = make_object("ruins", 14.0, 14.0, 0.0);
+        let mut ruins_obj = make_object("ruins", 14.0, 14.0, 5.0);
+        ruins_obj.is_footprint = true;
         let ruins_feat = make_feature("f1", "ruins", "obscuring");
         let pf = make_placed(ruins_feat, 0.0, 0.0);
 

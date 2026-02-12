@@ -37,11 +37,12 @@ def _make_object(obj_id, width, depth, height):
     )
 
 
-def _make_feature(feat_id, obj_id, feature_type="obstacle"):
+def _make_feature(feat_id, obj_id, feature_type="obstacle", tags=None):
     return TerrainFeature(
         id=feat_id,
         feature_type=feature_type,
         components=[FeatureComponent(object_id=obj_id)],
+        tags=tags if tags is not None else [],
     )
 
 
@@ -142,10 +143,14 @@ class TestExtractBlockingSegments:
         )
         assert len(segs) == 0
 
-    def test_obscuring_blocks_regardless_of_height(self):
-        """An obscuring feature blocks even with 0 height shapes."""
-        obj = _make_object("ruins", 12, 6, 0)
-        feat = _make_feature("f1", "ruins", "obscuring")
+    def test_obscuring_backface_blocking(self):
+        """An obscuring footprint blocks via back-facing edges."""
+        obj = TerrainObject(
+            id="ruins",
+            shapes=[Shape(width=12, depth=6, height=5)],
+            is_footprint=True,
+        )
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 0, 0)
         layout = _make_layout(60, 44, [pf])
         objects_by_id = {"ruins": obj}
@@ -160,8 +165,12 @@ class TestExtractBlockingSegments:
 
     def test_obscuring_observer_inside_no_blocking(self):
         """Observer inside obscuring footprint gets no blocking from it."""
-        obj = _make_object("ruins", 12, 6, 0)
-        feat = _make_feature("f1", "ruins", "obscuring")
+        obj = TerrainObject(
+            id="ruins",
+            shapes=[Shape(width=12, depth=6, height=5)],
+            is_footprint=True,
+        )
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 0, 0)
         layout = _make_layout(60, 44, [pf])
         objects_by_id = {"ruins": obj}
@@ -176,14 +185,14 @@ class TestExtractBlockingSegments:
         """A tall wall inside an obscuring ruin blocks LoS even for observers
         inside the ruin footprint.
 
-        The ruin base (12x6, low) grants the observer see-through on the
-        outer footprint, but the internal wall (0.5x4, tall) is a separate
-        shape that the observer is NOT inside, so its back-facing edges
-        still block.
+        The ruin base (12x6, is_footprint) uses backface culling — observer
+        inside sees no blocking from it.  The internal wall (0.5x4, tall,
+        NOT a footprint) is a static segment that blocks from all directions.
         """
         base = TerrainObject(
             id="ruin_base",
-            shapes=[Shape(width=12, depth=6, height=0.1)],
+            shapes=[Shape(width=12, depth=6, height=5)],
+            is_footprint=True,
         )
         wall = TerrainObject(
             id="ruin_wall",
@@ -200,6 +209,7 @@ class TestExtractBlockingSegments:
                     transform=Transform(x=2, z=0),
                 ),
             ],
+            tags=["obscuring"],
         )
         pf = _place(feat, 0, 0)
         layout = _make_layout(60, 44, [pf])
@@ -209,18 +219,18 @@ class TestExtractBlockingSegments:
         segs = _extract_blocking_segments(
             layout, objects_by_id, -2, 0, min_blocking_height=4.0
         )
-        # Base: observer is inside → no blocking from base (correct)
-        # Wall: observer is outside the 0.5"-wide wall → back-faces block
-        assert len(segs) > 0, "Wall inside ruin should block from inside ruin"
+        # Base: observer is inside footprint → no blocking (backface culling)
+        # Wall: non-footprint → all 4 edges are static segments
+        assert len(segs) == 4, "Wall should produce 4 static segments"
 
-        # Observer OUTSIDE the ruin entirely (further left) should see
-        # both the ruin back-faces and the wall back-faces
+        # Observer OUTSIDE the ruin entirely — should see ruin back-faces
+        # (from footprint backface culling) PLUS all 4 wall static segments
         segs_outside = _extract_blocking_segments(
             layout, objects_by_id, -25, 0, min_blocking_height=4.0
         )
         assert len(segs_outside) > len(segs), (
             "Observer outside ruin should see more blocking edges "
-            "(ruin back-faces + wall back-faces)"
+            "(ruin back-faces + wall static segments)"
         )
 
 
@@ -260,9 +270,13 @@ class TestComputeLayoutVisibility:
         assert result["overall"]["value"] == 100.0
 
     def test_obscuring_feature_reduces_visibility(self):
-        """An obscuring feature (even with height 0) reduces visibility."""
-        obj = _make_object("ruins", 12, 6, 0)
-        feat = _make_feature("f1", "ruins", "obscuring")
+        """A tall obscuring footprint reduces visibility via back-facing edges."""
+        obj = TerrainObject(
+            id="ruins",
+            shapes=[Shape(width=12, depth=6, height=5)],
+            is_footprint=True,
+        )
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 0, 0)
         layout = _make_layout(60, 44, [pf])
         objects_by_id = {"ruins": obj}
@@ -684,8 +698,8 @@ class TestObjectiveHidability:
         # Large obscuring ruin covering all objective sample points
         # Objective range 3.0 + sqrt(2) ≈ 4.41, so 14x14 ruin at origin
         # covers all sample points (footprint from -7 to 7 in both axes)
-        obj = _make_object("ruins", 14, 14, 0)
-        feat = _make_feature("f1", "ruins", "obscuring")
+        obj = _make_object("ruins", 14, 14, 5)
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 0, 0)
 
         layout = TerrainLayout(
@@ -717,8 +731,8 @@ class TestObjectiveHidability:
         )
 
         # Wide obscuring ruin between objectives and red DZ
-        obj = _make_object("ruins", 2, 40, 0)
-        feat = _make_feature("f1", "ruins", "obscuring")
+        obj = _make_object("ruins", 2, 40, 5)
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 15, 0)
 
         layout = TerrainLayout(
@@ -999,15 +1013,296 @@ class TestHasIntermediateShapes:
         layout = _make_layout(60, 44, [pf])
         assert _has_intermediate_shapes(layout, {"box": obj}, 2.2, 4.0)
 
-    def test_obscuring_ignored(self):
-        """Obscuring features are excluded from intermediate check."""
+    def test_obscuring_intermediate_detected(self):
+        """Obscuring features with intermediate-height shapes should be detected.
+
+        A 3.0" obscuring shape is in [2.2, 4.0) and would produce different
+        visibility at the infantry blocking height vs standard, so it should
+        trigger the dual-pass.
+        """
         from engine.visibility import _has_intermediate_shapes
 
         obj = _make_object("ruins", 12, 6, 3.0)
-        feat = _make_feature("f1", "ruins", "obscuring")
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 0, 0)
         layout = _make_layout(60, 44, [pf])
-        assert not _has_intermediate_shapes(layout, {"ruins": obj}, 2.2, 4.0)
+        assert _has_intermediate_shapes(layout, {"ruins": obj}, 2.2, 4.0)
+
+
+class TestObscuringHeightFiltering:
+    """Obscuring features should respect min_blocking_height like obstacles.
+
+    Currently, obscuring shapes block LOS at all heights (no height check).
+    The correct behavior is that obscuring shapes below min_blocking_height
+    should NOT block LOS, just like non-obscuring obstacles.
+    """
+
+    def test_obscuring_below_threshold_no_block(self):
+        """A 3.0" obscuring shape should not block at min_blocking_height=4.0.
+
+        Standard pass uses 4.0" threshold.  A 3.0" ruin wall is shorter than
+        that, so observers should be able to see over it — visibility should
+        be 100%.
+        """
+        obj = _make_object("ruins", 5, 5, 3.0)
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"ruins": obj}
+
+        result = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=4.0,
+            infantry_blocking_height=None,
+        )
+        # 3.0" < 4.0" threshold -> should not block -> 100% visibility
+        assert result["overall"]["value"] == 100.0
+
+    def test_obscuring_above_threshold_blocks(self):
+        """A 3.0" obscuring shape should block at min_blocking_height=2.2.
+
+        Infantry pass uses 2.2" threshold.  A 3.0" ruin wall is taller than
+        that, so it should block LOS via back-facing edges.
+        """
+        obj = _make_object("ruins", 5, 5, 3.0)
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"ruins": obj}
+
+        result = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=2.2,
+            infantry_blocking_height=None,
+        )
+        # 3.0" >= 2.2" threshold -> should block -> < 100% visibility
+        assert result["overall"]["value"] < 100.0
+
+    def test_obscuring_dual_pass_produces_different_values(self):
+        """Obscuring feature at 3.0" should produce different std vs inf visibility.
+
+        With infantry_blocking_height=2.2 and an obscuring shape at 3.0":
+        - Standard pass (4.0"): 3.0 < 4.0 → doesn't block → ~100%
+        - Infantry pass (2.2"): 3.0 >= 2.2 → blocks → < 100%
+        The dual-pass should be triggered and produce sub-dicts.
+        """
+        obj = _make_object("ruins", 5, 5, 3.0)
+        feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
+        pf = _place(feat, 0, 0)
+        layout = _make_layout(60, 44, [pf])
+        objects_by_id = {"ruins": obj}
+
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=2.2
+        )
+        overall = result["overall"]
+        # Dual-pass should be triggered
+        assert "standard" in overall, "Expected dual-pass 'standard' sub-dict"
+        assert "infantry" in overall, "Expected dual-pass 'infantry' sub-dict"
+        # Standard: 3.0" < 4.0" → no blocking → 100%
+        assert overall["standard"]["value"] == 100.0
+        # Infantry: 3.0" >= 2.2" → blocks → < 100%
+        assert overall["infantry"]["value"] < 100.0
+
+
+class TestObscuringFootprintBlocksWithoutOpacityOverride:
+    """The Obscuring keyword is a feature-level property, not shape-level.
+
+    A feature with the "obscuring" tag should have its footprint block LOS
+    via back-facing edges regardless of individual shape heights.  The engine
+    must NOT require opacity_height_inches to make this work — a height-0
+    base in an obscuring feature blocks because the *feature* is Obscuring,
+    not because the shape is tall.
+
+    This test uses a bare 12x6 ruin base (height 0, no opacity_height_inches)
+    as the sole shape of an obscuring feature.  It should block LOS.
+    """
+
+    @staticmethod
+    def _make_bare_obscuring_layout():
+        """Build a 20x20 layout with a bare obscuring footprint at the origin."""
+        base = TerrainObject(
+            id="ruins_base",
+            shapes=[
+                Shape(width=12.0, depth=6.0, height=0.0),
+            ],
+            is_footprint=True,
+        )
+        feature = TerrainFeature(
+            id="bare_ruin",
+            feature_type="obscuring",
+            components=[FeatureComponent(object_id="ruins_base")],
+            tags=["obscuring"],
+        )
+        pf = PlacedFeature(
+            feature=feature,
+            transform=Transform(x=0.0, z=0.0, rotation_deg=0.0),
+        )
+        layout = TerrainLayout(
+            table_width=20.0,
+            table_depth=20.0,
+            placed_features=[pf],
+        )
+        objects_by_id = {"ruins_base": base}
+        return layout, objects_by_id
+
+    def test_standard_visibility_below_100(self):
+        """A height-0 obscuring footprint must block LOS at standard height.
+
+        The "obscuring" tag means the footprint blocks — this must not depend
+        on the shape's height or opacity_height_inches.
+        """
+        layout, objects_by_id = self._make_bare_obscuring_layout()
+        result = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=4.0,
+            infantry_blocking_height=None,
+        )
+        val = result["overall"]["value"]
+        assert val < 100.0, (
+            f"Obscuring footprint (height=0, no opacity_height_inches) should "
+            f"block LOS because feature_type='obscuring', got {val}%"
+        )
+
+
+class TestWtcShortRuinVisibility:
+    """End-to-end test with the actual WTC short ruin as defined in the UI.
+
+    The WTC short ruin has two components:
+    - ruins_short: 12"x6" base at height 0, is_footprint=True (Obscuring
+      keyword — the footprint always blocks LOS via back-facing edges).
+    - wtc_short_walls: four wall sections at height 3.0" (physical barriers
+      that block infantry but not standard-height observers).
+
+    On a 20"x20" table:
+    - Standard visibility (4.0" threshold) should be < 100% because the base
+      footprint blocks LOS via Obscuring.
+    - Infantry visibility (2.2" threshold) should be even lower because the
+      3.0" walls additionally block infantry-height observers.
+    """
+
+    @staticmethod
+    def _make_wtc_short_ruin_layout():
+        """Build a 20x20 layout with a single WTC short ruin at the origin."""
+        # Ruin base: 12x6, physically flat, is_footprint (Obscuring keyword)
+        base = TerrainObject(
+            id="ruins_short",
+            shapes=[
+                Shape(width=12.0, depth=6.0, height=0.0),
+            ],
+            is_footprint=True,
+        )
+        # Walls: four sections at 3.0" tall (matches catalog)
+        walls = TerrainObject(
+            id="wtc_short_walls",
+            shapes=[
+                Shape(
+                    width=9.0,
+                    depth=0.1,
+                    height=3.0,
+                    offset=Transform(x=0.65, z=-2.15),
+                ),
+                Shape(
+                    width=0.1,
+                    depth=5.0,
+                    height=3.0,
+                    offset=Transform(x=5.15, z=0.35),
+                ),
+                Shape(
+                    width=0.6,
+                    depth=0.1,
+                    height=3.0,
+                    offset=Transform(x=5.5, z=-2.15),
+                ),
+                Shape(
+                    width=0.1,
+                    depth=0.6,
+                    height=3.0,
+                    offset=Transform(x=5.15, z=-2.5),
+                ),
+            ],
+        )
+        feature = TerrainFeature(
+            id="wtc_short",
+            feature_type="obscuring",
+            components=[
+                FeatureComponent(object_id="ruins_short"),
+                FeatureComponent(object_id="wtc_short_walls"),
+            ],
+            tags=["obscuring"],
+        )
+        pf = PlacedFeature(
+            feature=feature,
+            transform=Transform(x=0.0, z=0.0, rotation_deg=0.0),
+        )
+        layout = TerrainLayout(
+            table_width=20.0,
+            table_depth=20.0,
+            placed_features=[pf],
+        )
+        objects_by_id = {"ruins_short": base, "wtc_short_walls": walls}
+        return layout, objects_by_id
+
+    def test_standard_visibility_below_100(self):
+        """Standard pass: base footprint blocks via Obscuring → < 100%."""
+        layout, objects_by_id = self._make_wtc_short_ruin_layout()
+        result = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=4.0,
+            infantry_blocking_height=None,
+        )
+        val = result["overall"]["value"]
+        assert val < 100.0, (
+            f"Standard visibility should be < 100% (base is Obscuring), "
+            f"got {val}%"
+        )
+
+    def test_infantry_visibility_lower_than_standard(self):
+        """Infantry pass: walls also block → lower than standard."""
+        layout, objects_by_id = self._make_wtc_short_ruin_layout()
+
+        # Standard pass only
+        result_std = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=4.0,
+            infantry_blocking_height=None,
+        )
+        std_val = result_std["overall"]["value"]
+
+        # Infantry pass only
+        result_inf = compute_layout_visibility(
+            layout,
+            objects_by_id,
+            min_blocking_height=2.2,
+            infantry_blocking_height=None,
+        )
+        inf_val = result_inf["overall"]["value"]
+
+        assert inf_val < std_val, (
+            f"Infantry visibility ({inf_val}%) should be lower than "
+            f'standard ({std_val}%) because 3.0" walls block infantry'
+        )
+
+    def test_dual_pass_produces_sub_dicts(self):
+        """Full dual-pass: should trigger and show different values."""
+        layout, objects_by_id = self._make_wtc_short_ruin_layout()
+        result = compute_layout_visibility(
+            layout, objects_by_id, infantry_blocking_height=2.2
+        )
+        overall = result["overall"]
+        assert "standard" in overall, "Expected dual-pass 'standard' sub-dict"
+        assert "infantry" in overall, "Expected dual-pass 'infantry' sub-dict"
+        assert overall["standard"]["value"] < 100.0, (
+            "Standard: base should block"
+        )
+        assert overall["infantry"]["value"] < overall["standard"]["value"], (
+            "Infantry should be lower than standard (walls block infantry)"
+        )
 
 
 class TestInfantryVisibility:

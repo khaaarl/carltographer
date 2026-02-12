@@ -2983,20 +2983,37 @@ class App:
         self.history.add_to_history(self.layout)
         self._render()
 
+    @staticmethod
+    def _vis_entry_text(data: dict) -> str:
+        """Format a single visibility entry, appending infantry if present.
+
+        When dual-pass infantry visibility is active, *data* contains
+        ``"standard"`` and ``"infantry"`` sub-dicts alongside the averaged
+        top-level ``"value"``.  In that case we show the standard value as
+        the primary number with the infantry value in parentheses.  When
+        there is no infantry breakdown we just show the plain value.
+        """
+        inf = data.get("infantry")
+        if isinstance(inf, dict) and "value" in inf:
+            std = data["standard"]["value"]
+            return f"{std}% (inf: {inf['value']}%)"
+        return f"{data['value']}%"
+
     def _update_visibility_display(self):
         """Update visibility labels from current layout."""
         vis = self.layout.get("visibility")
         if isinstance(vis, dict) and "overall" in vis:
             overall = vis["overall"]
             if isinstance(overall, dict) and "value" in overall:
-                val = overall["value"]
-                self.visibility_label.config(text=f"Visibility: {val}%")
+                self.visibility_label.config(
+                    text=f"Visibility: {self._vis_entry_text(overall)}"
+                )
 
                 # DZ hideability
                 dz_hide = vis.get("dz_hideability")
                 if isinstance(dz_hide, dict) and dz_hide:
                     parts = [
-                        f"{dz_id}: {data['value']}%"
+                        f"{dz_id}: {self._vis_entry_text(data)}"
                         for dz_id, data in dz_hide.items()
                     ]
                     self.dz_hide_label.config(
@@ -3009,7 +3026,7 @@ class App:
                 obj_hide = vis.get("objective_hidability")
                 if isinstance(obj_hide, dict) and obj_hide:
                     parts = [
-                        f"{dz_id}: {data['value']}%"
+                        f"{dz_id}: {self._vis_entry_text(data)}"
                         for dz_id, data in obj_hide.items()
                     ]
                     self.obj_hide_label.config(

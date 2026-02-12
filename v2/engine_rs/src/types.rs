@@ -59,6 +59,8 @@ pub struct TerrainObject {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_footprint: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

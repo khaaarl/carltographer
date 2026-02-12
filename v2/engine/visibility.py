@@ -12,29 +12,109 @@ segment intersection, and the resulting hit points form a visibility polygon.
 The area of that polygon, divided by total table area, gives that observer's
 visibility ratio.
 
-Terrain blocks line of sight in two ways, depending on feature_type:
-- Tall physical shapes (e.g. a stack of crates, a windowless wall section):
-  all edges of shapes taller than min_blocking_height (default 4") always
-  block regardless of observer position. These become "static segments"
-  computed once per layout. This includes opaque walls inside ruins.
-- Obscuring features (e.g. ruins in 40k): only the back-facing edges of the
-  feature's outer footprint block, meaning an observer inside the ruin can
-  see out. For each observer, we check which edges face away from them using
-  precomputed outward normals and add only those to the segment list.
+How terrain blocks line of sight
+================================
+
+The general rule: any shape whose effective opacity height meets the blocking
+threshold blocks LoS with all of its edges from all directions. These are
+"static segments" — computed once per layout, observer-independent.
+
+    A shape blocks if:  effective_opacity_height() >= min_blocking_height
+
+effective_opacity_height() returns opacity_height_inches if set, otherwise
+the shape's physical height_inches. The default min_blocking_height is 4.0"
+(configurable via EngineParams.standard_blocking_height_inches). This rule
+applies universally to shapes within any feature type — obstacles, ruins,
+woods, anything.
+
+The one exception: Obscuring footprints
+---------------------------------------
+
+Obscuring is a Warhammer 40k terrain keyword applied to a terrain FEATURE
+(typically a ruin). A feature is Obscuring when ``"obscuring"`` appears in
+its ``tags`` list. It means that the feature's footprint boundary has
+special LoS-blocking behavior. The "footprint" here refers to the
+TerrainObject(s) within the feature that have ``is_footprint=True`` set.
+This is the only exception to the "tall enough = blocks all edges from all
+directions" rule.
+
+Obscuring LoS rules (by observer/target relationship):
+
+- Observer OUTSIDE footprint, target on the OTHER SIDE of the footprint
+  (also outside): the footprint blocks LoS. You cannot see through the
+  footprint to reach a target on the far side.
+
+- Observer OUTSIDE footprint, target INSIDE the footprint: the footprint
+  does NOT block. You can see into the feature from outside.
+
+- Observer INSIDE the footprint: the footprint does NOT impede the
+  observer's LoS in any direction. You can see out freely.
+
+In ALL of the above cases, opaque objects (shapes meeting the height
+threshold) still block LoS normally. This includes opaque objects that
+are part of the same terrain feature. For example, a wall section inside
+a ruin will block LoS for an observer inside that ruin if the wall is
+between the observer and the target and meets the height threshold. The
+Obscuring footprint boundary is what has the special conditional behavior;
+regular opaque shapes within the feature are just normal blockers.
+
+Implementation: back-face culling. Each edge of the footprint polygon has
+a precomputed outward normal. For a given observer, only edges whose normal
+faces away from the observer (i.e. the far side of the footprint) become
+blocking segments. Edges facing toward the observer are transparent. This
+naturally produces the three behaviors above:
+- From outside, far-side edges block (can't see through), but near-side
+  edges are transparent (can see into the footprint).
+- From inside, no edges face away from the observer, so no footprint edges
+  block (can see out freely).
+
+Why is_footprint exists: the Obscuring keyword is a FEATURE-LEVEL property
+(a ruin is Obscuring), not a SHAPE-LEVEL property (a 3" wall is not
+inherently Obscuring). The footprint object is what carries the Obscuring
+effect — it defines the boundary through which LoS is blocked. Without
+is_footprint, the engine would need a magic height value or hack to make a
+zero-height or short base block. The flag makes this explicit: "this object
+is the footprint that the Obscuring keyword applies to."
+
+Dual-pass infantry visibility
+=============================
+
+The engine supports two blocking-height thresholds in a single computation:
+
+- Standard pass: min_blocking_height = 4.0" (default). Only shapes >= 4"
+  block LoS. This represents tall models (vehicles, monsters) looking over
+  shorter terrain.
+
+- Infantry pass: min_blocking_height = infantry_blocking_height (default
+  2.2"). Shapes >= 2.2" also block LoS. This represents infantry-height
+  models that can be hidden behind shorter terrain like low walls and
+  barricades.
+
+The dual pass only runs when there are shapes with effective opacity height
+in [infantry_height, standard_height) — i.e., shapes that block infantry
+but not standard models. If no such shapes exist, the infantry pass would
+produce identical results and is skipped.
+
+When dual-pass runs, the result contains "standard" and "infantry"
+sub-dicts under each metric, plus an averaged "value" key. See
+_merge_dual_pass_results().
+
+Note: the is_footprint bypass applies to both passes. An obscuring
+feature's footprint blocks at every threshold because the Obscuring keyword
+is height-independent — it blocks all LoS through the footprint area.
+
+Visibility metrics
+==================
 
 The module computes four metrics, all in the range 0-100%:
 
   overall         Average visibility ratio across all observer positions.
                   Lower means more terrain is blocking sightlines.
 
-  dz_visibility   Per-deployment-zone: average fraction of a DZ's sample
-                  points visible from observers OUTSIDE that DZ. Measures
-                  how exposed each DZ is to the rest of the table.
-
-  dz_to_dz        Cross-zone: fraction of target DZ sample points that at
-                  least one observer in the source DZ's threat zone (DZ +
-                  6" expansion) can see. Reported as hidden %, so higher
-                  means more of the target DZ is concealed.
+  dz_hideability  Per-deployment-zone: fraction of observer positions inside
+                  a DZ whose visibility polygon does NOT overlap the
+                  opponent's expanded (DZ + 6") threat zone. Higher means
+                  more of the DZ's positions are hidden from the opponent.
 
   objective_hidability
                   Per-DZ: fraction of objectives where a model could hide
@@ -44,33 +124,37 @@ The module computes four metrics, all in the range 0-100%:
                   which have line of sight to any part of the threat zone.
                   Higher means more objectives have safe approach angles.
 
-Objective hidability and obscuring terrain asymmetry:
+Objective hidability and obscuring terrain asymmetry
+====================================================
 
-  Obscuring features (ruins) use back-face culling: only edges facing away
-  from the observer block LoS. This means visibility is asymmetric — an
-  observer outside a ruin is blocked by the ruin's far walls, but an
-  observer inside the ruin sees out freely (no edges face away from them).
+Obscuring features use back-face culling: only edges facing away from the
+observer block LoS. This means visibility is asymmetric — an observer
+outside a ruin is blocked by the ruin's far walls, but an observer inside
+the ruin sees out freely (no edges face away from them).
 
-  This matters for objective hidability because the question is "can a model
-  near this objective hide from the opponent's DZ?" — i.e., we care about
-  LoS from the model's perspective at the objective, not from the DZ looking
-  toward the objective. If a model is inside a ruin near an objective, the
-  ruin doesn't block its own LoS outward, so it can see (and be seen from)
-  the DZ. Conversely, a model behind a ruin (outside it) benefits from the
-  ruin's back-facing walls blocking LoS from the DZ.
+This matters for objective hidability because the question is "can a model
+near this objective hide from the opponent's DZ?" — i.e., we care about
+LoS from the model's perspective at the objective, not from the DZ looking
+toward the objective. If a model is inside a ruin near an objective, the
+ruin doesn't block its own LoS outward, so it can see (and be seen from)
+the DZ. Conversely, a model behind a ruin (outside it) benefits from the
+ruin's back-facing walls blocking LoS from the DZ.
 
-  To handle this correctly, we compute visibility polygons from each
-  objective-vicinity sample point (the model's perspective) and check
-  whether that vis poly intersects the opponent's expanded DZ polygons. If
-  it doesn't intersect, the point is hidden. This naturally captures the
-  asymmetry: a sample point inside a ruin produces no blocking segments
-  (full visibility, not hidden), while a point behind a ruin gets the
-  ruin's back-facing edges as blockers.
+To handle this correctly, we compute visibility polygons from each
+objective-vicinity sample point (the model's perspective) and check
+whether that vis poly intersects the opponent's expanded DZ polygons. If
+it doesn't intersect, the point is hidden. This naturally captures the
+asymmetry: a sample point inside a ruin produces no blocking segments
+(full visibility, not hidden), while a point behind a ruin gets the
+ruin's back-facing edges as blockers.
 
-  An earlier implementation computed vis polys from DZ observers and used
-  point-in-polygon tests on the objective sample points. That approach gave
-  wrong results because back-face culling from the DZ perspective is not
-  the same as from the objective perspective.
+An earlier implementation computed vis polys from DZ observers and used
+point-in-polygon tests on the objective sample points. That approach gave
+wrong results because back-face culling from the DZ perspective is not
+the same as from the objective perspective.
+
+Observer grid
+=============
 
 Observer positions are laid out on an integer grid across the table, using
 2" spacing (even coordinates) everywhere, with 1" spacing near objective
@@ -79,7 +163,9 @@ tall terrain footprints (height >= 1") are excluded — models will rarely be
 on top of these features (and in many cases it's an illegal placement), so
 we measure visibility from ground level only.
 
-Performance notes:
+Performance notes
+=================
+
 - Segment data is precomputed once per layout (_precompute_segments), then
   per-observer work is just selecting obscuring back-faces + the ray sweep.
 - VisibilityCache provides incremental updates: when a single feature is
@@ -94,8 +180,12 @@ Performance notes:
   points and only computes fresh vis polys for "fringe" points (between
   obj_radius and obj_radius + sqrt(2)) when no fully-inner hiding square
   exists. See _find_hiding_square_with_fringe for the inner/fringe logic.
-- The Rust engine (engine_rs) reimplements this module for ~10x throughput.
-  Both produce identical scores for the same layout.
+- The Rust engine (engine_rs/src/visibility.rs) reimplements this module for
+  ~10x throughput. Both produce identical scores for the same layout.
+
+Subject to the determinism/Rust-parity constraint: every floating-point
+operation, iteration order, and branching decision must match the Rust
+implementation exactly. See engine_cmp/ for parity verification.
 """
 
 from __future__ import annotations
@@ -112,7 +202,6 @@ from .collision import (
     _shape_world_corners,
     compose_transform,
     get_tall_world_obbs,
-    get_world_obbs,
     obb_corners,
     point_to_segment_distance_squared,
     polygons_overlap,
@@ -226,14 +315,6 @@ def _ray_segment_intersection(
     return None
 
 
-def _get_footprint_corners(
-    placed: PlacedFeature,
-    objects_by_id: dict[str, TerrainObject],
-) -> list[list[tuple[float, float]]]:
-    """Get world-space OBB corners for all shapes in a feature (ignoring height)."""
-    return get_world_obbs(placed, objects_by_id)
-
-
 # Edge with precomputed outward normal: (x1, z1, x2, z2, mx, mz, nx, nz)
 _PrecomputedEdge = tuple[
     float, float, float, float, float, float, float, float
@@ -270,34 +351,69 @@ def _precompute_segments(
             effective_features.append(_mirror_placed_feature(pf))
 
     for pf in effective_features:
-        is_obscuring = pf.feature.feature_type == "obscuring"
+        is_obscuring = "obscuring" in pf.feature.tags
 
         if is_obscuring:
-            # Get all shape footprints regardless of height
-            all_corners = _get_footprint_corners(pf, objects_by_id)
-            if not all_corners:
-                continue
-
-            # Precompute edges with outward normals for each shape
-            for corners in all_corners:
-                n = len(corners)
-                cx = sum(c[0] for c in corners) / n
-                cz = sum(c[1] for c in corners) / n
-                edges: list[_PrecomputedEdge] = []
-                for i in range(n):
-                    j = (i + 1) % n
-                    x1, z1 = corners[i]
-                    x2, z2 = corners[j]
-                    mx = (x1 + x2) / 2.0
-                    mz = (z1 + z2) / 2.0
-                    ex = x2 - x1
-                    ez = z2 - z1
-                    nx, nz = ez, -ex
-                    dot_center = (cx - mx) * nx + (cz - mz) * nz
-                    if dot_center > 0:
-                        nx, nz = -nx, -nz
-                    edges.append((x1, z1, x2, z2, mx, mz, nx, nz))
-                obscuring_shapes.append((corners, edges))
+            # Obscuring features: footprint objects use back-facing-edge
+            # blocking (observer-dependent, always block regardless of
+            # height).  Non-footprint objects (walls) use normal static
+            # all-edges blocking, filtered by min_blocking_height.
+            for comp in pf.feature.components:
+                obj = objects_by_id.get(comp.object_id)
+                if obj is None:
+                    continue
+                comp_t = comp.transform or Transform()
+                for shape in obj.shapes:
+                    if obj.is_footprint:
+                        # Footprint → backface culling (obscuring_shapes)
+                        shape_t = shape.offset or Transform()
+                        world = compose_transform(
+                            compose_transform(shape_t, comp_t),
+                            pf.transform,
+                        )
+                        corners = _shape_world_corners(shape, world)
+                        n = len(corners)
+                        cx = sum(c[0] for c in corners) / n
+                        cz = sum(c[1] for c in corners) / n
+                        edges: list[_PrecomputedEdge] = []
+                        for i in range(n):
+                            j = (i + 1) % n
+                            x1, z1 = corners[i]
+                            x2, z2 = corners[j]
+                            mx = (x1 + x2) / 2.0
+                            mz = (z1 + z2) / 2.0
+                            ex = x2 - x1
+                            ez = z2 - z1
+                            nx, nz = ez, -ex
+                            dot_center = (cx - mx) * nx + (cz - mz) * nz
+                            if dot_center > 0:
+                                nx, nz = -nx, -nz
+                            edges.append((x1, z1, x2, z2, mx, mz, nx, nz))
+                        obscuring_shapes.append((corners, edges))
+                    else:
+                        # Non-footprint → static segments (all edges block)
+                        if (
+                            shape.effective_opacity_height()
+                            < min_blocking_height
+                        ):
+                            continue
+                        shape_t = shape.offset or Transform()
+                        world = compose_transform(
+                            compose_transform(shape_t, comp_t),
+                            pf.transform,
+                        )
+                        corners = _shape_world_corners(shape, world)
+                        n = len(corners)
+                        for i in range(n):
+                            j = (i + 1) % n
+                            static_segments.append(
+                                (
+                                    corners[i][0],
+                                    corners[i][1],
+                                    corners[j][0],
+                                    corners[j][1],
+                                )
+                            )
         else:
             # Regular obstacle: precompute transforms + corners once
             for comp in pf.feature.components:
@@ -1061,8 +1177,6 @@ def _has_intermediate_shapes(
     produce identical results to standard — skip it.
     """
     for pf in layout.placed_features:
-        if pf.feature.feature_type == "obscuring":
-            continue
         for comp in pf.feature.components:
             obj = objects_by_id.get(comp.object_id)
             if obj is None:
@@ -1346,9 +1460,10 @@ def compute_layout_visibility(
             if has_dzs:
                 for dz_id, dz_polys, expanded_polys in dz_data:
                     if _point_in_any_polygon(sx, sz, dz_polys):
-                        # Observer inside this DZ: check vs opponent expanded DZ
-                        dz_hide_accum[dz_id][1] += 1
-                        # Full visibility -> overlaps opponent -> not hidden
+                        for other_id, _, _ in dz_data:
+                            if other_id == dz_id:
+                                continue
+                            dz_hide_accum[dz_id][1] += 1
             # Full visibility -> visible from all DZs -> not hidden
             if has_objectives and (sx, sz) in obj_point_lookup:
                 for oi, pi in obj_point_lookup[(sx, sz)]:
@@ -1364,7 +1479,10 @@ def compute_layout_visibility(
             if has_dzs:
                 for dz_id, dz_polys, expanded_polys in dz_data:
                     if _point_in_any_polygon(sx, sz, dz_polys):
-                        dz_hide_accum[dz_id][1] += 1
+                        for other_id, _, _ in dz_data:
+                            if other_id == dz_id:
+                                continue
+                            dz_hide_accum[dz_id][1] += 1
             # Degenerate vis poly -> full visibility -> not hidden
             if has_objectives and (sx, sz) in obj_point_lookup:
                 for oi, pi in obj_point_lookup[(sx, sz)]:

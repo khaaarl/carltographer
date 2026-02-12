@@ -658,6 +658,7 @@ mod tests {
                     }],
                     name: None,
                     tags: vec![],
+                    is_footprint: false,
                 },
                 quantity: None,
             }],

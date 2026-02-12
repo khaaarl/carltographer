@@ -11,7 +11,9 @@ from .compare import TEST_SCENARIOS, run_comparison
 def test_parity(scenario):
     """Test that Python and Rust engines produce identical results."""
     params = scenario.make_params()
-    success, diffs, timing = run_comparison(params, verbose=True)
+    success, diffs, timing = run_comparison(
+        params, verbose=True, validate_fn=scenario.validate_fn
+    )
 
     if timing:
         print(

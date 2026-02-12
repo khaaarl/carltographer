@@ -151,6 +151,7 @@ class TerrainObject:
     shapes: list[Shape]
     name: str | None = None
     tags: list[str] = field(default_factory=list)
+    is_footprint: bool = False
 
     @staticmethod
     def from_dict(d: dict) -> TerrainObject:
@@ -159,6 +160,7 @@ class TerrainObject:
             shapes=[Shape.from_dict(s) for s in d["shapes"]],
             name=d.get("name"),
             tags=d.get("tags", []),
+            is_footprint=d.get("is_footprint", False),
         )
 
     def to_dict(self) -> dict:
@@ -170,6 +172,8 @@ class TerrainObject:
             d["name"] = self.name
         if self.tags:
             d["tags"] = self.tags
+        if self.is_footprint:
+            d["is_footprint"] = True
         return d
 
 

@@ -397,6 +397,7 @@ def make_test_catalog() -> TerrainCatalog:
                     ],
                     name="Ruins (base)",
                     tags=["ruins"],
+                    is_footprint=True,
                 ),
                 quantity=None,
             ),
@@ -504,6 +505,7 @@ def make_multi_type_catalog() -> TerrainCatalog:
                     ],
                     name="Ruins",
                     tags=["ruins"],
+                    is_footprint=True,
                 ),
                 quantity=None,
             ),
@@ -714,6 +716,94 @@ def _validate_infantry_no_intermediate(
                 diffs.append(
                     f"{engine_name} {dz_id}: unexpected 'infantry' sub-dict"
                 )
+    return diffs
+
+
+def _validate_infantry_obscuring_dual_pass(
+    py_dict: dict, rs_dict: dict
+) -> list[str]:
+    """Validate dual-pass infantry visibility works for obscuring features.
+
+    With a single obscuring (ruins) feature at 3.0" height:
+    - Standard pass (4.0"): 3.0 < 4.0 → doesn't block → high visibility
+    - Infantry pass (2.2"): 3.0 >= 2.2 → blocks (back-facing edges) → lower
+    The overall result should contain 'standard' and 'infantry' sub-dicts
+    with different values.
+    """
+    diffs = []
+    for engine_name, result in [("Python", py_dict), ("Rust", rs_dict)]:
+        vis = result.get("layout", {}).get("visibility", {})
+        overall = vis.get("overall", {})
+        std = overall.get("standard")
+        inf = overall.get("infantry")
+        if std is None:
+            diffs.append(
+                f"{engine_name}: missing 'standard' sub-dict in overall"
+            )
+            continue
+        if inf is None:
+            diffs.append(
+                f"{engine_name}: missing 'infantry' sub-dict in overall"
+            )
+            continue
+        # Standard pass: obscuring shape at 3.0" < 4.0" → no blocking → 100%
+        if std["value"] != 100.0:
+            diffs.append(
+                f"{engine_name} standard visibility: "
+                f"{std['value']} (expected 100.0)"
+            )
+        # Infantry pass: obscuring shape at 3.0" >= 2.2" → blocks → < 100%
+        if inf["value"] >= 100.0:
+            diffs.append(
+                f"{engine_name} infantry visibility: "
+                f"{inf['value']} (expected < 100.0)"
+            )
+    return diffs
+
+
+def _validate_wtc_short_ruin_visibility(
+    py_dict: dict, rs_dict: dict
+) -> list[str]:
+    """Validate WTC short ruin visibility with opacity_height on the base.
+
+    A single WTC short ruin on a 20x20 table:
+    - Base: 12x6, height 0, opacity_height_inches=99 (Obscuring keyword)
+    - Walls: four sections at 3.0" height
+
+    Expected behavior:
+    - Standard pass (4.0"): base blocks (99 >= 4.0), walls don't (3.0 < 4.0)
+      → visibility < 100%
+    - Infantry pass (2.2"): base blocks (99 >= 2.2) AND walls block (3.0 >= 2.2)
+      → visibility even lower than standard
+    """
+    diffs = []
+    for engine_name, result in [("Python", py_dict), ("Rust", rs_dict)]:
+        vis = result.get("layout", {}).get("visibility", {})
+        overall = vis.get("overall", {})
+        std = overall.get("standard")
+        inf = overall.get("infantry")
+        if std is None:
+            diffs.append(
+                f"{engine_name}: missing 'standard' sub-dict in overall"
+            )
+            continue
+        if inf is None:
+            diffs.append(
+                f"{engine_name}: missing 'infantry' sub-dict in overall"
+            )
+            continue
+        # Standard pass: base blocks via opacity_height → < 100%
+        if std["value"] >= 100.0:
+            diffs.append(
+                f"{engine_name} standard visibility: "
+                f"{std['value']} (expected < 100.0)"
+            )
+        # Infantry pass: base + walls block → lower than standard
+        if inf["value"] >= std["value"]:
+            diffs.append(
+                f"{engine_name} infantry visibility: "
+                f"{inf['value']} (expected < standard {std['value']})"
+            )
     return diffs
 
 
@@ -1269,6 +1359,114 @@ TEST_SCENARIOS = [
         ),
         validate_fn=_validate_infantry_no_intermediate,
     ),
+    # Obscuring feature (ruins) at 3.0" height — intermediate range [2.2, 4.0).
+    # Currently obscuring shapes bypass the height check and block at ALL heights,
+    # so the dual-pass is never triggered.  After the fix, the 3.0" shape should:
+    # - Standard pass (4.0"): not block (3.0 < 4.0)
+    # - Infantry pass (2.2"): block via back-facing edges (3.0 >= 2.2)
+    TestScenario(
+        "infantry_vis_obscuring_dual_pass",
+        seed=42,
+        num_steps=0,
+        num_replicas=1,
+        table_width=60.0,
+        table_depth=44.0,
+        catalog=_make_wall_catalog(
+            include_short=False
+        ),  # catalog unused (0 steps)
+        initial_layout=TerrainLayout(
+            table_width=60.0,
+            table_depth=44.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="short_ruins",
+                        feature_type="obscuring",
+                        components=[FeatureComponent(object_id="short_ruins")],
+                        tags=["obscuring"],
+                    ),
+                    transform=Transform(x=0.0, z=0.0, rotation_deg=0.0),
+                ),
+            ],
+            terrain_objects=[
+                TerrainObject(
+                    id="short_ruins",
+                    shapes=[Shape(width=5.0, depth=5.0, height=3.0)],
+                ),
+            ],
+        ),
+        validate_fn=_validate_infantry_obscuring_dual_pass,
+    ),
+    # WTC short ruin: base (opacity_height=99, always blocks) + walls (3.0").
+    # Standard: base blocks → < 100%.  Infantry: base + walls → even lower.
+    TestScenario(
+        "wtc_short_ruin_visibility",
+        seed=42,
+        num_steps=0,
+        num_replicas=1,
+        table_width=20.0,
+        table_depth=20.0,
+        catalog=_make_wall_catalog(
+            include_short=False
+        ),  # catalog unused (0 steps)
+        initial_layout=TerrainLayout(
+            table_width=20.0,
+            table_depth=20.0,
+            placed_features=[
+                PlacedFeature(
+                    feature=TerrainFeature(
+                        id="wtc_short",
+                        feature_type="obscuring",
+                        components=[
+                            FeatureComponent(object_id="ruins_short"),
+                            FeatureComponent(object_id="wtc_short_walls"),
+                        ],
+                        tags=["obscuring"],
+                    ),
+                    transform=Transform(x=0.0, z=0.0, rotation_deg=0.0),
+                ),
+            ],
+            terrain_objects=[
+                TerrainObject(
+                    id="ruins_short",
+                    shapes=[
+                        Shape(width=12.0, depth=6.0, height=0.0),
+                    ],
+                    is_footprint=True,
+                ),
+                TerrainObject(
+                    id="wtc_short_walls",
+                    shapes=[
+                        Shape(
+                            width=9.0,
+                            depth=0.1,
+                            height=3.0,
+                            offset=Transform(x=0.65, z=-2.15),
+                        ),
+                        Shape(
+                            width=0.1,
+                            depth=5.0,
+                            height=3.0,
+                            offset=Transform(x=5.15, z=0.35),
+                        ),
+                        Shape(
+                            width=0.6,
+                            depth=0.1,
+                            height=3.0,
+                            offset=Transform(x=5.5, z=-2.15),
+                        ),
+                        Shape(
+                            width=0.1,
+                            depth=0.6,
+                            height=3.0,
+                            offset=Transform(x=5.15, z=-2.5),
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        validate_fn=_validate_wtc_short_ruin_visibility,
+    ),
     # -- Feature locking ---
     TestScenario(
         "locked_features",
@@ -1387,6 +1585,7 @@ def _make_polygon_catalog() -> TerrainCatalog:
                             vertices=woods_verts,
                         )
                     ],
+                    is_footprint=True,
                 ),
                 quantity=None,
             ),
@@ -1394,6 +1593,7 @@ def _make_polygon_catalog() -> TerrainCatalog:
                 item=TerrainObject(
                     id="ruins_10x6",
                     shapes=[Shape(width=10.0, depth=6.0, height=0.0)],
+                    is_footprint=True,
                 ),
                 quantity=None,
             ),
@@ -1437,6 +1637,7 @@ def _make_polygon_catalog() -> TerrainCatalog:
                             ),
                         ),
                     ],
+                    tags=["obscuring"],
                 ),
                 quantity=None,
             ),
@@ -1568,6 +1769,7 @@ def _make_polygon_only_catalog() -> TerrainCatalog:
                             vertices=woods_verts,
                         )
                     ],
+                    is_footprint=True,
                 ),
                 quantity=None,
             ),
@@ -1723,6 +1925,11 @@ def params_to_json_dict(params: EngineParams) -> dict:
                         ],
                         **({"name": obj.item.name} if obj.item.name else {}),
                         **({"tags": obj.item.tags} if obj.item.tags else {}),
+                        **(
+                            {"is_footprint": True}
+                            if obj.item.is_footprint
+                            else {}
+                        ),
                     },
                     **({"quantity": obj.quantity} if obj.quantity else {}),
                 }

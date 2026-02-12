@@ -603,6 +603,7 @@ mod tests {
                     }],
                     name: None,
                     tags: vec![],
+                    is_footprint: false,
                 },
                 quantity: None,
             }],
@@ -806,6 +807,7 @@ mod tests {
                     }],
                     name: None,
                     tags: vec![],
+                    is_footprint: false,
                 },
                 quantity: None,
             }],
@@ -838,6 +840,7 @@ mod tests {
             }],
             name: None,
             tags: vec![],
+            is_footprint: false,
         };
 
         let initial_layout = TerrainLayout {

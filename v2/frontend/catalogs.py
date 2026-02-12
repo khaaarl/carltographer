@@ -61,6 +61,7 @@ WTC_RUINS_BASE_TALL = {
         }
     ],
     "tags": ["ruins"],
+    "is_footprint": True,
     "fill_color": "#B8D4E8",
     "outline_color": "#000000",
 }
@@ -77,6 +78,7 @@ WTC_RUINS_BASE_SHORT = {
         }
     ],
     "tags": ["ruins"],
+    "is_footprint": True,
     "fill_color": "#E8B8B8",
     "outline_color": "#000000",
 }
@@ -195,6 +197,7 @@ GW_FLAT_RUIN_BASE = {
         }
     ],
     "tags": ["ruins"],
+    "is_footprint": True,
     "fill_color": "#C8D8C0",
     "outline_color": "#000000",
 }
@@ -211,6 +214,7 @@ GW_RUIN_BASE_12X6 = {
         }
     ],
     "tags": ["ruins"],
+    "is_footprint": True,
     "fill_color": "#D4C8A0",
     "outline_color": "#000000",
 }
@@ -227,6 +231,7 @@ GW_RUIN_BASE_10X5 = {
         }
     ],
     "tags": ["ruins"],
+    "is_footprint": True,
     "fill_color": "#C0C8D8",
     "outline_color": "#000000",
 }
@@ -450,6 +455,7 @@ KIDNEY_BEAN_WOODS_OBJECT = {
         }
     ],
     "tags": ["woods"],
+    "is_footprint": True,
     "fill_color": "#4a8c3f",
     "outline_color": "#000000",
 }
