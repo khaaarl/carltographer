@@ -148,7 +148,7 @@ fn compute_score(
         }
     }
 
-    // 4. Objective hidability (per-DZ error from target, then averaged)
+    // 3. Objective hidability (per-DZ error from target, then averaged)
     if let Some(target) = targets.objective_hidability_target {
         if let Some(obj_hide) = vis.get("objective_hidability").and_then(|v| v.as_object()) {
             if let Some(avg_error) = avg_metric_error(obj_hide, target) {

@@ -20,7 +20,7 @@
 //!   order varies across runs, but the final result is identical because
 //!   addition is commutative and the boolean merge is order-independent.
 //!
-//! - **Buffer reuse**: `VisBuffers` (ray list, endpoint set, sorted events)
+//! - **Buffer reuse**: `VisBuffers` (rays, endpoint set, angular buckets, segments)
 //!   are allocated once per thread and reused across observers via `clear()`,
 //!   avoiding per-observer allocation. Python allocates fresh lists each time.
 //!
@@ -154,8 +154,8 @@ fn point_in_polygon(px: f64, pz: f64, vertices: &[(f64, f64)]) -> bool {
 /// in registers while linearly scanning the points array (good cache locality,
 /// LLVM can autovectorize the inner loop).
 ///
-/// Superseded by `fraction_of_dz_visible_zsorted` and
-/// `pip_zsorted_update_seen` in production code. Retained for tests.
+/// Superseded by `fraction_of_dz_visible_zsorted` in production code.
+/// Retained for tests.
 #[cfg(test)]
 fn batch_point_in_polygon(points: &[(f64, f64)], polygon: &[(f64, f64)], inside: &mut Vec<bool>) {
     inside.clear();

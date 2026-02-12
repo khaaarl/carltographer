@@ -37,16 +37,6 @@ from frontend.missions import get_mission
 from .hash_manifest import compute_engine_hashes, write_manifest
 
 
-def quantize_position(value: float) -> float:
-    """Quantize position to nearest 0.1 inch (matches engine)."""
-    return round(value / 0.1) * 0.1
-
-
-def quantize_angle(value: float) -> float:
-    """Quantize angle to nearest 15 degrees (matches engine)."""
-    return round(value / 15.0) * 15.0
-
-
 def positions_match(p1: float, p2: float, tolerance: float = 0.1) -> bool:
     """Compare positions with tolerance (matches quantization grid)."""
     return abs(p1 - p2) < tolerance
@@ -933,9 +923,9 @@ TEST_SCENARIOS = [
     TestScenario(
         "basic_10_steps", seed=42, num_steps=10, skip_visibility=False
     ),
-    TestScenario("basic_50_steps", seed=42, num_steps=10),
+    TestScenario("basic_10_steps_no_vis", seed=42, num_steps=10),
     TestScenario(
-        "basic_100_steps", seed=42, num_steps=10, skip_visibility=False
+        "basic_10_steps_with_vis", seed=42, num_steps=10, skip_visibility=False
     ),
     TestScenario("seed_1", seed=1, num_steps=10, skip_visibility=False),
     TestScenario("seed_999", seed=999, num_steps=10, skip_visibility=False),
