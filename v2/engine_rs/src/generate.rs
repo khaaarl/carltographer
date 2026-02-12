@@ -44,18 +44,6 @@ fn collect_layout_objects(
     result
 }
 
-fn next_feature_id(features: &[PlacedFeature]) -> u32 {
-    let mut max_id: u32 = 0;
-    for pf in features {
-        if let Some(num_str) = pf.feature.id.strip_prefix("feature_") {
-            if let Ok(n) = num_str.parse::<u32>() {
-                max_id = max_id.max(n);
-            }
-        }
-    }
-    max_id + 1
-}
-
 fn avg_metric_error(obj: &serde_json::Map<String, serde_json::Value>, target: f64) -> Option<f64> {
     if obj.is_empty() {
         return None;
@@ -183,13 +171,9 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
     }
     let tuning = params.tuning();
 
-    let (initial_features, mut nid) = match &params.initial_layout {
-        Some(initial) => {
-            let feats = initial.placed_features.clone();
-            let id = next_feature_id(&feats);
-            (feats, id)
-        }
-        None => (Vec::new(), 1u32),
+    let initial_features = match &params.initial_layout {
+        Some(initial) => initial.placed_features.clone(),
+        None => Vec::new(),
     };
 
     let catalog_features: Vec<&TerrainFeature> =
@@ -237,11 +221,10 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
     );
 
     for _ in 0..num_steps {
-        let (undo, new_nid) = perform_step(
+        let undo = perform_step(
             &mut layout,
             &mut rng,
             1.0,
-            nid,
             &catalog_features,
             has_catalog,
             &objects_by_id,
@@ -272,7 +255,6 @@ fn generate_hill_climbing(params: &EngineParams) -> EngineResult {
         );
         if new_score >= current_score {
             current_score = new_score;
-            nid = new_nid;
         } else {
             undo_step(&mut layout, undo);
             if let Some(ref mut cache) = vis_cache {
@@ -332,7 +314,6 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
         layout: TerrainLayout,
         rng: Pcg32,
         score: f64,
-        next_id: u32,
         temperature: f64,
         vis_cache: Option<crate::visibility::VisibilityCache<'a>>,
     }
@@ -340,13 +321,9 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
     let mut replicas: Vec<Replica> = Vec::with_capacity(num_replicas as usize);
     for i in 0..num_replicas {
         let rng = Pcg32::new(params.seed, i as u64);
-        let (initial_features, next_id) = match &params.initial_layout {
-            Some(initial) => {
-                let feats = initial.placed_features.clone();
-                let id = next_feature_id(&feats);
-                (feats, id)
-            }
-            None => (Vec::new(), 1u32),
+        let initial_features = match &params.initial_layout {
+            Some(initial) => initial.placed_features.clone(),
+            None => Vec::new(),
         };
         let layout = TerrainLayout {
             table_width_inches: params.table_width_inches,
@@ -380,7 +357,6 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
             layout,
             rng,
             score,
-            next_id,
             temperature: temperatures[i as usize],
             vis_cache,
         });
@@ -428,14 +404,13 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                             1 + (t_factor * tuning.max_extra_mutations as f64) as u32;
 
                         for _ in 0..batch_size {
-                            let mut sub_undos: Vec<(StepUndo, u32)> =
+                            let mut sub_undos: Vec<StepUndo> =
                                 Vec::with_capacity(num_mutations as usize);
                             for mi in 0..num_mutations {
-                                let (undo, new_nid) = perform_step(
+                                let undo = perform_step(
                                     &mut replica.layout,
                                     &mut replica.rng,
                                     t_factor,
-                                    replica.next_id,
                                     cat_feats,
                                     has_catalog,
                                     objs,
@@ -445,11 +420,10 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                     mi,
                                     num_mutations,
                                 );
-                                sub_undos.push((undo, replica.next_id));
-                                replica.next_id = new_nid;
+                                sub_undos.push(undo);
                             }
 
-                            if sub_undos.iter().all(|(u, _)| matches!(u, StepUndo::Noop)) {
+                            if sub_undos.iter().all(|u| matches!(u, StepUndo::Noop)) {
                                 continue;
                             }
 
@@ -482,9 +456,8 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                                     prb.1 = Some(replica.layout.clone());
                                 }
                             } else {
-                                for (undo, prev_nid) in sub_undos.into_iter().rev() {
+                                for undo in sub_undos.into_iter().rev() {
                                     undo_step(&mut replica.layout, undo);
-                                    replica.next_id = prev_nid;
                                 }
                                 if let Some(ref mut cache) = replica.vis_cache {
                                     cache.mark_dirty();
@@ -534,11 +507,10 @@ fn generate_tempering(params: &EngineParams, num_replicas: u32) -> EngineResult 
                 };
 
                 if accept {
-                    // Swap layouts, scores, next_ids, vis_caches
+                    // Swap layouts, scores, vis_caches
                     let (left, right) = replicas.split_at_mut(i + 1);
                     std::mem::swap(&mut left[i].layout, &mut right[0].layout);
                     std::mem::swap(&mut left[i].score, &mut right[0].score);
-                    std::mem::swap(&mut left[i].next_id, &mut right[0].next_id);
                     std::mem::swap(&mut left[i].vis_cache, &mut right[0].vis_cache);
                 }
             }

@@ -51,6 +51,7 @@ from ..engine_cmp.hash_manifest import verify_engine_unchanged
 from .catalogs import TERRAIN_CATALOGS
 from .layout_io import load_layout, save_layout_png
 from .missions import EDITIONS, find_mission_path, get_mission
+from .tts_save import create_tts_save
 
 try:
     import engine_rs as _engine_rs
@@ -707,7 +708,14 @@ class ControlPanel(ttk.Frame):
     """Sidebar with engine parameter controls."""
 
     def __init__(
-        self, parent, on_table_changed, on_generate, on_clear, on_save, on_load
+        self,
+        parent,
+        on_table_changed,
+        on_generate,
+        on_clear,
+        on_save,
+        on_load,
+        on_tts_export,
     ):
         super().__init__(parent, padding=10)
         self.on_table_changed = on_table_changed
@@ -715,6 +723,7 @@ class ControlPanel(ttk.Frame):
         self.on_clear = on_clear
         self.on_save = on_save
         self.on_load = on_load
+        self.on_tts_export = on_tts_export
 
         # -- tk variables --
         self.table_width_var = tk.DoubleVar(value=60.0)
@@ -885,12 +894,18 @@ class ControlPanel(ttk.Frame):
         Tooltip(btn, "Remove all terrain and start with an empty table")
 
         btn = ttk.Button(btn_frame, text="Save", command=self.on_save)
-        btn.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(2, 0))
+        btn.grid(row=1, column=0, sticky="ew", padx=(0, 2), pady=(2, 2))
         Tooltip(btn, "Export layout as a PNG with embedded data")
 
         btn = ttk.Button(btn_frame, text="Load", command=self.on_load)
-        btn.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(2, 0))
+        btn.grid(row=1, column=1, sticky="ew", padx=(2, 0), pady=(2, 2))
         Tooltip(btn, "Import a layout from a saved PNG or JSON file")
+
+        btn = ttk.Button(
+            btn_frame, text="Export to TTS", command=self.on_tts_export
+        )
+        btn.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        Tooltip(btn, "Save as a Tabletop Simulator save file")
 
         # --- Right column: Spacing, Feature Counts, Results ---
         row = 0
@@ -1358,6 +1373,7 @@ class App:
             on_clear=self._on_clear,
             on_save=self._on_save,
             on_load=self._on_load,
+            on_tts_export=self._on_tts_export,
         )
         self.controls.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
 
@@ -2905,6 +2921,16 @@ class App:
             (int(tw * ppi), int(td * ppi)), Image.Resampling.LANCZOS
         )
         save_layout_png(img, self.layout, path)
+
+    def _on_tts_export(self):
+        name = f"Carltographer {time.strftime('%Y-%m-%d_%H-%M-%S')}"
+        catalog_name = self.controls.catalog_var.get()
+        catalog_dict = TERRAIN_CATALOGS[catalog_name]
+        try:
+            path = create_tts_save(name, self.layout, catalog_dict)
+            messagebox.showinfo("TTS Export", f"Saved to:\n{path}")
+        except Exception as e:
+            messagebox.showerror("TTS Export Error", str(e))
 
     def _on_load(self):
         self._dismiss_popup()

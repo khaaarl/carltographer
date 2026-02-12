@@ -118,6 +118,23 @@
       "additionalProperties": false
     },
 
+    "tts_info": {
+      "type": "object",
+      "description": "Tabletop Simulator integration info for a terrain feature. Maps the feature to a TTS object template in the reference save file, with the coordinate transform needed to position it correctly.",
+      "properties": {
+        "nickname": {
+          "type": "string",
+          "description": "Nickname of the TTS object in the reference save file (matched case-insensitively)."
+        },
+        "pivot_offset": {
+          "$ref": "#/$defs/transform",
+          "description": "Transform from Carltographer's feature center/orientation to the TTS object's pivot point/orientation, in the feature's local (un-rotated) coordinate frame. x_inches/z_inches are the positional offset (inches = TTS units), rotation_deg is the angular offset between Carltographer's 0° and TTS's 0°."
+        }
+      },
+      "required": ["nickname"],
+      "additionalProperties": false
+    },
+
     "terrain_feature": {
       "type": "object",
       "description": "A Warhammer 40k terrain feature: a rules-level concept like a Ruin, Obstacle, Woods, or Crater. Composed of one or more terrain objects.",
@@ -140,6 +157,10 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Freeform tags for categorization and filtering (e.g. 'obscuring', 'ruins', 'wtc')."
+        },
+        "tts": {
+          "$ref": "#/$defs/tts_info",
+          "description": "Optional Tabletop Simulator integration info. If present, the feature can be exported to a TTS save file."
         }
       },
       "required": ["id", "feature_type", "components"],

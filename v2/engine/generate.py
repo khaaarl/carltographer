@@ -204,36 +204,22 @@ def _compute_score(
     return phase2_base + (100.0 - weighted_avg_error)
 
 
-def _next_feature_id(layout: TerrainLayout) -> int:
-    """Find the next unused feature_N id number."""
-    max_id = 0
-    for pf in layout.placed_features:
-        parts = pf.feature.id.split("_", 1)
-        if len(parts) == 2 and parts[1].isdigit():
-            max_id = max(max_id, int(parts[1]))
-    return max_id + 1
-
-
-def _create_layout(params: EngineParams) -> tuple[TerrainLayout, int]:
-    """Create initial layout and next_id from params."""
+def _create_layout(params: EngineParams) -> TerrainLayout:
+    """Create initial layout from params."""
     if params.initial_layout is not None:
-        layout = TerrainLayout(
+        return TerrainLayout(
             table_width=params.table_width,
             table_depth=params.table_depth,
             placed_features=list(params.initial_layout.placed_features),
             rotationally_symmetric=params.rotationally_symmetric,
             mission=params.mission,
         )
-        next_id = _next_feature_id(layout)
-    else:
-        layout = TerrainLayout(
-            table_width=params.table_width,
-            table_depth=params.table_depth,
-            rotationally_symmetric=params.rotationally_symmetric,
-            mission=params.mission,
-        )
-        next_id = 1
-    return layout, next_id
+    return TerrainLayout(
+        table_width=params.table_width,
+        table_depth=params.table_depth,
+        rotationally_symmetric=params.rotationally_symmetric,
+        mission=params.mission,
+    )
 
 
 def _generate_hill_climbing(params: EngineParams) -> EngineResult:
@@ -241,7 +227,7 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
     rng = PCG32(params.seed)
     objects_by_id = _build_object_index(params.catalog)
     _merge_layout_objects(objects_by_id, params.initial_layout)
-    layout, next_id = _create_layout(params)
+    layout = _create_layout(params)
     tuning = params.get_tuning()
 
     catalog_features = [cf.item for cf in params.catalog.features]
@@ -265,11 +251,10 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
     )
 
     for _ in range(params.num_steps):
-        undo, new_next_id = _perform_step(
+        undo = _perform_step(
             layout,
             rng,
             1.0,
-            next_id,
             catalog_features,
             has_catalog,
             objects_by_id,
@@ -291,7 +276,6 @@ def _generate_hill_climbing(params: EngineParams) -> EngineResult:
         )
         if new_score >= current_score:
             current_score = new_score
-            next_id = new_next_id
         else:
             _undo_step(layout, undo)
 
@@ -318,7 +302,6 @@ class _TemperingReplica:
     layout: TerrainLayout
     rng: PCG32
     score: float
-    next_id: int
     temperature: float
     vis_cache: VisibilityCache | None
 
@@ -350,7 +333,6 @@ def _attempt_replica_swap(
     if accept:
         ri.layout, rj.layout = rj.layout, ri.layout
         ri.score, rj.score = rj.score, ri.score
-        ri.next_id, rj.next_id = rj.next_id, ri.next_id
         ri.vis_cache, rj.vis_cache = rj.vis_cache, ri.vis_cache
 
     return accept
@@ -376,7 +358,7 @@ def _generate_tempering(
     replicas: list[_TemperingReplica] = []
     for i in range(num_replicas):
         rng = PCG32(params.seed, seq=i)
-        layout, next_id = _create_layout(params)
+        layout = _create_layout(params)
         vis_cache: VisibilityCache | None = None
         if not params.skip_visibility:
             vis_cache = VisibilityCache(layout, objects_by_id)
@@ -396,7 +378,6 @@ def _generate_tempering(
                 layout=layout,
                 rng=rng,
                 score=score,
-                next_id=next_id,
                 temperature=temperatures[i],
                 vis_cache=vis_cache,
             )
@@ -430,13 +411,12 @@ def _generate_tempering(
 
             for _ in range(batch_size):
                 # Apply multiple mutations
-                sub_undos: list[tuple[StepUndo, int]] = []
+                sub_undos: list[StepUndo] = []
                 for mi in range(num_mutations):
-                    undo, new_nid = _perform_step(
+                    undo = _perform_step(
                         replica.layout,
                         replica.rng,
                         t_factor,
-                        replica.next_id,
                         catalog_features,
                         has_catalog,
                         objects_by_id,
@@ -445,11 +425,10 @@ def _generate_tempering(
                         index_in_chain=mi,
                         chain_length=num_mutations,
                     )
-                    sub_undos.append((undo, replica.next_id))
-                    replica.next_id = new_nid
+                    sub_undos.append(undo)
 
                 # Skip scoring if all noops
-                if all(u.action == "noop" for u, _ in sub_undos):
+                if all(u.action == "noop" for u in sub_undos):
                     continue
 
                 old_score = replica.score
@@ -474,9 +453,8 @@ def _generate_tempering(
                         best_layout = copy.deepcopy(replica.layout)
                 else:
                     # Undo all mutations in reverse
-                    for undo, prev_nid in reversed(sub_undos):
+                    for undo in reversed(sub_undos):
                         _undo_step(replica.layout, undo)
-                        replica.next_id = prev_nid
 
         remaining -= batch_size
 

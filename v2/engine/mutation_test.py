@@ -199,7 +199,7 @@ class TestUndoStep:
         feat = TerrainFeature(id="f1", feature_type="obstacle", components=[])
         pf = PlacedFeature(feat, Transform(1.0, 2.0, 0.0))
         layout.placed_features.append(pf)
-        undo = StepUndo(action="add", index=0, prev_next_id=1)
+        undo = StepUndo(action="add", index=0)
         _undo_step(layout, undo)
         assert len(layout.placed_features) == 0
 
@@ -234,9 +234,7 @@ class TestUndoStep:
         old_pf = PlacedFeature(old_feat, Transform(1.0, 2.0, 0.0))
         new_pf = PlacedFeature(new_feat, Transform(1.0, 2.0, 0.0))
         layout.placed_features.append(new_pf)
-        undo = StepUndo(
-            action="replace", index=0, old_feature=old_pf, prev_next_id=1
-        )
+        undo = StepUndo(action="replace", index=0, old_feature=old_pf)
         _undo_step(layout, undo)
         assert layout.placed_features[0].feature.id == "f1"
 

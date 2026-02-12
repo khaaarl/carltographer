@@ -254,9 +254,9 @@ pub(crate) fn compute_tile_weights(
     (weights, nx, nz, tile_w, tile_d)
 }
 
-fn instantiate_feature(template: &TerrainFeature, feature_id: u32) -> TerrainFeature {
+fn instantiate_feature(template: &TerrainFeature) -> TerrainFeature {
     TerrainFeature {
-        id: format!("feature_{}", feature_id),
+        id: template.id.clone(),
         feature_type: template.feature_type.clone(),
         components: template.components.clone(),
         tags: template.tags.clone(),
@@ -304,12 +304,11 @@ pub(crate) fn temperature_move(
     }
 }
 
-/// Attempt one mutation action. Returns (undo, new_next_id) or None on failure.
+/// Attempt one mutation action. Returns undo token or None on failure.
 fn try_single_action(
     layout: &mut TerrainLayout,
     rng: &mut Pcg32,
     t_factor: f64,
-    next_id: u32,
     catalog_features: &[&TerrainFeature],
     has_catalog: bool,
     objects_by_id: &HashMap<String, &TerrainObject>,
@@ -318,7 +317,7 @@ fn try_single_action(
     catalog_quantities: &[Option<u32>],
     index_in_chain: u32,
     chain_length: u32,
-) -> Option<(StepUndo, u32)> {
+) -> Option<StepUndo> {
     let has_features = !layout.placed_features.is_empty();
     let feature_counts =
         count_features_by_type(&layout.placed_features, params.rotationally_symmetric);
@@ -388,7 +387,7 @@ fn try_single_action(
             );
             let tidx = weighted_choice(rng, &template_weights)?;
             let template = catalog_features[tidx];
-            let new_feat = instantiate_feature(template, next_id);
+            let new_feat = instantiate_feature(template);
             let half_w = params.table_width_inches / 2.0;
             let half_d = params.table_depth_inches / 2.0;
             let (tile_weights, nx, _nz, tile_w, tile_d) = compute_tile_weights(
@@ -430,7 +429,7 @@ fn try_single_action(
                 params.min_all_feature_gap_inches,
                 params.min_all_edge_gap_inches,
             ) {
-                Some((StepUndo::Add { index: idx }, next_id + 1))
+                Some(StepUndo::Add { index: idx })
             } else {
                 layout.placed_features.pop();
                 None
@@ -466,7 +465,7 @@ fn try_single_action(
                 params.min_all_feature_gap_inches,
                 params.min_all_edge_gap_inches,
             ) {
-                Some((StepUndo::Move { index: idx, old }, next_id))
+                Some(StepUndo::Move { index: idx, old })
             } else {
                 layout.placed_features[idx] = old;
                 None
@@ -483,7 +482,7 @@ fn try_single_action(
             );
             let idx = weighted_choice(rng, &delete_weights)?;
             let saved = layout.placed_features.remove(idx);
-            Some((StepUndo::Delete { index: idx, saved }, next_id))
+            Some(StepUndo::Delete { index: idx, saved })
         }
         3 => {
             // Replace: remove feature, add different template at same position
@@ -508,7 +507,7 @@ fn try_single_action(
             let tidx = weighted_choice(rng, &template_weights)?;
             let template = catalog_features[tidx];
             let old = layout.placed_features[idx].clone();
-            let new_feat = instantiate_feature(template, next_id);
+            let new_feat = instantiate_feature(template);
             layout.placed_features[idx] = PlacedFeature {
                 feature: new_feat,
                 transform: old.transform.clone(),
@@ -526,7 +525,7 @@ fn try_single_action(
                 params.min_all_feature_gap_inches,
                 params.min_all_edge_gap_inches,
             ) {
-                Some((StepUndo::Replace { index: idx, old }, next_id + 1))
+                Some(StepUndo::Replace { index: idx, old })
             } else {
                 layout.placed_features[idx] = old;
                 None
@@ -558,7 +557,7 @@ fn try_single_action(
                 params.min_all_feature_gap_inches,
                 params.min_all_edge_gap_inches,
             ) {
-                Some((StepUndo::Rotate { index: idx, old }, next_id))
+                Some(StepUndo::Rotate { index: idx, old })
             } else {
                 layout.placed_features[idx] = old;
                 None
@@ -573,7 +572,6 @@ pub(crate) fn perform_step(
     layout: &mut TerrainLayout,
     rng: &mut Pcg32,
     t_factor: f64,
-    next_id: u32,
     catalog_features: &[&TerrainFeature],
     has_catalog: bool,
     objects_by_id: &HashMap<String, &TerrainObject>,
@@ -582,7 +580,7 @@ pub(crate) fn perform_step(
     catalog_quantities: &[Option<u32>],
     index_in_chain: u32,
     chain_length: u32,
-) -> (StepUndo, u32) {
+) -> StepUndo {
     let tuning = params.tuning();
     let mut effective_t = t_factor;
     for _ in 0..tuning.max_retries {
@@ -590,7 +588,6 @@ pub(crate) fn perform_step(
             layout,
             rng,
             effective_t,
-            next_id,
             catalog_features,
             has_catalog,
             objects_by_id,
@@ -604,7 +601,7 @@ pub(crate) fn perform_step(
         }
         effective_t *= tuning.retry_decay;
     }
-    (StepUndo::Noop, next_id)
+    StepUndo::Noop
 }
 
 /// Revert a mutation using its undo token.

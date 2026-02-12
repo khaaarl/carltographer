@@ -186,7 +186,11 @@
         ],
         "tags": [
           "obstacle"
-        ]
+        ],
+        "tts": {
+          "nickname": "WTC Crate Stack",
+          "pivot_offset": { "x_inches": 2.3, "z_inches": -0.8, "rotation_deg": 0.0 }
+        }
       },
       "quantity": 2
     },
@@ -206,7 +210,11 @@
           "ruins",
           "obscuring",
           "wtc"
-        ]
+        ],
+        "tts": {
+          "nickname": "THREE STOREY RUIN",
+          "pivot_offset": { "x_inches": -6.0, "z_inches": -3.0, "rotation_deg": 180.0 }
+        }
       },
       "quantity": 6
     },
@@ -226,7 +234,11 @@
           "ruins",
           "obscuring",
           "wtc"
-        ]
+        ],
+        "tts": {
+          "nickname": "TWO STOREY RUIN",
+          "pivot_offset": { "x_inches": 6.0, "z_inches": 3.0, "rotation_deg": 0.0 }
+        }
       },
       "quantity": 8
     }

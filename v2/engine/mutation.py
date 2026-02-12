@@ -59,7 +59,6 @@ class StepUndo:
     action: str  # "noop", "add", "move", "delete", "replace", "rotate"
     index: int = -1
     old_feature: PlacedFeature | None = None
-    prev_next_id: int = 0
 
 
 def _quantize_position(value: float) -> float:
@@ -251,12 +250,14 @@ def _compute_tile_weights(
     return weights, nx, nz, tile_w, tile_d
 
 
-def _instantiate_feature(
-    template: TerrainFeature, feature_id: int
-) -> TerrainFeature:
-    """Create a new feature instance from a catalog template."""
+def _instantiate_feature(template: TerrainFeature) -> TerrainFeature:
+    """Create a new feature instance from a catalog template.
+
+    Preserves the template's ID so that placed features retain a stable
+    reference to their catalog entry (e.g. ``"crate"``, ``"wtc_three_storey"``).
+    """
     return TerrainFeature(
-        id=f"feature_{feature_id}",
+        id=template.id,
         feature_type=template.feature_type,
         components=list(template.components),
         tags=list(template.tags),
@@ -303,7 +304,6 @@ def _try_single_action(
     layout: TerrainLayout,
     rng: PCG32,
     t_factor: float,
-    next_id: int,
     catalog_features: list[TerrainFeature],
     has_catalog: bool,
     objects_by_id: dict[str, TerrainObject],
@@ -311,8 +311,8 @@ def _try_single_action(
     catalog_quantities: list[int | None],
     index_in_chain: int = 0,
     chain_length: int = 1,
-) -> tuple[StepUndo, int] | None:
-    """Attempt one mutation action. Returns (undo, new_next_id) or None on failure."""
+) -> StepUndo | None:
+    """Attempt one mutation action. Returns an undo token or None on failure."""
     features = layout.placed_features
     has_features = len(features) > 0
     feature_counts = _count_features_by_type(layout)
@@ -375,7 +375,7 @@ def _try_single_action(
         if tidx < 0:
             return None
         template = catalog_features[tidx]
-        new_feat = _instantiate_feature(template, next_id)
+        new_feat = _instantiate_feature(template)
         half_w = params.table_width / 2.0
         half_d = params.table_depth / 2.0
         tile_weights, nx, nz, tile_w, tile_d = _compute_tile_weights(
@@ -413,10 +413,7 @@ def _try_single_action(
             min_all_feature_gap=params.min_all_feature_gap_inches,
             min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
-            return (
-                StepUndo(action="add", index=idx, prev_next_id=next_id),
-                next_id + 1,
-            )
+            return StepUndo(action="add", index=idx)
         else:
             features.pop()
             return None
@@ -450,10 +447,7 @@ def _try_single_action(
             min_all_feature_gap=params.min_all_feature_gap_inches,
             min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
-            return (
-                StepUndo(action="move", index=idx, old_feature=old),
-                next_id,
-            )
+            return StepUndo(action="move", index=idx, old_feature=old)
         else:
             features[idx] = old
             return None
@@ -471,10 +465,7 @@ def _try_single_action(
         if idx < 0:
             return None
         saved = features.pop(idx)
-        return (
-            StepUndo(action="delete", index=idx, old_feature=saved),
-            next_id,
-        )
+        return StepUndo(action="delete", index=idx, old_feature=saved)
 
     elif action == 3:
         # Replace: remove feature, add different template at same position
@@ -503,7 +494,7 @@ def _try_single_action(
             return None
         template = catalog_features[tidx]
         old = features[idx]
-        new_feat = _instantiate_feature(template, next_id)
+        new_feat = _instantiate_feature(template)
         features[idx] = PlacedFeature(new_feat, old.transform)
         if is_valid_placement(
             features,
@@ -517,15 +508,7 @@ def _try_single_action(
             min_all_feature_gap=params.min_all_feature_gap_inches,
             min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
-            return (
-                StepUndo(
-                    action="replace",
-                    index=idx,
-                    old_feature=old,
-                    prev_next_id=next_id,
-                ),
-                next_id + 1,
-            )
+            return StepUndo(action="replace", index=idx, old_feature=old)
         else:
             features[idx] = old
             return None
@@ -553,10 +536,7 @@ def _try_single_action(
             min_all_feature_gap=params.min_all_feature_gap_inches,
             min_all_edge_gap=params.min_all_edge_gap_inches,
         ):
-            return (
-                StepUndo(action="rotate", index=idx, old_feature=old),
-                next_id,
-            )
+            return StepUndo(action="rotate", index=idx, old_feature=old)
         else:
             features[idx] = old
             return None
@@ -568,7 +548,6 @@ def _perform_step(
     layout: TerrainLayout,
     rng: PCG32,
     t_factor: float,
-    next_id: int,
     catalog_features: list[TerrainFeature],
     has_catalog: bool,
     objects_by_id: dict[str, TerrainObject],
@@ -576,7 +555,7 @@ def _perform_step(
     catalog_quantities: list[int | None] | None = None,
     index_in_chain: int = 0,
     chain_length: int = 1,
-) -> tuple[StepUndo, int]:
+) -> StepUndo:
     """Try mutations with decaying temperature until one succeeds or retries exhausted."""
     if catalog_quantities is None:
         catalog_quantities = [None] * len(catalog_features)
@@ -587,7 +566,6 @@ def _perform_step(
             layout,
             rng,
             effective_t,
-            next_id,
             catalog_features,
             has_catalog,
             objects_by_id,
@@ -599,7 +577,7 @@ def _perform_step(
         if result is not None:
             return result
         effective_t *= tuning.retry_decay
-    return StepUndo(action="noop"), next_id
+    return StepUndo(action="noop")
 
 
 def _undo_step(layout: TerrainLayout, undo: StepUndo) -> None:
