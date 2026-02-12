@@ -1,0 +1,234 @@
+{
+  "name": "WTC Set",
+  "objects": [
+    {
+      "item": {
+        "id": "crate",
+        "name": "Crate (double-stack)",
+        "shapes": [
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 5.0,
+            "depth_inches": 2.5,
+            "height_inches": 5.0
+          }
+        ],
+        "tags": [
+          "container"
+        ],
+        "fill_color": "#8b3a1a",
+        "outline_color": "#000000"
+      },
+      "quantity": 2
+    },
+    {
+      "item": {
+        "id": "ruins",
+        "name": "Ruins",
+        "shapes": [
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 12.0,
+            "depth_inches": 6.0,
+            "height_inches": 0.0
+          }
+        ],
+        "tags": [
+          "ruins"
+        ],
+        "is_footprint": true,
+        "fill_color": "#B8D4E8",
+        "outline_color": "#000000"
+      },
+      "quantity": 6
+    },
+    {
+      "item": {
+        "id": "ruins_short",
+        "name": "Short Ruins Base",
+        "shapes": [
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 12.0,
+            "depth_inches": 6.0,
+            "height_inches": 0.0
+          }
+        ],
+        "tags": [
+          "ruins"
+        ],
+        "is_footprint": true,
+        "fill_color": "#E8B8B8",
+        "outline_color": "#000000"
+      },
+      "quantity": 8
+    },
+    {
+      "item": {
+        "id": "wtc_three_storey_walls",
+        "name": "WTC Three Storey Walls",
+        "shapes": [
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 9.0,
+            "depth_inches": 0.1,
+            "height_inches": 9.0,
+            "offset": {
+              "x_inches": -0.65,
+              "z_inches": -2.15
+            }
+          },
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.1,
+            "depth_inches": 5.0,
+            "height_inches": 9.0,
+            "offset": {
+              "x_inches": -5.15,
+              "z_inches": 0.35
+            }
+          },
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.6,
+            "depth_inches": 0.1,
+            "height_inches": 3.0,
+            "offset": {
+              "x_inches": -5.5,
+              "z_inches": -2.15
+            }
+          },
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.1,
+            "depth_inches": 0.6,
+            "height_inches": 3.0,
+            "offset": {
+              "x_inches": -5.15,
+              "z_inches": -2.5
+            }
+          }
+        ],
+        "tags": [
+          "ruins",
+          "wtc"
+        ],
+        "fill_color": "#111111",
+        "outline_color": "#000000"
+      },
+      "quantity": 6
+    },
+    {
+      "item": {
+        "id": "wtc_short_walls",
+        "name": "WTC Short Walls",
+        "shapes": [
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 9.0,
+            "depth_inches": 0.1,
+            "height_inches": 3.0,
+            "offset": {
+              "x_inches": 0.65,
+              "z_inches": -2.15
+            }
+          },
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.1,
+            "depth_inches": 5.0,
+            "height_inches": 3.0,
+            "offset": {
+              "x_inches": 5.15,
+              "z_inches": 0.35
+            }
+          },
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.6,
+            "depth_inches": 0.1,
+            "height_inches": 3.0,
+            "offset": {
+              "x_inches": 5.5,
+              "z_inches": -2.15
+            }
+          },
+          {
+            "shape_type": "rectangular_prism",
+            "width_inches": 0.1,
+            "depth_inches": 0.6,
+            "height_inches": 3.0,
+            "offset": {
+              "x_inches": 5.15,
+              "z_inches": -2.5
+            }
+          }
+        ],
+        "tags": [
+          "ruins",
+          "wtc"
+        ],
+        "fill_color": "#888888",
+        "outline_color": "#888888"
+      },
+      "quantity": 8
+    }
+  ],
+  "features": [
+    {
+      "item": {
+        "id": "crate",
+        "feature_type": "obstacle",
+        "components": [
+          {
+            "object_id": "crate"
+          }
+        ],
+        "tags": [
+          "obstacle"
+        ]
+      },
+      "quantity": 2
+    },
+    {
+      "item": {
+        "id": "wtc_three_storey",
+        "feature_type": "obscuring",
+        "components": [
+          {
+            "object_id": "ruins"
+          },
+          {
+            "object_id": "wtc_three_storey_walls"
+          }
+        ],
+        "tags": [
+          "ruins",
+          "obscuring",
+          "wtc"
+        ]
+      },
+      "quantity": 6
+    },
+    {
+      "item": {
+        "id": "wtc_short",
+        "feature_type": "obscuring",
+        "components": [
+          {
+            "object_id": "ruins_short"
+          },
+          {
+            "object_id": "wtc_short_walls"
+          }
+        ],
+        "tags": [
+          "ruins",
+          "obscuring",
+          "wtc"
+        ]
+      },
+      "quantity": 8
+    }
+  ]
+}

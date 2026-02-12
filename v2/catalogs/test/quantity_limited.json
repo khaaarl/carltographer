@@ -1,0 +1,40 @@
+{
+  "objects": [
+    {
+      "item": {
+        "id": "crate_5x2.5",
+        "shapes": [
+          {
+            "width_inches": 5.0,
+            "depth_inches": 2.5,
+            "height_inches": 5.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Crate (double-stack)",
+        "tags": [
+          "container"
+        ]
+      },
+      "quantity": 2
+    }
+  ],
+  "features": [
+    {
+      "item": {
+        "id": "crate",
+        "feature_type": "obstacle",
+        "components": [
+          {
+            "object_id": "crate_5x2.5"
+          }
+        ],
+        "tags": [
+          "obstacle"
+        ]
+      },
+      "quantity": 2
+    }
+  ],
+  "name": "Quantity-limited Test Catalog"
+}

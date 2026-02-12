@@ -307,6 +307,12 @@ class CatalogObject:
             quantity=d.get("quantity"),
         )
 
+    def to_dict(self) -> dict:
+        d: dict = {"item": self.item.to_dict()}
+        if self.quantity is not None:
+            d["quantity"] = self.quantity
+        return d
+
 
 @dataclass
 class CatalogFeature:
@@ -319,6 +325,12 @@ class CatalogFeature:
             item=TerrainFeature.from_dict(d["item"]),
             quantity=d.get("quantity"),
         )
+
+    def to_dict(self) -> dict:
+        d: dict = {"item": self.item.to_dict()}
+        if self.quantity is not None:
+            d["quantity"] = self.quantity
+        return d
 
 
 @dataclass
@@ -336,6 +348,15 @@ class TerrainCatalog:
             ],
             name=d.get("name"),
         )
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "objects": [o.to_dict() for o in self.objects],
+            "features": [f.to_dict() for f in self.features],
+        }
+        if self.name is not None:
+            d["name"] = self.name
+        return d
 
 
 @dataclass

@@ -1,0 +1,71 @@
+{
+  "objects": [
+    {
+      "item": {
+        "id": "crate_5x2.5",
+        "shapes": [
+          {
+            "width_inches": 5.0,
+            "depth_inches": 2.5,
+            "height_inches": 5.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Crate (double-stack)",
+        "tags": [
+          "container"
+        ]
+      }
+    },
+    {
+      "item": {
+        "id": "ruins_12x6",
+        "shapes": [
+          {
+            "width_inches": 12.0,
+            "depth_inches": 6.0,
+            "height_inches": 0.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Ruins",
+        "tags": [
+          "ruins"
+        ],
+        "is_footprint": true
+      }
+    }
+  ],
+  "features": [
+    {
+      "item": {
+        "id": "crate",
+        "feature_type": "obstacle",
+        "components": [
+          {
+            "object_id": "crate_5x2.5"
+          }
+        ],
+        "tags": [
+          "obstacle"
+        ]
+      }
+    },
+    {
+      "item": {
+        "id": "ruins",
+        "feature_type": "obscuring",
+        "components": [
+          {
+            "object_id": "ruins_12x6"
+          }
+        ],
+        "tags": [
+          "ruins",
+          "obscuring"
+        ]
+      }
+    }
+  ],
+  "name": "Multi-type Test Catalog"
+}

@@ -20,16 +20,27 @@
 
     "geometric_shape": {
       "type": "object",
-      "description": "A collision/footprint volume attached to a terrain object. Currently only rectangular prisms; future versions may add other shape types.",
+      "description": "A collision/footprint volume attached to a terrain object. Supports rectangular prisms and arbitrary polygons (extruded to a given height).",
       "properties": {
         "shape_type": {
           "type": "string",
-          "enum": ["rectangular_prism"],
-          "description": "The kind of shape. Only rectangular_prism for now."
+          "enum": ["rectangular_prism", "polygon"],
+          "description": "The kind of shape. 'rectangular_prism' uses width/depth as axis-aligned extents. 'polygon' uses a vertices array defining a 2D cross-section extruded to height_inches."
         },
-        "width_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the X axis." },
-        "depth_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the Z axis." },
-        "height_inches": { "type": "number", "exclusiveMinimum": 0, "description": "Extent along the Y axis (vertical)." },
+        "width_inches": { "type": "number", "minimum": 0, "description": "Extent along the X axis. For polygons, this is the bounding-box width derived from vertices." },
+        "depth_inches": { "type": "number", "minimum": 0, "description": "Extent along the Z axis. For polygons, this is the bounding-box depth derived from vertices." },
+        "height_inches": { "type": "number", "minimum": 0, "description": "Extent along the Y axis (vertical). 0 for flat footprints (e.g. ruin bases, woods)." },
+        "vertices": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 3,
+          "description": "Vertex list for polygon shapes: [[x, z], ...] in inches, relative to the shape's origin. The polygon is implicitly closed. Required when shape_type is 'polygon', absent for 'rectangular_prism'."
+        },
         "offset": {
           "$ref": "#/$defs/transform",
           "description": "Position of this shape relative to its parent object's origin. Defaults to centered at origin if omitted."
@@ -67,6 +78,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Freeform tags for categorization and filtering (e.g. 'container', 'ruin_wall', 'ruin_floor', 'modular')."
+        },
+        "is_footprint": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, this object represents a flat base or footprint (e.g. a ruin base, woods area). Footprint shapes are used for Obscuring keyword detection in visibility calculations: if any tagged shape has height 0 and is_footprint is true, the feature is treated as Obscuring and blocks LoS through its back-facing edges."
         },
         "fill_color": {
           "type": ["string", "null"],

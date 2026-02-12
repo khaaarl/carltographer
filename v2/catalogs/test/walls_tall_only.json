@@ -1,0 +1,38 @@
+{
+  "objects": [
+    {
+      "item": {
+        "id": "tall_wall",
+        "shapes": [
+          {
+            "width_inches": 1.0,
+            "depth_inches": 24.0,
+            "height_inches": 5.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Tall Wall",
+        "tags": [
+          "obstacle"
+        ]
+      }
+    }
+  ],
+  "features": [
+    {
+      "item": {
+        "id": "tall_wall",
+        "feature_type": "obstacle",
+        "components": [
+          {
+            "object_id": "tall_wall"
+          }
+        ],
+        "tags": [
+          "obstacle"
+        ]
+      }
+    }
+  ],
+  "name": "Wall Catalog"
+}

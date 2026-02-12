@@ -1,0 +1,112 @@
+{
+  "objects": [
+    {
+      "item": {
+        "id": "crate_5x2.5",
+        "shapes": [
+          {
+            "width_inches": 5.0,
+            "depth_inches": 2.5,
+            "height_inches": 5.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Crate (double-stack)",
+        "tags": [
+          "container"
+        ]
+      }
+    },
+    {
+      "item": {
+        "id": "ruins_10x6",
+        "shapes": [
+          {
+            "width_inches": 10.0,
+            "depth_inches": 6.0,
+            "height_inches": 0.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Ruins (base)",
+        "tags": [
+          "ruins"
+        ],
+        "is_footprint": true
+      }
+    },
+    {
+      "item": {
+        "id": "opaque_wall_6x0.5",
+        "shapes": [
+          {
+            "width_inches": 6.0,
+            "depth_inches": 0.5,
+            "height_inches": 5.0,
+            "shape_type": "rectangular_prism"
+          }
+        ],
+        "name": "Opaque Wall",
+        "tags": [
+          "wall"
+        ]
+      }
+    }
+  ],
+  "features": [
+    {
+      "item": {
+        "id": "crate",
+        "feature_type": "obstacle",
+        "components": [
+          {
+            "object_id": "crate_5x2.5"
+          }
+        ],
+        "tags": [
+          "obstacle"
+        ]
+      }
+    },
+    {
+      "item": {
+        "id": "bare_ruin",
+        "feature_type": "obscuring",
+        "components": [
+          {
+            "object_id": "ruins_10x6"
+          }
+        ],
+        "tags": [
+          "ruins",
+          "obscuring"
+        ]
+      }
+    },
+    {
+      "item": {
+        "id": "ruin_with_wall",
+        "feature_type": "obscuring",
+        "components": [
+          {
+            "object_id": "ruins_10x6"
+          },
+          {
+            "object_id": "opaque_wall_6x0.5",
+            "transform": {
+              "x_inches": 2.0,
+              "y_inches": 0.0,
+              "z_inches": 0.0,
+              "rotation_deg": 0.0
+            }
+          }
+        ],
+        "tags": [
+          "ruins",
+          "obscuring"
+        ]
+      }
+    }
+  ],
+  "name": "Test Catalog"
+}
