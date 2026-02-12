@@ -34,6 +34,7 @@ import json
 import math
 import os
 import random
+import sys
 import time
 import tkinter as tk
 import traceback
@@ -3052,7 +3053,66 @@ class App:
         self.root.mainloop()
 
 
+def _smoke_test() -> int:
+    """Headless validation: all imports resolved, now run a quick generation."""
+    print("Smoke test")
+    print("=" * 40)
+
+    # Catalogs loaded from JSON at import time
+    print(
+        f"  PASS  Catalogs loaded ({len(TERRAIN_CATALOGS)}: {', '.join(TERRAIN_CATALOGS)})"
+    )
+
+    # engine_rs status (already probed at module level)
+    if _HAS_RUST_ENGINE:
+        print("  PASS  engine_rs imported")
+    else:
+        print("  FAIL  engine_rs not available")
+        return 1
+
+    # Pick the first catalog and build minimal params
+    catalog_name = next(iter(TERRAIN_CATALOGS))
+    catalog_dict = TERRAIN_CATALOGS[catalog_name]
+    params = {
+        "seed": 42,
+        "table_width_inches": 44.0,
+        "table_depth_inches": 30.0,
+        "catalog": catalog_dict,
+        "num_steps": 50,
+        "skip_visibility": False,
+    }
+
+    # Python engine
+    try:
+        result = generate_json(params)
+        n = len(result["layout"]["placed_features"])
+        assert n > 0, f"got {n} features"
+        print(f"  PASS  Python generation ({n} features)")
+    except Exception:
+        print("  FAIL  Python generation")
+        traceback.print_exc()
+        return 1
+
+    # Rust engine
+    try:
+        result_json = _engine_rs.generate_json(json.dumps(params))  # type: ignore[union-attr]
+        result = json.loads(result_json)
+        n = len(result["layout"]["placed_features"])
+        assert n > 0, f"got {n} features"
+        print(f"  PASS  Rust generation ({n} features)")
+    except Exception:
+        print("  FAIL  Rust generation")
+        traceback.print_exc()
+        return 1
+
+    print("=" * 40)
+    print("All checks passed.")
+    return 0
+
+
 def main():
+    if "--smoke-test" in sys.argv:
+        sys.exit(_smoke_test())
     App().run()
 
 

@@ -169,41 +169,33 @@ def build_rust(skip: bool) -> bool:
     return True
 
 
-def find_site_packages() -> str | None:
-    log.step("Locating engine_rs")
+def check_engine_rs() -> bool:
+    log.step("Checking engine_rs")
 
-    # Get site-packages from the venv python
-    result = run(
-        [
-            str(VENV_PYTHON),
-            "-c",
-            "import sysconfig; print(sysconfig.get_path('purelib'))",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    site_packages = result.stdout.strip()
-
-    if not Path(site_packages).is_dir():
-        log.error(f"site-packages directory not found: {site_packages}")
-        return None
-
-    engine_rs_dir = Path(site_packages) / "engine_rs"
-    if not engine_rs_dir.is_dir():
-        log.error(f"engine_rs not found in site-packages at {engine_rs_dir}")
+    try:
+        run(
+            [str(VENV_PYTHON), "-c", "import engine_rs"],
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        log.error("engine_rs not importable from the venv")
         log.error("Run: python build_rust_engine.py")
-        return None
+        return False
 
-    log.info(f"site-packages: {site_packages}")
-    log.info(f"engine_rs found: {engine_rs_dir}")
-    return site_packages
+    log.info("engine_rs is importable")
+    return True
 
 
-def run_pyinstaller(site_packages: str, name: str) -> bool:
+def run_pyinstaller(name: str) -> bool:
     log.step("Running PyInstaller")
 
     # Strip .exe suffix for PyInstaller --name (it adds .exe on Windows)
     pyinstaller_name = name.removesuffix(".exe")
+
+    # --add-data separator is OS-dependent
+    data_sep = ";" if IS_WINDOWS else ":"
+    catalogs_src = str(V2_DIR / "catalogs")
+    catalogs_data = f"{catalogs_src}{data_sep}v2/catalogs"
 
     cmd = [
         str(VENV_PYTHON),
@@ -214,14 +206,14 @@ def run_pyinstaller(site_packages: str, name: str) -> bool:
         pyinstaller_name,
         "--paths",
         str(REPO_ROOT),
-        "--paths",
-        site_packages,
         "--hidden-import",
         "PIL._tkinter_finder",
         "--collect-all",
         "engine_rs",
         "--collect-submodules",
         "v2",
+        "--add-data",
+        catalogs_data,
         "--distpath",
         str(V2_DIR / "dist"),
         "--workpath",
@@ -276,6 +268,20 @@ def verify_output(name: str) -> bool:
     return True
 
 
+def run_smoke_test(name: str) -> bool:
+    log.step("Running smoke test")
+
+    output = V2_DIR / "dist" / name
+    try:
+        run([str(output), "--smoke-test"])
+    except subprocess.CalledProcessError:
+        log.error("Smoke test failed")
+        return False
+
+    log.info("Smoke test passed")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Package Carltographer as a single-file executable"
@@ -307,14 +313,16 @@ def main() -> int:
     if not build_rust(skip=args.skip_rust_build):
         return 1
 
-    site_packages = find_site_packages()
-    if site_packages is None:
+    if not check_engine_rs():
         return 1
 
-    if not run_pyinstaller(site_packages, name):
+    if not run_pyinstaller(name):
         return 1
 
     if not verify_output(name):
+        return 1
+
+    if not run_smoke_test(name):
         return 1
 
     log.step("\u2713 Packaging complete!")

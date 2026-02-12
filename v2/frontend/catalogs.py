@@ -20,7 +20,7 @@ Catalog contents:
   - "Omnium Gatherum": Union of WTC + GW Misc + polygon terrain, all unlimited.
 """
 
-from engine.catalog_io import builtin_catalog_path, load_catalog_dict
+from ..engine.catalog_io import builtin_catalog_path, load_catalog_dict
 
 # ---------------------------------------------------------------------------
 # Catalog assembly
