@@ -74,6 +74,8 @@ cd v2/engine_rs && cargo test
 cd v2/engine_rs && cargo bench
 ```
 
+**NEVER set `PYTHONPATH` in any command.** The virtual environment and `cd v2` handle all module resolution. Setting `PYTHONPATH` is unnecessary and can cause subtle import issues.
+
 ## Scratch Files
 
 Use `.tmp/` in the repo root (gitignored) for any temporary files — benchmark output, intermediate data, scratch scripts, etc. Always `mkdir -p .tmp` before writing. **Do NOT use `/tmp`** — it can trigger permission prompts and isn't project-scoped.
