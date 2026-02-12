@@ -100,7 +100,7 @@ def check_venv() -> bool:
     except subprocess.CalledProcessError:
         log.error("pip is broken in venv")
         log.error(
-            f"Try: cd {V2_DIR} && .env/bin/python -m pip install --upgrade pip"
+            f"Try: cd {V2_DIR} && {VENV_PYTHON} -m pip install --upgrade pip"
         )
         return False
 
@@ -137,7 +137,7 @@ def check_maturin() -> bool:
         )
     except subprocess.CalledProcessError:
         log.error("maturin not installed in venv")
-        log.error(f"Run: cd {V2_DIR} && .env/bin/pip install maturin")
+        log.error(f"Run: cd {V2_DIR} && {VENV_PYTHON} -m pip install maturin")
         return False
 
     log.info("maturin found")

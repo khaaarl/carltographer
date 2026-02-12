@@ -103,8 +103,6 @@ def _should_use_rust_engine() -> bool:
 
 # -- Visual constants --
 
-TABLE_BG = "#2d5a27"  # dark green gaming mat
-TABLE_GRID = "#264e22"  # subtle darker grid
 TABLE_BORDER = "#111111"
 CANVAS_BG = "#1e1e1e"
 DEFAULT_FILL = "#888888"
@@ -728,8 +726,8 @@ class ControlPanel(ttk.Frame):
         self.min_edge_gap_var = tk.DoubleVar(value=0.0)
         self.min_all_gap_var = tk.DoubleVar(value=0.0)
         self.min_all_edge_gap_var = tk.DoubleVar(value=0.0)
-        self.min_crates_var = tk.IntVar(value=0)
-        self.max_crates_var = tk.IntVar(value=99)
+        self.min_obstacles_var = tk.IntVar(value=0)
+        self.max_obstacles_var = tk.IntVar(value=99)
         self.min_ruins_var = tk.IntVar(value=0)
         self.max_ruins_var = tk.IntVar(value=99)
 
@@ -934,14 +932,14 @@ class ControlPanel(ttk.Frame):
             right,
             row,
             "Min obstacles:",
-            self.min_crates_var,
+            self.min_obstacles_var,
             tooltip="Target minimum obstacle count (soft constraint)",
         )
         row = self._field(
             right,
             row,
             "Max obstacles:",
-            self.max_crates_var,
+            self.max_obstacles_var,
             tooltip="Target maximum obstacle count (soft constraint)",
         )
         row = self._field(
@@ -1123,8 +1121,8 @@ class ControlPanel(ttk.Frame):
                 s = s.strip()
                 return float(s) if s else None
 
-            min_crates = self.min_crates_var.get()
-            max_crates = self.max_crates_var.get()
+            min_crates = self.min_obstacles_var.get()
+            max_crates = self.max_obstacles_var.get()
             min_ruins = self.min_ruins_var.get()
             max_ruins = self.max_ruins_var.get()
             min_gap = self.min_gap_var.get()
@@ -1516,8 +1514,7 @@ class App:
         if self._feature_grid_visible:
             return
 
-        if hasattr(self, "_popup_window_id"):
-            self._dismiss_popup()
+        self._dismiss_popup()
 
         params = self.controls.get_params()
         if params is None:
@@ -2420,7 +2417,7 @@ class App:
         cancel_btn = tk.Button(
             frame,
             text="Cancel",
-            command=self._on_move_resume,
+            command=self._on_move_cancel_btn,
             bg="#555555",
             fg="white",
             activebackground="#777777",
@@ -2465,8 +2462,8 @@ class App:
         self._exit_move_mode()
         self._rerun_engine_zero_steps()
 
-    def _on_move_resume(self):
-        """Cancel placement and revert to original position."""
+    def _on_move_cancel_btn(self):
+        """Cancel placement and revert to original position (button handler)."""
         self._on_move_cancel()
 
     def _on_move_cancel(self, event=None):
@@ -2922,7 +2919,7 @@ class App:
             return
         try:
             layout = load_layout(path)
-        except (ValueError, Exception) as e:
+        except Exception as e:
             messagebox.showerror("Load Error", str(e))
             return
         self.layout = layout

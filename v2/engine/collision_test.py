@@ -95,8 +95,6 @@ class TestPolygonsOverlap:
     def test_vis_poly_vs_small_dz(self):
         """Many-vertex vis polygon vs 4-vertex DZ polygon."""
         # Simulate a large vis polygon (circle approximation)
-        import math
-
         n = 32
         vis_poly = [
             (
@@ -111,8 +109,6 @@ class TestPolygonsOverlap:
 
     def test_vis_poly_no_overlap_with_distant_dz(self):
         """Vis polygon doesn't overlap distant DZ."""
-        import math
-
         n = 32
         vis_poly = [
             (

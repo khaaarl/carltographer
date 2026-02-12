@@ -3,6 +3,7 @@
 Validates that Python and Rust engines produce identical layouts for the same seed.
 """
 
+import copy
 import json
 import sys
 import time
@@ -489,17 +490,17 @@ def _validate_infantry_obscuring_dual_pass(
 def _validate_wtc_short_ruin_visibility(
     py_dict: dict, rs_dict: dict
 ) -> list[str]:
-    """Validate WTC short ruin visibility with opacity_height on the base.
+    """Validate WTC short ruin visibility with is_footprint base.
 
     A single WTC short ruin on a 20x20 table:
-    - Base: 12x6, height 0, opacity_height_inches=99 (Obscuring keyword)
+    - Base: 12x6, height 0, is_footprint=True (Obscuring keyword)
     - Walls: four sections at 3.0" height
 
     Expected behavior:
-    - Standard pass (4.0"): base blocks (99 >= 4.0), walls don't (3.0 < 4.0)
-      → visibility < 100%
-    - Infantry pass (2.2"): base blocks (99 >= 2.2) AND walls block (3.0 >= 2.2)
-      → visibility even lower than standard
+    - Standard pass (4.0"): base blocks (is_footprint ignores height), walls
+      don't (3.0 < 4.0) → visibility < 100%
+    - Infantry pass (2.2"): base blocks (is_footprint) AND walls block
+      (3.0 >= 2.2) → visibility even lower than standard
     """
     diffs = []
     for engine_name, result in [("Python", py_dict), ("Rust", rs_dict)]:
@@ -517,7 +518,7 @@ def _validate_wtc_short_ruin_visibility(
                 f"{engine_name}: missing 'infantry' sub-dict in overall"
             )
             continue
-        # Standard pass: base blocks via opacity_height → < 100%
+        # Standard pass: base blocks via is_footprint → < 100%
         if std["value"] >= 100.0:
             diffs.append(
                 f"{engine_name} standard visibility: "
@@ -658,7 +659,9 @@ TEST_SCENARIOS = [
     TestScenario(
         "basic_10_steps", seed=42, num_steps=10, skip_visibility=False
     ),
-    TestScenario("basic_10_steps_no_vis", seed=42, num_steps=10),
+    TestScenario(
+        "basic_10_steps_no_vis", seed=42, num_steps=10, skip_visibility=True
+    ),
     TestScenario(
         "basic_10_steps_with_vis", seed=42, num_steps=10, skip_visibility=False
     ),
@@ -1085,10 +1088,9 @@ TEST_SCENARIOS = [
         validate_fn=_validate_infantry_no_intermediate,
     ),
     # Obscuring feature (ruins) at 3.0" height — intermediate range [2.2, 4.0).
-    # Currently obscuring shapes bypass the height check and block at ALL heights,
-    # so the dual-pass is never triggered.  After the fix, the 3.0" shape should:
-    # - Standard pass (4.0"): not block (3.0 < 4.0)
-    # - Infantry pass (2.2"): block via back-facing edges (3.0 >= 2.2)
+    # The 3.0" shape:
+    # - Standard pass (4.0"): does not block (3.0 < 4.0)
+    # - Infantry pass (2.2"): blocks via back-facing edges (3.0 >= 2.2)
     TestScenario(
         "infantry_vis_obscuring_dual_pass",
         seed=42,
@@ -1122,7 +1124,7 @@ TEST_SCENARIOS = [
         ),
         validate_fn=_validate_infantry_obscuring_dual_pass,
     ),
-    # WTC short ruin: base (opacity_height=99, always blocks) + walls (3.0").
+    # WTC short ruin: base (is_footprint=True, always blocks) + walls (3.0").
     # Standard: base blocks → < 100%.  Infantry: base + walls → even lower.
     TestScenario(
         "wtc_short_ruin_visibility",
@@ -1691,7 +1693,7 @@ def main():
 
     args = parser.parse_args()
 
-    scenarios = list(TEST_SCENARIOS)
+    scenarios = [copy.copy(s) for s in TEST_SCENARIOS]
     if args.step_multiplier > 1:
         for s in scenarios:
             s.num_steps *= args.step_multiplier

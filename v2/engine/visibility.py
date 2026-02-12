@@ -1191,8 +1191,6 @@ def _has_intermediate_shapes(
 def _merge_dual_pass_results(
     standard: dict,
     infantry: dict,
-    standard_height: float,
-    infantry_height: float,
 ) -> dict:
     """Merge standard and infantry visibility results into a dual-pass result.
 
@@ -1691,8 +1689,6 @@ def compute_layout_visibility(
         return _merge_dual_pass_results(
             result,
             infantry_result,
-            min_blocking_height,
-            infantry_blocking_height,
         )
 
     return result

@@ -12,7 +12,10 @@ def test_parity(scenario):
     """Test that Python and Rust engines produce identical results."""
     params = scenario.make_params()
     success, diffs, timing = run_comparison(
-        params, verbose=True, validate_fn=scenario.validate_fn
+        params,
+        verbose=True,
+        validate_fn=scenario.validate_fn,
+        visibility_tolerance=scenario.visibility_tolerance,
     )
 
     if timing:
@@ -27,5 +30,3 @@ def test_parity(scenario):
         for diff in diffs:
             error_msg += f"  - {diff}\n"
         pytest.fail(error_msg)
-
-    assert success, f"Parity check failed for {scenario.name}"

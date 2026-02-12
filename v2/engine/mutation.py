@@ -8,9 +8,9 @@ There are five mutation actions:
     and catalog quantity limits), place it in a tile-biased random position,
     accept if collision/gap checks pass.
   * **Move** — nudge a random feature by a temperature-scaled displacement
-    (small at cold temperatures, table-spanning at hot). Always consumes
-    exactly 4 PRNG values regardless of outcome to keep the random stream
-    aligned.
+    (small at cold temperatures, table-spanning at hot). Consumes exactly
+    4 PRNG values when the selected feature is not locked; returns
+    immediately (consuming only 1 value for index selection) if locked.
   * **Delete** — remove a feature, weighted toward types that exceed their
     max count preference.
   * **Replace** — swap a feature's template in-place (same position, new
@@ -275,7 +275,7 @@ def _temperature_move(
 ) -> Transform:
     """Generate a temperature-aware move transform.
 
-    At t_factor=0, displacement is small (±min_move_range/2 inches).
+    At t_factor=0, displacement is small (±min_move_range inches).
     At t_factor=1, displacement spans the full table.
     Always consumes exactly 4 PRNG values.
     """

@@ -2,12 +2,12 @@
 """Profile engine performance using test scenarios as workloads.
 
 Usage (from v2/):
-    python scripts/profile_engine.py --profile                       # cProfile top 30 functions
-    python scripts/profile_engine.py --profile --scenario basic_50_steps
-    python scripts/profile_engine.py --compare-time                  # Python vs Rust timing
-    python scripts/profile_engine.py --compare-time --heavy          # only visibility-enabled scenarios
-    python scripts/profile_engine.py --dump-json                     # print scenario params as JSON
-    python scripts/profile_engine.py --dump-json --scenario basic_100_steps
+    python scripts/profile_engine.py profile                         # cProfile top 30 functions
+    python scripts/profile_engine.py profile --scenario basic_10_steps
+    python scripts/profile_engine.py compare-time                    # Python vs Rust timing
+    python scripts/profile_engine.py compare-time --heavy            # only visibility-enabled scenarios
+    python scripts/profile_engine.py dump-json                       # print scenario params as JSON
+    python scripts/profile_engine.py dump-json --scenario basic_10_steps
 """
 
 import argparse

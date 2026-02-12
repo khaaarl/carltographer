@@ -9,8 +9,6 @@ languages.
 Reference: https://www.pcg-random.org/
 """
 
-from __future__ import annotations
-
 
 class PCG32:
     _MASK32 = 0xFFFFFFFF

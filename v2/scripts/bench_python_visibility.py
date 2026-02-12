@@ -42,8 +42,8 @@ def main():
     )
     args = parser.parse_args()
 
-    # Use the basic_50_steps scenario as a template (has visibility enabled)
-    scenario = next(s for s in TEST_SCENARIOS if s.name == "basic_50_steps")
+    # Use the basic_10_steps scenario as a template (has visibility enabled)
+    scenario = next(s for s in TEST_SCENARIOS if s.name == "basic_10_steps")
     params = scenario.make_params()
     params.num_steps = args.steps
 

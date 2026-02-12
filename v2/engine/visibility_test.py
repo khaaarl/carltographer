@@ -680,11 +680,12 @@ class TestObjectiveHidability:
         assert "objective_hidability" not in result
 
     def test_obscuring_ruin_at_objective_no_hiding(self):
-        """Obscuring ruin covering objective: all sample points inside ruin.
+        """Obscuring ruin covering objective: tall terrain overlaps all candidate squares.
 
-        With the from-objective vis poly approach, sample points inside the
-        ruin have no blocking segments (obscuring features don't block from
-        inside), so they have full visibility and cannot be hidden from any DZ.
+        The 14x14 ruin at the origin covers the entire objective sample area
+        (expanded radius ≈ 3.75 + sqrt(2) ≈ 5.16, well within ±7). Every
+        candidate hiding square overlaps the tall terrain OBB, so all are
+        rejected by the terrain-intersection check. Result: safe_count == 0.
         """
         green_dz = _make_rect_dz("green", -30, -22, -20, 22)
         red_dz = _make_rect_dz("red", 20, -22, 30, 22)
@@ -696,8 +697,8 @@ class TestObjectiveHidability:
         )
 
         # Large obscuring ruin covering all objective sample points
-        # Objective range 3.0 + sqrt(2) ≈ 4.41, so 14x14 ruin at origin
-        # covers all sample points (footprint from -7 to 7 in both axes)
+        # Expanded radius = 0.75 + 3.0 + sqrt(2) ≈ 5.16, so 14x14 ruin at
+        # origin covers all sample points (footprint from -7 to 7 in both axes)
         obj = _make_object("ruins", 14, 14, 5)
         feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
         pf = _place(feat, 0, 0)
@@ -1030,11 +1031,11 @@ class TestHasIntermediateShapes:
 
 
 class TestObscuringHeightFiltering:
-    """Obscuring features should respect min_blocking_height like obstacles.
+    """Obscuring features respect min_blocking_height like obstacles.
 
-    Currently, obscuring shapes block LOS at all heights (no height check).
-    The correct behavior is that obscuring shapes below min_blocking_height
-    should NOT block LOS, just like non-obscuring obstacles.
+    Non-footprint obscuring shapes below min_blocking_height do NOT block
+    LOS, just like non-obscuring obstacles. These tests verify that height
+    filtering applies correctly to obscuring features.
     """
 
     def test_obscuring_below_threshold_no_block(self):
@@ -1062,8 +1063,8 @@ class TestObscuringHeightFiltering:
     def test_obscuring_above_threshold_blocks(self):
         """A 3.0" obscuring shape should block at min_blocking_height=2.2.
 
-        Infantry pass uses 2.2" threshold.  A 3.0" ruin wall is taller than
-        that, so it should block LOS via back-facing edges.
+        Infantry pass uses 2.2" threshold.  A 3.0" non-footprint shape is
+        taller than that, so it produces static segments that block LOS.
         """
         obj = _make_object("ruins", 5, 5, 3.0)
         feat = _make_feature("f1", "ruins", "obscuring", tags=["obscuring"])
@@ -1565,7 +1566,13 @@ class TestFindHidingSquareWithFringe:
         assert needed == set()
 
     def test_fringe_corners_tracked(self):
-        """When a candidate square has fringe corners, they are tracked."""
+        """Single hidden inner point near boundary: no valid hiding square.
+
+        With only one hidden inner point at (2, 0) near radius 2.5, every
+        candidate square that includes it also includes non-hidden inner
+        points, so no hiding square is found. Fringe tracking may or may
+        not produce needed points depending on candidate geometry.
+        """
         # Grid from -5 to 5
         pts = self._grid_points(range(-5, 6), range(-5, 6))
         # Points within radius 2.5 are inner, rest are fringe
@@ -1574,8 +1581,7 @@ class TestFindHidingSquareWithFringe:
             inner_flags.append(x * x + z * z <= 2.5 * 2.5)
 
         # Hide one inner point at (2, 0) - this is near the boundary of
-        # radius 2.5. Some of its candidate square corners (3, 0), (3, 1)
-        # etc. will be fringe points.
+        # radius 2.5.
         inner_hidden = set()
         for i, (x, z) in enumerate(pts):
             if x == 2 and z == 0:
@@ -1587,14 +1593,11 @@ class TestFindHidingSquareWithFringe:
         )
         # Can't find a fully-inner square (only 1 hidden point)
         assert found is False
-        # But some fringe points should be needed (corners of candidate squares
-        # that include the hidden point)
-        if needed:
-            # All needed points should be fringe points
-            for pi in needed:
-                assert not inner_flags[pi], (
-                    f"Point {pi} at {pts[pi]} should be fringe"
-                )
+        # If any fringe points were needed, verify they are actually fringe
+        for pi in needed:
+            assert not inner_flags[pi], (
+                f"Point {pi} at {pts[pi]} should be fringe"
+            )
 
     def test_terrain_blocks_candidate(self):
         """Tall terrain overlapping candidate square rejects it."""
@@ -1725,6 +1728,5 @@ class TestObjectiveHidabilityOptimization:
         oh = result["objective_hidability"]
         # The wall should create some hiding for the green player
         # (blocks red DZ's view of the objective area)
-        assert oh["green"]["safe_count"] >= 0  # May or may not find one
         # Key check: no crash, result is valid
         assert oh["green"]["total_objectives"] == 1

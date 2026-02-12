@@ -146,7 +146,7 @@ def _compute_score(
 
     # Skip expensive DZ/objective metrics during scoring when those
     # metrics aren't needed.
-    needs_dz = scoring_targets is not None and (
+    needs_detailed_vis = scoring_targets is not None and (
         scoring_targets.dz_hideability_target is not None
         or scoring_targets.objective_hidability_target is not None
     )
@@ -157,7 +157,7 @@ def _compute_score(
         min_blocking_height=standard_blocking_height,
         visibility_cache=visibility_cache,
         infantry_blocking_height=infantry_blocking_height,
-        overall_only=not needs_dz,
+        overall_only=not needs_detailed_vis,
     )
 
     if scoring_targets is None:

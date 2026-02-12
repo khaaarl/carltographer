@@ -60,8 +60,7 @@ def compute_engine_hashes() -> dict[str, str]:
     hashes = {}
     for rel_path in _discover_engine_files():
         file_path = PYTHON_ENGINE_DIR / rel_path
-        if file_path.exists():
-            hashes[rel_path] = compute_file_hash(file_path)
+        hashes[rel_path] = compute_file_hash(file_path)
     return hashes
 
 
@@ -108,7 +107,7 @@ def verify_engine_unchanged() -> bool:
     """
     # In a PyInstaller bundle, source files are compiled to bytecode — rglob
     # finds nothing, verification fails. The packaging script runs
-    # build-rust-engine.sh (which certifies parity) before packaging, so the
+    # build_rust_engine.py (which certifies parity) before packaging, so the
     # Rust engine is guaranteed correct.
     if getattr(sys, "frozen", False):
         return True

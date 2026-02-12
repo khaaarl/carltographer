@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run engine parity comparison tests with coverage.
 
-Measures how much of the Python engine code is exercised by the 30 parity
+Measures how much of the Python engine code is exercised by the parity
 scenarios in engine_cmp/. This shows which code paths the parity tests
 cover vs. what only unit tests reach.
 

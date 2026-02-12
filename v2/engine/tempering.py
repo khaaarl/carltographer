@@ -50,14 +50,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Callable, Generic, Protocol, TypeVar
 
 from .prng import PCG32
 
 T = TypeVar("T", bound="TemperingCandidate")
 
 
-@runtime_checkable
 class TemperingCandidate(Protocol):
     def get_score(self) -> float:
         """Current score (higher is better). Should be cached."""

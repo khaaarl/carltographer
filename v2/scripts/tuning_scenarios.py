@@ -135,7 +135,6 @@ def build_scenarios(
 
         params = {
             "_scenario_name": scenario_name,
-            "_num_steps": num_steps,
             "table_width_inches": table_width,
             "table_depth_inches": table_depth,
             "num_steps": num_steps,

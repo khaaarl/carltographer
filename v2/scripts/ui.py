@@ -5,8 +5,8 @@ Handles venv discovery and directory setup automatically.
 Works on Linux, macOS, and Windows.
 
 Usage:
-    python v2/scripts/run_ui.py
-    v2/scripts/run_ui.py          # if executable
+    python v2/scripts/ui.py
+    v2/scripts/ui.py              # if executable
 """
 
 import os

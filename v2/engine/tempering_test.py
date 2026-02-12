@@ -235,7 +235,7 @@ def test_multi_replica_finds_better_solution():
 
     @dataclass
     class MultimodalCandidate:
-        """Multiple local optima: peaks at -5, 0, +5. Global optimum at 0."""
+        """Unimodal landscape: single peak at 0, small Gaussian bumps at ±5."""
 
         value: float
         _score: float | None = None
@@ -299,9 +299,7 @@ def test_multi_replica_finds_better_solution():
 
 
 def test_swap_occurs():
-    """With 2 replicas, verify that swaps actually happen."""
-    # Use a candidate where one replica gets stuck at a bad value
-    # and the other finds a better one — a swap should transfer the good solution
+    """With 2 replicas, best score improves beyond worst initial."""
 
     params = TemperingParams(
         seed=42,
@@ -343,9 +341,7 @@ def test_zero_steps():
 
 
 def test_best_tracking():
-    """Best score should be monotonically non-decreasing."""
-    # We verify this by running and checking the result is at least as good
-    # as the initial best
+    """Final best score is at least as good as the initial best."""
     params = TemperingParams(
         seed=42, num_steps=500, num_replicas=3, swap_interval=25
     )

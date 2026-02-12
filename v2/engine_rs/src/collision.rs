@@ -267,7 +267,7 @@ fn aabbs_overlap(a: &Aabb, b: &Aabb) -> bool {
     a.1 >= b.0 && b.1 >= a.0 && a.3 >= b.2 && b.3 >= a.2
 }
 
-/// Test if two polygons overlap (share any interior area).
+/// Test if two polygons overlap (share any interior area or touch).
 ///
 /// Checks:
 /// 1. Edge-edge intersections (inclusive of endpoints)
@@ -729,8 +729,8 @@ mod tests {
     }
 
     #[test]
-    fn point_to_segment_endpoint() {
-        // Point near segment endpoint
+    fn point_to_segment_on_segment() {
+        // Point on segment midpoint (distance = 0)
         let dist_sq = point_to_segment_distance_squared(0.0, 0.0, -1.0, 0.0, 1.0, 0.0);
         assert!(dist_sq < 1e-10);
     }
@@ -844,7 +844,7 @@ mod tests {
                 tags: vec![],
             },
             transform: Transform {
-                x_inches: 4.0, // 2 inch gap: (-5+2.5) to (4-2.5) = -2.5 to 1.5
+                x_inches: 4.0, // 4 inch gap: (-5+2.5) to (4-2.5) = -2.5 to 1.5
                 y_inches: 0.0,
                 z_inches: 0.0,
                 rotation_deg: 0.0,

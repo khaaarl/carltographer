@@ -154,8 +154,8 @@ fn point_in_polygon(px: f64, pz: f64, vertices: &[(f64, f64)]) -> bool {
 /// in registers while linearly scanning the points array (good cache locality,
 /// LLVM can autovectorize the inner loop).
 ///
-/// Superseded by `fraction_of_dz_visible_zsorted` in production code.
-/// Retained for tests.
+/// Both this and `fraction_of_dz_visible_zsorted` are test-only; production
+/// DZ hideability uses `polygons_overlap_aabb` instead.
 #[cfg(test)]
 fn batch_point_in_polygon(points: &[(f64, f64)], polygon: &[(f64, f64)], inside: &mut Vec<bool>) {
     inside.clear();

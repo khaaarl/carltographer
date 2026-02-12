@@ -752,7 +752,7 @@ mod tests {
         let count = result.layout.placed_features.len() as u32;
         // Should have at least min features (may not always reach due to randomness)
         // but the biasing should make it more likely to stay in range
-        assert!(count >= 3 || count <= 10);
+        assert!(count >= 3 && count <= 10);
     }
 
     #[test]

@@ -562,17 +562,20 @@ class TestReplaceAction:
 
 
 class TestRotateAction:
-    def test_rotate_deterministic(self):
-        """Rotate action is deterministic."""
-        p1 = EngineParams.from_dict(
+    def test_rotate_occurs(self):
+        """Rotation action fires during generation (200 steps includes rotations)."""
+        params = EngineParams.from_dict(
             _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
         )
-        p2 = EngineParams.from_dict(
-            _make_params_dict(seed=42, num_steps=200, skip_visibility=True)
+        result = generate(params)
+        # With 200 steps, at least some features should have non-zero rotation
+        rotations = [
+            pf["transform"]["rotation_deg"]
+            for pf in result.layout.to_dict()["placed_features"]
+        ]
+        assert any(r != 0.0 for r in rotations), (
+            "Expected some rotated features"
         )
-        r1 = generate(p1)
-        r2 = generate(p2)
-        assert r1.layout.to_dict() == r2.layout.to_dict()
 
 
 class TestRetryLoop:
@@ -754,7 +757,7 @@ class TestScoring:
         r_long = generate(p_long)
         assert r_long.score >= r_short.score
 
-    def test_score_phase1_with_zero_steps(self):
+    def test_score_phase1_empty_layout_with_deficit(self):
         """Empty layout with min=5 preference -> score = PHASE2_BASE - 5*0.01."""
         layout = TerrainLayout(
             table_width=60.0,
@@ -959,8 +962,8 @@ class TestTemperingIntegration:
         assert r_one.layout.to_dict() == r_none.layout.to_dict()
         assert r_one.score == r_none.score
 
-    def test_multi_mutation_at_high_temperature(self):
-        """MAX_EXTRA_MUTATIONS is used: hot replicas do more mutations per step."""
+    def test_max_extra_mutations_constant(self):
+        """MAX_EXTRA_MUTATIONS formula: 1 + int(t_factor * MAX_EXTRA_MUTATIONS)."""
         # Verify the constant is what we expect
         assert MAX_EXTRA_MUTATIONS == 3
         # At t_factor=1.0: 1 + int(1.0 * 3) = 4 mutations per step

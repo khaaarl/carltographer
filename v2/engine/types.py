@@ -45,7 +45,7 @@ from low-level to high-level:
 
 Dataclasses that participate in engine I/O have ``from_dict`` / ``to_dict``
 methods for JSON round-tripping. Some internal-only dataclasses (e.g.
-``CatalogFeature``, ``EngineParams``) only have ``from_dict``. The JSON schema
+``EngineParams``) only have ``from_dict``. The JSON schema
 is the interchange format between the engine, the frontend, and saved layout
 files.
 

@@ -27,15 +27,16 @@ Also provides geometric utilities used elsewhere in the engine:
 
   * ``compose_transform`` / ``obb_corners`` / ``get_world_obbs`` — transform
     composition and shape vertex computation, used by ``mutation.py`` for
-    tile-weight occupancy and by ``app.py``'s renderer for drawing.
+    tile-weight occupancy.
   * ``_shape_world_corners`` / ``_transform_polygon`` — polygon-aware helpers
     for computing world-space vertices.
   * ``_mirror_placed_feature`` / ``_is_at_origin`` — rotational symmetry
     helpers (180° mirroring), used by mutations and visibility.
   * ``obb_distance`` / ``obb_to_table_edge_distance`` — edge-to-edge distance
     for gap enforcement.
-  * ``point_in_polygon`` / ``polygons_overlap`` — used by ``visibility.py``
-    for deployment zone analysis and polygon terrain overlap checks.
+  * ``point_in_polygon`` / ``polygons_overlap`` — polygon containment and
+    overlap tests, used for deployment zone analysis and polygon terrain
+    overlap checks.
 
 Subject to the Rust-parity constraint for rectangular shapes —
 ``engine_rs/src/collision.rs`` mirrors this module. Polygon support is

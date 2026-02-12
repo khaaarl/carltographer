@@ -130,7 +130,6 @@ def evaluate_trial(
     for scenario, seed in zip(scenarios, scenario_seeds):
         params = dict(scenario)
         params.pop("_scenario_name", None)
-        params.pop("_num_steps", None)
         params["seed"] = seed
         params["tuning"] = tuning
 
