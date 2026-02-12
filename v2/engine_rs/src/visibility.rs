@@ -233,110 +233,70 @@ struct ObscuringShape {
     edges: Vec<EdgeData>,
 }
 
-/// Precompute static segments and obscuring shape data.
-/// Called once before the observer loop.
-fn precompute_segments(
-    layout: &TerrainLayout,
+/// Process one placed feature into static segments and/or obscuring shapes.
+/// Extracted to avoid cloning all features into a temporary Vec.
+fn process_feature_segments(
+    pf: &PlacedFeature,
     objects_by_id: &HashMap<String, &TerrainObject>,
     min_blocking_height: f64,
-) -> PrecomputedSegments {
-    let mut static_segments: Vec<Segment> = Vec::new();
-    let mut obscuring_shapes: Vec<ObscuringShape> = Vec::new();
-    let default_t = Transform::default();
+    default_t: &Transform,
+    static_segments: &mut Vec<Segment>,
+    obscuring_shapes: &mut Vec<ObscuringShape>,
+) {
+    let is_obscuring = pf.feature.tags.iter().any(|t| t == "obscuring");
 
-    // Build effective placed features list (include mirrors for symmetric)
-    let mut effective_features: Vec<PlacedFeature> = Vec::new();
-    for pf in &layout.placed_features {
-        effective_features.push(pf.clone());
-        if layout.rotationally_symmetric && !is_at_origin(pf) {
-            effective_features.push(mirror_placed_feature(pf));
-        }
-    }
+    if is_obscuring {
+        // Obscuring features: footprint objects use back-facing-edge
+        // blocking (observer-dependent, always block regardless of
+        // height).  Non-footprint objects (walls) use normal static
+        // all-edges blocking, filtered by min_blocking_height.
+        for comp in &pf.feature.components {
+            let obj = match objects_by_id.get(&comp.object_id) {
+                Some(o) => o,
+                None => continue,
+            };
+            let comp_t = comp.transform.as_ref().unwrap_or(default_t);
+            for shape in &obj.shapes {
+                if obj.is_footprint {
+                    // Footprint → backface culling (obscuring_shapes)
+                    let shape_t = shape.offset.as_ref().unwrap_or(default_t);
+                    let world =
+                        compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
+                    let corners = shape_world_corners(shape, &world);
+                    let n = corners.len();
+                    let verts: Vec<(f64, f64)> = corners.to_vec();
 
-    for pf in &effective_features {
-        let is_obscuring = pf.feature.tags.contains(&"obscuring".to_string());
+                    let cx: f64 = corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
+                    let cz: f64 = corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
 
-        if is_obscuring {
-            // Obscuring features: footprint objects use back-facing-edge
-            // blocking (observer-dependent, always block regardless of
-            // height).  Non-footprint objects (walls) use normal static
-            // all-edges blocking, filtered by min_blocking_height.
-            for comp in &pf.feature.components {
-                let obj = match objects_by_id.get(&comp.object_id) {
-                    Some(o) => o,
-                    None => continue,
-                };
-                let comp_t = comp.transform.as_ref().unwrap_or(&default_t);
-                for shape in &obj.shapes {
-                    if obj.is_footprint {
-                        // Footprint → backface culling (obscuring_shapes)
-                        let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
-                        let world =
-                            compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
-                        let corners = shape_world_corners(shape, &world);
-                        let n = corners.len();
-                        let verts: Vec<(f64, f64)> = corners.to_vec();
-
-                        let cx: f64 = corners.iter().map(|c| c.0).sum::<f64>() / n as f64;
-                        let cz: f64 = corners.iter().map(|c| c.1).sum::<f64>() / n as f64;
-
-                        let mut edges = Vec::with_capacity(n);
-                        for i in 0..n {
-                            let j = (i + 1) % n;
-                            let (x1, z1) = corners[i];
-                            let (x2, z2) = corners[j];
-                            let mx = (x1 + x2) / 2.0;
-                            let mz = (z1 + z2) / 2.0;
-                            let ex = x2 - x1;
-                            let ez = z2 - z1;
-                            let (mut nx, mut nz) = (ez, -ex);
-                            let dot_center = (cx - mx) * nx + (cz - mz) * nz;
-                            if dot_center > 0.0 {
-                                nx = -nx;
-                                nz = -nz;
-                            }
-                            edges.push((x1, z1, x2, z2, mx, mz, nx, nz));
+                    let mut edges = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let j = (i + 1) % n;
+                        let (x1, z1) = corners[i];
+                        let (x2, z2) = corners[j];
+                        let mx = (x1 + x2) / 2.0;
+                        let mz = (z1 + z2) / 2.0;
+                        let ex = x2 - x1;
+                        let ez = z2 - z1;
+                        let (mut nx, mut nz) = (ez, -ex);
+                        let dot_center = (cx - mx) * nx + (cz - mz) * nz;
+                        if dot_center > 0.0 {
+                            nx = -nx;
+                            nz = -nz;
                         }
-
-                        obscuring_shapes.push(ObscuringShape {
-                            corners: verts,
-                            edges,
-                        });
-                    } else {
-                        // Non-footprint → static segments (all edges block)
-                        if shape.effective_opacity_height() < min_blocking_height {
-                            continue;
-                        }
-                        let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
-                        let world =
-                            compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
-                        let corners = shape_world_corners(shape, &world);
-                        let n = corners.len();
-                        for i in 0..n {
-                            let j = (i + 1) % n;
-                            static_segments.push((
-                                corners[i].0,
-                                corners[i].1,
-                                corners[j].0,
-                                corners[j].1,
-                            ));
-                        }
+                        edges.push((x1, z1, x2, z2, mx, mz, nx, nz));
                     }
-                }
-            }
-        } else {
-            // Regular obstacle: all edges block regardless of observer
-            for comp in &pf.feature.components {
-                let obj = match objects_by_id.get(&comp.object_id) {
-                    Some(o) => o,
-                    None => continue,
-                };
-                let comp_t = comp.transform.as_ref().unwrap_or(&default_t);
-                for shape in &obj.shapes {
+
+                    obscuring_shapes.push(ObscuringShape {
+                        corners: verts,
+                        edges,
+                    });
+                } else {
+                    // Non-footprint → static segments (all edges block)
                     if shape.effective_opacity_height() < min_blocking_height {
                         continue;
                     }
-                    let shape_t = shape.offset.as_ref().unwrap_or(&default_t);
+                    let shape_t = shape.offset.as_ref().unwrap_or(default_t);
                     let world =
                         compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
                     let corners = shape_world_corners(shape, &world);
@@ -352,6 +312,65 @@ fn precompute_segments(
                     }
                 }
             }
+        }
+    } else {
+        // Regular obstacle: all edges block regardless of observer
+        for comp in &pf.feature.components {
+            let obj = match objects_by_id.get(&comp.object_id) {
+                Some(o) => o,
+                None => continue,
+            };
+            let comp_t = comp.transform.as_ref().unwrap_or(default_t);
+            for shape in &obj.shapes {
+                if shape.effective_opacity_height() < min_blocking_height {
+                    continue;
+                }
+                let shape_t = shape.offset.as_ref().unwrap_or(default_t);
+                let world = compose_transform(&compose_transform(shape_t, comp_t), &pf.transform);
+                let corners = shape_world_corners(shape, &world);
+                let n = corners.len();
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    static_segments.push((corners[i].0, corners[i].1, corners[j].0, corners[j].1));
+                }
+            }
+        }
+    }
+}
+
+/// Precompute static segments and obscuring shape data.
+/// Called once before the observer loop.
+fn precompute_segments(
+    layout: &TerrainLayout,
+    objects_by_id: &HashMap<String, &TerrainObject>,
+    min_blocking_height: f64,
+) -> PrecomputedSegments {
+    let mut static_segments: Vec<Segment> = Vec::new();
+    let mut obscuring_shapes: Vec<ObscuringShape> = Vec::new();
+    let default_t = Transform::default();
+
+    // Process each placed feature and its mirror (if symmetric) without
+    // cloning all features into a temporary Vec. Only mirrors are
+    // constructed (unavoidable since they don't exist in the original data).
+    for pf in &layout.placed_features {
+        process_feature_segments(
+            pf,
+            objects_by_id,
+            min_blocking_height,
+            &default_t,
+            &mut static_segments,
+            &mut obscuring_shapes,
+        );
+        if layout.rotationally_symmetric && !is_at_origin(pf) {
+            let mirror = mirror_placed_feature(pf);
+            process_feature_segments(
+                &mirror,
+                objects_by_id,
+                min_blocking_height,
+                &default_t,
+                &mut static_segments,
+                &mut obscuring_shapes,
+            );
         }
     }
 
@@ -1315,16 +1334,13 @@ pub fn compute_layout_visibility(
 
             // Filter out observer points inside tall terrain (height >= 1")
             let mut tall_footprints: Vec<Corners> = Vec::new();
-            {
-                let mut effective_features: Vec<PlacedFeature> = Vec::new();
-                for pf in &layout.placed_features {
-                    effective_features.push(pf.clone());
-                    if layout.rotationally_symmetric && !is_at_origin(pf) {
-                        effective_features.push(mirror_placed_feature(pf));
-                    }
+            for pf in &layout.placed_features {
+                for corners in get_tall_world_obbs(pf, objects_by_id, 1.0) {
+                    tall_footprints.push(corners);
                 }
-                for pf in &effective_features {
-                    for corners in get_tall_world_obbs(pf, objects_by_id, 1.0) {
+                if layout.rotationally_symmetric && !is_at_origin(pf) {
+                    let mirror = mirror_placed_feature(pf);
+                    for corners in get_tall_world_obbs(&mirror, objects_by_id, 1.0) {
                         tall_footprints.push(corners);
                     }
                 }
